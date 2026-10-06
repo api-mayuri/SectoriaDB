@@ -14,7 +14,7 @@ import java.util.Optional;
  */
 public final class BTree {
     public static final int MAX_VALUE_SIZE = 64 * 1024 * 1024;
-    static final int MAX_KEY_CAP = 1024;
+    static final int MAX_KEY_CAP = 2048;
 
     private record Res(long id, byte[] sep, long right) {
     }
@@ -33,7 +33,7 @@ public final class BTree {
         this.count = count;
     }
 
-    /** Largest accepted key: 1 KiB, less for tiny pages (a node must always hold at least three max-size entries). */
+    /** Largest accepted key: 2 KiB (an S3 key of 1024 bytes plus the bucket name and separators must fit), less for tiny pages (a node must always hold at least three max-size entries). */
     public static int maxKeySize(int pageSize) {
         return Math.min(MAX_KEY_CAP, (pageSize - Pager.HEADER) / 3 - 24);
     }

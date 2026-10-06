@@ -86,4 +86,17 @@ class KeysTest {
             });
         }
     }
+
+    @Test
+    void stringPrefixBoundsEveryStringWithThatPrefix() {
+        Random r = new Random(11);
+        for (int i = 0; i < 20_000; i++) {
+            String p = randString(r), s = randString(r);
+            byte[] lo = Keys.builder().string("b").string(p).build();
+            byte[] hi = Keys.prefixEnd(Keys.builder().string("b").stringPrefix(p).build());
+            byte[] k = Keys.builder().string("b").string(s).build();
+            boolean inRange = Arrays.compareUnsigned(k, lo) >= 0 && (hi == null || Arrays.compareUnsigned(k, hi) < 0);
+            assertEquals(s.startsWith(p), inRange, "prefix=" + p.length() + " s=" + s.length());
+        }
+    }
 }

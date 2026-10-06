@@ -76,8 +76,8 @@ class OverflowAndCorruptionTest {
         try (MetaStore s = MetaStore.open(dir.resolve("l.db"), MetaStoreOptions.defaults().pageSize(65536).fsync(false))) {
             s.writeVoid(tx -> {
                 BTree t = tx.tree("t");
-                t.put(new byte[1024], k("ok"));
-                assertThrows(IllegalArgumentException.class, () -> t.put(new byte[1025], k("no")));
+                t.put(new byte[2048], k("ok"));
+                assertThrows(IllegalArgumentException.class, () -> t.put(new byte[2049], k("no")));
                 assertThrows(IllegalArgumentException.class, () -> t.put(k("k"), new byte[BTree.MAX_VALUE_SIZE + 1]));
                 t.put(k("max"), new byte[BTree.MAX_VALUE_SIZE]);
             });

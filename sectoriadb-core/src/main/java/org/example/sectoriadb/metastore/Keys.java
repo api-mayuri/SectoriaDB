@@ -53,6 +53,19 @@ public final class Keys {
             return this;
         }
 
+        /**
+         * The escaped UTF-8 bytes of {@code s} WITHOUT the terminator. Prepended with the encoding of the preceding
+         * components it is a byte prefix of the encoding of every string that starts with {@code s}, which is what
+         * a prefix range scan over a string component needs (use with {@link Keys#prefixEnd}).
+         */
+        public Builder stringPrefix(String s) {
+            for (byte b : s.getBytes(StandardCharsets.UTF_8)) {
+                out.write(b);
+                if (b == 0) out.write(0xFF);
+            }
+            return this;
+        }
+
         public Builder longUnsigned(long v) {
             for (int sh = 56; sh >= 0; sh -= 8) out.write((int) (v >>> sh));
             return this;
