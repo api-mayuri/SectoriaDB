@@ -192,7 +192,7 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 | `sectoriadb-core` | движок хранилища: кукушкина хэш-таблица, чанкинг, блоб-файлы, JSON-репозитории метаданных |
 | `sectoriadb-server` | Spring Boot приложение: S3 API, проверка подписи SigV4, консоль администратора, планировщик |
 
-Пакеты (`org.example`):
+Пакеты (`org.example.sectoriadb`):
 
 | Модуль | Пакет | Назначение |
 |---|---|---|
