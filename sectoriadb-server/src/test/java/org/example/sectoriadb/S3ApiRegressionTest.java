@@ -423,4 +423,37 @@ class S3ApiRegressionTest {
         assertEquals(400, bad.statusCode());
         assertEquals("InvalidBucketName", code(bad));
     }
+
+    /** warp "multipart" reads parts with GET ?partNumber=N; the whole object came back and was mistaken for the part. */
+    @Test
+    void getWithPartNumberDoesNotReturnTheWholeMultipartObject() throws Exception {
+        mkBucket("partnum");
+        put("partnum", "plain", "hello".getBytes());
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/partnum/plain?partNumber=1")).GET()).statusCode());
+        assertEquals(416, send(HttpRequest.newBuilder(uri("/partnum/plain?partNumber=2")).GET()).statusCode());
+        assertEquals(400, send(HttpRequest.newBuilder(uri("/partnum/plain?partNumber=0")).GET()).statusCode());
+        // a two-part upload
+        var init = send(HttpRequest.newBuilder(uri("/partnum/mp?uploads")).POST(BodyPublishers.noBody()));
+        Matcher m = Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(new String(init.body()));
+        assertTrue(m.find());
+        String uid = m.group(1);
+        byte[] p1 = random(5 * 1024 * 1024, 1), p2 = random(1000, 2);
+        var r1 = send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=1&uploadId=" + uid)).PUT(BodyPublishers.ofByteArray(p1)));
+        var r2 = send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=2&uploadId=" + uid)).PUT(BodyPublishers.ofByteArray(p2)));
+        String body = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>" + r1.headers().firstValue("ETag").get()
+                + "</ETag></Part><Part><PartNumber>2</PartNumber><ETag>" + r2.headers().firstValue("ETag").get() + "</ETag></Part></CompleteMultipartUpload>";
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/partnum/mp?uploadId=" + uid)).POST(BodyPublishers.ofString(body))).statusCode());
+        assertEquals(501, send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=1")).GET()).statusCode());
+        assertEquals(416, send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=3")).GET()).statusCode());
+        assertEquals(5 * 1024 * 1024 + 1000, get("partnum", "mp").body().length);
+    }
+
+    @Test
+    void putWithUploadIdButNoPartNumberDoesNotOverwriteTheObject() throws Exception {
+        mkBucket("put-uid");
+        put("put-uid", "k", "original".getBytes());
+        var r = send(HttpRequest.newBuilder(uri("/put-uid/k?uploadId=nope")).PUT(BodyPublishers.ofString("clobber")));
+        assertEquals(400, r.statusCode());
+        assertEquals("original", new String(get("put-uid", "k").body()));
+    }
 }

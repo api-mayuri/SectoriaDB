@@ -82,6 +82,11 @@ public class S3ObjectController {
 
         String objectKey = S3Support.extractKey(request, bucket);
         lookup.validateObjectKey(objectKey);
+        // UploadPart needs both parameters (the multipart controller maps that pair); one of them alone must not
+        // silently overwrite the object with the part body
+        if (request.getParameter("uploadId") != null || request.getParameter("partNumber") != null) {
+            throw S3Exception.invalidArgument("UploadPart requires both partNumber and uploadId");
+        }
 
         // Verify bucket exists; throws NoSuchBucket if not
         PoolEntity pool = lookup.requireBucket(bucket);
@@ -135,6 +140,7 @@ public class S3ObjectController {
             @RequestParam(value = "response-content-encoding", required = false) String respContentEncoding,
             @RequestParam(value = "response-content-language", required = false) String respContentLanguage,
             @RequestParam(value = "response-expires", required = false) String respExpires,
+            @RequestParam(value = "partNumber", required = false) Integer partNumber,
             HttpServletRequest request,
             HttpServletResponse response) throws IOException {
 
@@ -142,6 +148,7 @@ public class S3ObjectController {
         ManifestEntity entity = lookup.requireObject(bucket, objectKey);
 
         String etag = entity.getEtag() != null ? entity.getEtag() : "\"\"";
+        checkPartNumber(partNumber, etag);
         response.setHeader("x-amz-request-id", S3Support.requestId());
         response.setHeader("Server", "SectoriaDB");
 
@@ -259,6 +266,33 @@ public class S3ObjectController {
                 "The requested range is not satisfiable");
     }
 
+    /**
+     * {@code ?partNumber=N} reads one part of a multipart object. The manifest does not keep part boundaries, so a
+     * multi-part object cannot serve a single part: answer 501 instead of silently returning the whole object (which
+     * is what clients such as warp's "multipart" mode would then mistake for the part).
+     */
+    private static void checkPartNumber(Integer partNumber, String etag) {
+        if (partNumber == null) return;
+        if (partNumber < 1 || partNumber > 10000) {
+            throw S3Exception.invalidArgument("Part number must be an integer between 1 and 10000, inclusive");
+        }
+        int parts = 0;                                   // 0: not a multipart object
+        int dash = etag.lastIndexOf('-');
+        if (dash > 0) {
+            try {
+                parts = Integer.parseInt(etag.substring(dash + 1).replace("\"", ""));
+            } catch (NumberFormatException ignored) { /* a plain ETag */ }
+        }
+        if (partNumber > Math.max(parts, 1)) {
+            throw new S3Exception(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "InvalidPartNumber",
+                    "The requested partnumber is not satisfiable");
+        }
+        if (parts > 1) {
+            throw new S3Exception(HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
+                    "Reading a single part of a multipart object (partNumber) is not implemented");
+        }
+    }
+
     // ── HeadObject ────────────────────────────────────────────────────────────
 
     @RequestMapping(value = "/{bucket}/**", method = RequestMethod.HEAD)
@@ -266,12 +300,14 @@ public class S3ObjectController {
             @PathVariable String bucket,
             @RequestHeader(value = "If-None-Match", required = false) String ifNoneMatch,
             @RequestHeader(value = "If-Match", required = false) String ifMatch,
+            @RequestParam(value = "partNumber", required = false) Integer partNumber,
             HttpServletRequest request) {
 
         String objectKey = S3Support.extractKey(request, bucket);
         ManifestEntity entity = lookup.requireObject(bucket, objectKey);
 
         String etag = entity.getEtag() != null ? entity.getEtag() : "\"\"";
+        checkPartNumber(partNumber, etag);
         String reqId = S3Support.requestId();
 
         // Handle conditional requests
