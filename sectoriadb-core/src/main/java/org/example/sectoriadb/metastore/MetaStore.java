@@ -1,5 +1,7 @@
 package org.example.sectoriadb.metastore;
 
+import org.example.sectoriadb.metrics.StorageMetrics;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -51,6 +53,7 @@ public final class MetaStore implements AutoCloseable {
     private final FileChannel channel;
     private final FileLock fileLock;
     private final Semaphore writer = new Semaphore(1);
+    private final StorageMetrics metrics;
     private final Object stateLock = new Object();
     private final TreeMap<Long, Integer> readers = new TreeMap<>();
     private volatile Snapshot committed;
@@ -66,7 +69,8 @@ public final class MetaStore implements AutoCloseable {
 
     volatile CommitHook commitHook;
 
-    private MetaStore(FileChannel channel, FileLock lock, Pager pager, Snapshot snap) {
+    private MetaStore(FileChannel channel, FileLock lock, Pager pager, Snapshot snap, StorageMetrics metrics) {
+        this.metrics = metrics;
         this.channel = channel;
         this.fileLock = lock;
         this.pager = pager;
@@ -87,7 +91,7 @@ public final class MetaStore implements AutoCloseable {
             Snapshot snap;
             Pager pager;
             if (ch.size() == 0) {
-                pager = new Pager(ch, opts.pageSize(), opts.fsync());
+                pager = new Pager(ch, opts.pageSize(), opts.fsync(), opts.metrics());
                 snap = new Snapshot(0, 0, 0, 2);
                 pager.writeRaw(0, encodeMeta(pager.pageSize, snap));
                 pager.writeRaw(pager.pageSize, new byte[pager.pageSize]);
@@ -95,10 +99,10 @@ public final class MetaStore implements AutoCloseable {
             } else {
                 long size = ch.size();
                 Object[] r = chooseMeta(ch, size);
-                pager = new Pager(ch, (Integer) r[0], opts.fsync());
+                pager = new Pager(ch, (Integer) r[0], opts.fsync(), opts.metrics());
                 snap = (Snapshot) r[1];
             }
-            MetaStore s = new MetaStore(ch, lock, pager, snap);
+            MetaStore s = new MetaStore(ch, lock, pager, snap, opts.metrics());
             s.loadFreelist();
             return s;
         } catch (IOException e) {
@@ -234,13 +238,17 @@ public final class MetaStore implements AutoCloseable {
 
     /** Blocks until the single write transaction slot is free. */
     public WriteTxn beginWrite() {
+        long t0 = System.nanoTime();
         writer.acquireUninterruptibly();
+        metrics.metaWriterLockWait(System.nanoTime() - t0);
         return startWrite();
     }
 
     /** Like {@link #beginWrite()} but gives up after the timeout (empty result). */
     public Optional<WriteTxn> tryBeginWrite(long timeout, TimeUnit unit) throws InterruptedException {
+        long t0 = System.nanoTime();
         if (!writer.tryAcquire(timeout, unit)) return Optional.empty();
+        metrics.metaWriterLockWait(System.nanoTime() - t0);
         return Optional.of(startWrite());
     }
 
@@ -311,8 +319,10 @@ public final class MetaStore implements AutoCloseable {
     }
 
     void commit(WriteTxn w) {
+        long t0 = System.nanoTime();
         try {
             doCommit(w);
+            metrics.metaCommit(System.nanoTime() - t0);
         } catch (Throwable t) {
             poisoned = t;   // in-memory free-page state is unreliable now; the file itself is still consistent
             throw t;

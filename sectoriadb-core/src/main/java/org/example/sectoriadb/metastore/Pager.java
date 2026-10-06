@@ -1,5 +1,7 @@
 package org.example.sectoriadb.metastore;
 
+import org.example.sectoriadb.metrics.StorageMetrics;
+
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
@@ -14,11 +16,17 @@ final class Pager {
     final FileChannel ch;
     final int pageSize;
     final boolean fsync;
+    final StorageMetrics metrics;
 
     Pager(FileChannel ch, int pageSize, boolean fsync) {
+        this(ch, pageSize, fsync, StorageMetrics.NOOP);
+    }
+
+    Pager(FileChannel ch, int pageSize, boolean fsync, StorageMetrics metrics) {
         this.ch = ch;
         this.pageSize = pageSize;
         this.fsync = fsync;
+        this.metrics = metrics;
     }
 
     static int crc(byte[] p, int off, int len) {
@@ -29,6 +37,7 @@ final class Pager {
 
     byte[] read(long id) {
         byte[] p = new byte[pageSize];
+        long t0 = System.nanoTime();
         try {
             ByteBuffer bb = ByteBuffer.wrap(p);
             long pos = id * pageSize;
@@ -39,8 +48,12 @@ final class Pager {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+        metrics.diskRead(StorageMetrics.Target.METASTORE, System.nanoTime() - t0, pageSize);
         int stored = ByteBuffer.wrap(p).getInt(0);
-        if (stored != crc(p, 4, pageSize - 4)) throw new CorruptedPageException(id, "checksum mismatch");
+        if (stored != crc(p, 4, pageSize - 4)) {
+            metrics.crcFailure(StorageMetrics.CrcKind.METASTORE_PAGE);
+            throw new CorruptedPageException(id, "checksum mismatch");
+        }
         return p;
     }
 
@@ -51,21 +64,25 @@ final class Pager {
     }
 
     void writeRaw(long pos, byte[] p) {
+        long t0 = System.nanoTime();
         try {
             ByteBuffer bb = ByteBuffer.wrap(p);
             while (bb.hasRemaining()) ch.write(bb, pos + bb.position());
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+        metrics.diskWrite(StorageMetrics.Target.METASTORE, System.nanoTime() - t0, p.length);
     }
 
     void force() {
         if (!fsync) return;
+        long t0 = System.nanoTime();
         try {
             ch.force(false);
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
+        metrics.fsync(StorageMetrics.Target.METASTORE, System.nanoTime() - t0);
     }
 
     void ensureSize(long bytes) {

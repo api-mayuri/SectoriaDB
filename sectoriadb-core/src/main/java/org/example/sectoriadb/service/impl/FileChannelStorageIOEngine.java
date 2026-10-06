@@ -1,5 +1,6 @@
 package org.example.sectoriadb.service.impl;
 
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.service.StorageIOEngine;
 
@@ -40,6 +41,7 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
     }
 
     private final boolean fsync;
+    private final StorageMetrics metrics;
     private FileChannel channel;
     private Path channelPath;
     private boolean closed;
@@ -51,7 +53,13 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
 
     /** @param fsync if false, {@link #force} is a no-op (faster, not crash-safe; for tests). */
     public FileChannelStorageIOEngine(boolean fsync) {
+        this(fsync, StorageMetrics.NOOP);
+    }
+
+    /** As {@link #FileChannelStorageIOEngine(boolean)}; reads, writes and forces are reported to {@code metrics}. */
+    public FileChannelStorageIOEngine(boolean fsync, StorageMetrics metrics) {
         this.fsync = fsync;
+        this.metrics = metrics;
     }
 
     /** Fills {@code dst} completely, retrying short reads. Throws on EOF before the buffer is full. */
@@ -79,7 +87,9 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
     public ByteBuffer readChunk(BlobFile blobFile, long offset, int length) throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(length);
         FileChannel ch = channel(blobFile);
+        long t0 = System.nanoTime();
         readFully(ch::read, buffer, offset);
+        metrics.diskRead(StorageMetrics.Target.CUCKOO, System.nanoTime() - t0, length);
         buffer.flip();
         return buffer;
     }
@@ -87,13 +97,19 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
     @Override
     public void writeChunk(BlobFile blobFile, long offset, ByteBuffer chunk) throws IOException {
         FileChannel ch = channel(blobFile);
+        int bytes = chunk.remaining();
+        long t0 = System.nanoTime();
         writeFully(ch::write, chunk, offset);
+        metrics.diskWrite(StorageMetrics.Target.CUCKOO, System.nanoTime() - t0, bytes);
     }
 
     @Override
     public void force(BlobFile blobFile) throws IOException {
         if (fsync) {
-            channel(blobFile).force(false);
+            FileChannel ch = channel(blobFile);
+            long t0 = System.nanoTime();
+            ch.force(false);
+            metrics.fsync(StorageMetrics.Target.CUCKOO, System.nanoTime() - t0);
         }
     }
 

@@ -86,12 +86,15 @@ public class MetaStoreManifestRepository implements ManifestRepository {
             if (!tx.tree(Trees.POOLS).containsKey(Trees.idKey(entity.getPoolId()))) {
                 throw new PoolNotFoundException(entity.getPoolId());
             }
-            entity.setDeleted(false);
-            Trees.putManifest(tx, entity);
+            Trees.ensureTotals(tx);
             BTree objects = tx.tree(Trees.OBJECTS);
             byte[] objectKey = Trees.objectKey(bucket, key);
             Optional<String> previous = objects.get(objectKey).map(Trees::str);
+            long previousBytes = previous.flatMap(id -> Trees.manifest(tx, id)).map(ManifestEntity::getTotalBytes).orElse(0L);
+            entity.setDeleted(false);
+            Trees.putManifest(tx, entity);
             objects.put(objectKey, Trees.bytes(entity.getId()));
+            Trees.adjustTotals(tx, previous.isPresent() ? 0 : 1, entity.getTotalBytes() - previousBytes);
             Optional<ManifestEntity> superseded = Optional.empty();
             if (previous.isPresent() && !previous.get().equals(entity.getId())) {
                 superseded = Trees.retire(tx, previous.get());
@@ -108,8 +111,10 @@ public class MetaStoreManifestRepository implements ManifestRepository {
             byte[] k = Trees.objectKey(bucketName, objectKey);
             Optional<String> id = objects.get(k).map(Trees::str);
             if (id.isEmpty()) return Optional.empty();
+            Trees.ensureTotals(tx);
             objects.delete(k);
             Optional<ManifestEntity> removed = Trees.retire(tx, id.get());
+            Trees.adjustTotals(tx, -1, -removed.map(ManifestEntity::getTotalBytes).orElse(0L));
             tx.commit();
             return removed;
         }
@@ -124,7 +129,11 @@ public class MetaStoreManifestRepository implements ManifestRepository {
             if (m.getBucketName() != null && m.getObjectKey() != null) {
                 BTree objects = tx.tree(Trees.OBJECTS);
                 byte[] k = Trees.objectKey(m.getBucketName(), m.getObjectKey());
-                if (objects.get(k).map(v -> Trees.str(v).equals(manifestId)).orElse(false)) objects.delete(k);
+                if (objects.get(k).map(v -> Trees.str(v).equals(manifestId)).orElse(false)) {
+                    Trees.ensureTotals(tx);
+                    objects.delete(k);
+                    Trees.adjustTotals(tx, -1, -m.getTotalBytes());
+                }
             }
             Optional<ManifestEntity> removed = Trees.retire(tx, manifestId);
             tx.commit();
@@ -256,6 +265,18 @@ public class MetaStoreManifestRepository implements ManifestRepository {
             }
             return new BucketStats(objects, bytes);
         });
+    }
+
+    @Override
+    public BucketStats totals() {
+        long[] t = store().read(Trees::totals);
+        if (t == null) {
+            t = store().write(tx -> {
+                Trees.ensureTotals(tx);
+                return Trees.totals(tx);
+            });
+        }
+        return new BucketStats(t[0], t[1]);
     }
 
     // ------------------------------------------------------------------ admin queries

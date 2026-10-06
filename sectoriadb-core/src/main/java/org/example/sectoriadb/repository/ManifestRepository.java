@@ -77,6 +77,13 @@ public interface ManifestRepository {
     /** Object count and total size of a bucket: scans the bucket's range (administrative). */
     BucketStats countAndSize(String bucketName);
 
+    /**
+     * Number and total size of the current object versions of all buckets. Maintained inside the commit
+     * transactions ({@code commitObject}, {@code deleteObject}, {@code deleteManifest}), so this is a single key
+     * lookup, not a scan. (The very first call on a store written by an older version counts the objects once.)
+     */
+    BucketStats totals();
+
     // ---- blob / admin queries -------------------------------------------------------------------------------
 
     /** All live manifests, including the ones stored from the shell (administrative full scan). */

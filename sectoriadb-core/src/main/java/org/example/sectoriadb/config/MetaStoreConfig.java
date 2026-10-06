@@ -2,6 +2,7 @@ package org.example.sectoriadb.config;
 
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.repository.metastore.MetaStoreProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,7 +36,7 @@ public class MetaStoreConfig {
 
     @Bean(destroyMethod = "close")
     @Lazy
-    public MetaStore metaStore(StorageProperties props) {
+    public MetaStore metaStore(StorageProperties props, StorageMetrics metrics) {
         Path dir = Path.of(props.getMetaDir());
         try {
             Files.createDirectories(dir);
@@ -44,7 +45,7 @@ public class MetaStoreConfig {
         }
         Path file = dir.resolve(FILE_NAME);
         try {
-            MetaStore store = MetaStore.open(file, MetaStoreOptions.defaults().fsync(props.isFsync()));
+            MetaStore store = MetaStore.open(file, MetaStoreOptions.defaults().fsync(props.isFsync()).metrics(metrics));
             log.info("Metadata store opened: {} (fsync={})", file.toAbsolutePath(), props.isFsync());
             return store;
         } catch (RuntimeException e) {

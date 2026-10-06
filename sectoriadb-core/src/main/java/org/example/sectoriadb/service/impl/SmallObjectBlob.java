@@ -4,6 +4,7 @@ import org.example.sectoriadb.format.InvalidBlobHeaderException;
 import org.example.sectoriadb.format.SmallBlobLayout;
 import org.example.sectoriadb.format.SmallBlobLayout.Checkpoint;
 import org.example.sectoriadb.format.SmallBlobLayout.RecordHeader;
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,6 +66,7 @@ public final class SmallObjectBlob implements AutoCloseable {
     private final long maxFileBytes;
     private final long checkpointInterval;
     private final FileChannel channel;
+    private final StorageMetrics metrics;
     private final ReentrantLock lock = new ReentrantLock();
 
     private volatile long tail;
@@ -78,7 +80,8 @@ public final class SmallObjectBlob implements AutoCloseable {
     private long checkpointGeneration;
 
     private SmallObjectBlob(String id, Path path, boolean fsync, long maxFileBytes, long checkpointInterval,
-                            FileChannel channel) {
+                            FileChannel channel, StorageMetrics metrics) {
+        this.metrics = metrics;
         this.id = id;
         this.path = path;
         this.fsync = fsync;
@@ -104,9 +107,15 @@ public final class SmallObjectBlob implements AutoCloseable {
     /** Opens an existing blob and runs recovery. */
     public static SmallObjectBlob open(String id, Path path, boolean fsync, long maxFileBytes,
                                        long checkpointIntervalBytes) throws IOException {
+        return open(id, path, fsync, maxFileBytes, checkpointIntervalBytes, StorageMetrics.NOOP);
+    }
+
+    /** As above; append lock waits, IO latencies and CRC failures are reported to {@code metrics}. */
+    public static SmallObjectBlob open(String id, Path path, boolean fsync, long maxFileBytes,
+                                       long checkpointIntervalBytes, StorageMetrics metrics) throws IOException {
         FileChannel fc = FileChannel.open(path, StandardOpenOption.READ, StandardOpenOption.WRITE);
         try {
-            SmallObjectBlob b = new SmallObjectBlob(id, path, fsync, maxFileBytes, checkpointIntervalBytes, fc);
+            SmallObjectBlob b = new SmallObjectBlob(id, path, fsync, maxFileBytes, checkpointIntervalBytes, fc, metrics);
             b.recover();
             return b;
         } catch (IOException | RuntimeException e) {
@@ -157,7 +166,9 @@ public final class SmallObjectBlob implements AutoCloseable {
         }
         int dataCrc = crc(data, 0, data.length);
         int span = (int) recordSpan(data.length);
+        long lockT0 = System.nanoTime();
         lock.lock();
+        metrics.smallAppendLockWait(System.nanoTime() - lockT0);
         try {
             ensureOpen();
             if (!writable) {
@@ -171,9 +182,13 @@ public final class SmallObjectBlob implements AutoCloseable {
             encodeRecordHeader(rec, 0, STATE_ACTIVE, data.length, dataCrc, nextSequence, ownerTag);
             System.arraycopy(data, 0, rec, RECORD_HEADER_SIZE, data.length);
             try {
+                long w0 = System.nanoTime();
                 FileChannelWrites.writeFully(channel, ByteBuffer.wrap(rec), at);
+                metrics.diskWrite(StorageMetrics.Target.SMALL, System.nanoTime() - w0, rec.length);
                 if (fsync) {
+                    long f0 = System.nanoTime();
                     channel.force(false);
+                    metrics.fsync(StorageMetrics.Target.SMALL, System.nanoTime() - f0);
                 }
             } catch (IOException e) {
                 try { channel.truncate(at); } catch (IOException ignored) { }
@@ -205,6 +220,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         }
         RecordHeader h = parseRecordHeader(readFully(offset, RECORD_HEADER_SIZE), 0);
         if (h == null) {
+            metrics.crcFailure(StorageMetrics.CrcKind.SMALL_RECORD);
             throw new SmallObjectCorruptedException(id, offset, "bad record header (magic/CRC/state)");
         }
         if (h.state() != STATE_ACTIVE) {
@@ -215,6 +231,7 @@ public final class SmallObjectBlob implements AutoCloseable {
                     "length " + h.dataLength() + " but the manifest expects " + length);
         }
         if (h.dataCrc32c() != expectedCrc) {
+            metrics.crcFailure(StorageMetrics.CrcKind.SMALL_RECORD);
             throw new SmallObjectCorruptedException(id, offset, "record CRC differs from the manifest CRC");
         }
         if (offset + h.span() > t) {
@@ -222,6 +239,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         }
         byte[] data = readFully(offset + RECORD_HEADER_SIZE, length);
         if (crc(data, 0, length) != expectedCrc) {
+            metrics.crcFailure(StorageMetrics.CrcKind.SMALL_RECORD);
             throw new SmallObjectCorruptedException(id, offset, "data CRC32C mismatch");
         }
         return data;
@@ -245,9 +263,7 @@ public final class SmallObjectBlob implements AutoCloseable {
                 return false;
             }
             FileChannelWrites.writeFully(channel, ByteBuffer.wrap(new byte[]{STATE_DELETED}), offset + STATE_OFFSET);
-            if (fsync) {
-                channel.force(false);
-            }
+            forceTimed();
             long span = h.span();
             liveRecords--;
             deadRecords++;
@@ -290,6 +306,14 @@ public final class SmallObjectBlob implements AutoCloseable {
         }
     }
 
+    private void forceTimed() throws IOException {
+        if (fsync) {
+            long t0 = System.nanoTime();
+            channel.force(false);
+            metrics.fsync(StorageMetrics.Target.SMALL, System.nanoTime() - t0);
+        }
+    }
+
     // ── Checkpoint ─────────────────────────────────────────────────────────────
 
     /** Caller holds the lock; all records below {@code tail} were forced already. */
@@ -297,9 +321,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         long gen = checkpointGeneration + 1;
         int slot = (gen % 2 == 1) ? CHECKPOINT_SLOT_A : CHECKPOINT_SLOT_B;
         FileChannelWrites.writeFully(channel, ByteBuffer.wrap(encodeCheckpoint(tail, gen)), slot);
-        if (fsync) {
-            channel.force(false);
-        }
+        forceTimed();
         checkpointGeneration = gen;
         checkpointTail = tail;
     }
@@ -467,6 +489,15 @@ public final class SmallObjectBlob implements AutoCloseable {
     }
 
     private byte[] readFully(long pos, int len) throws IOException {
+        long t0 = System.nanoTime();
+        try {
+            return readFully0(pos, len);
+        } finally {
+            metrics.diskRead(StorageMetrics.Target.SMALL, System.nanoTime() - t0, len);
+        }
+    }
+
+    private byte[] readFully0(long pos, int len) throws IOException {
         byte[] out = new byte[len];
         ByteBuffer b = ByteBuffer.wrap(out);
         long p = pos;

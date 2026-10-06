@@ -1,5 +1,6 @@
 package org.example.sectoriadb.service;
 
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.MultiDigest;
@@ -21,6 +22,7 @@ import org.example.sectoriadb.service.impl.ObjectCorruptedException;
 import org.example.sectoriadb.tools.XxHash64BytesHasher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -50,10 +52,19 @@ public class FileStorageService {
     private final SmallBlobCache smallCache;
     private final OperationLogService opLog;
     private final StorageProperties props;
+    private final StorageMetrics metrics;
 
     public FileStorageService(ManifestRepository manifestRepo, BlobService blobService,
                                HashTableCache cache, SmallBlobCache smallCache,
                                OperationLogService opLog, StorageProperties props) {
+        this(manifestRepo, blobService, cache, smallCache, opLog, props, StorageMetrics.NOOP);
+    }
+
+    @Autowired
+    public FileStorageService(ManifestRepository manifestRepo, BlobService blobService,
+                               HashTableCache cache, SmallBlobCache smallCache,
+                               OperationLogService opLog, StorageProperties props, StorageMetrics metrics) {
+        this.metrics      = metrics;
         this.manifestRepo = manifestRepo;
         this.blobService  = blobService;
         this.cache        = cache;
@@ -464,6 +475,7 @@ public class FileStorageService {
         if (stored == null) return;   // manifest written before whole-object checksums
         String actual = ChecksumAlgorithm.CRC32C.encode(ChecksumAlgorithm.crc32Bytes((int) crc.getValue()));
         if (!stored.equals(actual)) {
+            metrics.crcFailure(StorageMetrics.CrcKind.WHOLE_OBJECT);
             log.error("Whole-object CRC32C mismatch: bucket={} key={} manifest={} stored={} actual={}",
                     entity.getBucketName(), entity.getObjectKey(), entity.getId(), stored, actual);
             throw new ObjectCorruptedException(entity.getId(), entity.getBucketName(), entity.getObjectKey(),

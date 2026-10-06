@@ -41,6 +41,10 @@ final class Trees {
     /** (deletingTxId u64, manifestId) -> empty: superseded / deleted manifests waiting for the garbage collector */
     static final String DELETED_MANIFESTS = "deleted_manifests";
 
+    /** {@code "totals"} -> (objects u64, bytes u64): number and total size of the current S3 object versions */
+    static final String STATS = "stats";
+    private static final byte[] TOTALS_KEY = Keys.of("totals");
+
     static final byte[] EMPTY = new byte[0];
 
     private Trees() {
@@ -246,6 +250,47 @@ final class Trees {
         }
         for (String id : doomed) manifest(tx, id).ifPresent(m -> deleteManifestRecord(tx, m));
         for (byte[] k : queueKeys) queue.delete(k);
+    }
+
+    // ------------------------------------------------------------------ object totals (cheap gauges)
+
+    /** {objects, bytes} as last committed, or null if the totals have never been initialized. */
+    static long[] totals(ReadTxn tx) {
+        return tx.tree(STATS).get(TOTALS_KEY).map(v -> {
+            java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(v);
+            return new long[]{b.getLong(0), b.getLong(8)};
+        }).orElse(null);
+    }
+
+    /**
+     * Makes sure the totals exist; the first call on a store that predates them counts the {@code objects} tree
+     * once (inside the caller's transaction, before it changes anything). Afterwards they are only adjusted.
+     */
+    static void ensureTotals(WriteTxn tx) {
+        if (totals(tx) != null) return;
+        long objects = 0;
+        long bytes = 0;
+        BTree manifests = tx.tree(MANIFESTS);
+        try (Cursor c = tx.tree(OBJECTS).scan()) {
+            while (c.next()) {
+                objects++;
+                Optional<byte[]> v = manifests.get(idKey(str(c.value())));
+                if (v.isPresent()) bytes += ManifestCodec.decode(v.get(), false).getTotalBytes();
+            }
+        }
+        putTotals(tx, objects, bytes);
+    }
+
+    /** Adds the deltas to the totals (they must have been initialized with {@link #ensureTotals}). */
+    static void adjustTotals(WriteTxn tx, long objectsDelta, long bytesDelta) {
+        long[] t = totals(tx);
+        if (t == null) throw new IllegalStateException("object totals not initialized");
+        putTotals(tx, Math.max(0, t[0] + objectsDelta), Math.max(0, t[1] + bytesDelta));
+    }
+
+    private static void putTotals(WriteTxn tx, long objects, long bytes) {
+        byte[] v = java.nio.ByteBuffer.allocate(16).putLong(objects).putLong(bytes).array();
+        tx.tree(STATS).put(TOTALS_KEY, v);
     }
 
     private static void requireText(String v, String what) {

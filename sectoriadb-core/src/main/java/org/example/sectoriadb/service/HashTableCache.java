@@ -1,6 +1,7 @@
 package org.example.sectoriadb.service;
 
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
@@ -9,6 +10,7 @@ import org.example.sectoriadb.tools.XxHash64BytesHasher;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -31,9 +33,26 @@ public class HashTableCache {
 
     private final ConcurrentHashMap<String, CuckooHashTable> cache = new ConcurrentHashMap<>();
     private final StorageProperties props;
+    private final StorageMetrics metrics;
 
     public HashTableCache(StorageProperties props) {
+        this(props, StorageMetrics.NOOP);
+    }
+
+    @Autowired
+    public HashTableCache(StorageProperties props, StorageMetrics metrics) {
         this.props = props;
+        this.metrics = metrics;
+    }
+
+    /** The tables currently loaded (opened at least once in this process). Used for aggregate gauges only. */
+    public java.util.Collection<CuckooHashTable> loadedTables() {
+        return List.copyOf(cache.values());
+    }
+
+    /** Metrics receiver given to every table this cache creates (also used by ResizeService for its new tables). */
+    public StorageMetrics metrics() {
+        return metrics;
     }
 
     /** Returns a cached or freshly-loaded CuckooHashTable. */
@@ -84,8 +103,8 @@ public class HashTableCache {
         log.info("Loading CuckooHashTable: blobId={} path={}", e.getId(), e.getFilePath());
         BlobFile bf = new BlobFile(e.getId(), Path.of(e.getFilePath()), e.getTotalBytes());
         CuckooHashTable table = new CuckooHashTable(
-                bf, new FileChannelStorageIOEngine(props.isFsync()), new XxHash64BytesHasher(),
-                e.getNumBuckets(), e.getChunkSize(), props.getMaxEvictions());
+                bf, new FileChannelStorageIOEngine(props.isFsync(), metrics), new XxHash64BytesHasher(),
+                e.getNumBuckets(), e.getChunkSize(), props.getMaxEvictions(), metrics);
         try {
             table.loadMetadataFromDisk();
         } catch (IOException | RuntimeException ex) {

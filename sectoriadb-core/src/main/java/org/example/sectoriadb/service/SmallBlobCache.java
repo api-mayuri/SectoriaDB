@@ -2,11 +2,13 @@ package org.example.sectoriadb.service;
 
 import jakarta.annotation.PreDestroy;
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.service.impl.SmallObjectBlob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -26,9 +28,21 @@ public class SmallBlobCache {
 
     private final ConcurrentHashMap<String, SmallObjectBlob> cache = new ConcurrentHashMap<>();
     private final StorageProperties props;
+    private final StorageMetrics metrics;
 
     public SmallBlobCache(StorageProperties props) {
+        this(props, StorageMetrics.NOOP);
+    }
+
+    @Autowired
+    public SmallBlobCache(StorageProperties props, StorageMetrics metrics) {
         this.props = props;
+        this.metrics = metrics;
+    }
+
+    /** The small-object blobs currently open (used for aggregate gauges only). */
+    public java.util.Collection<SmallObjectBlob> openBlobs() {
+        return List.copyOf(cache.values());
     }
 
     public SmallObjectBlob get(BlobFileEntity entity) throws IOException {
@@ -42,7 +56,7 @@ public class SmallBlobCache {
                     log.info("Opening small-object blob: blobId={} path={}", id, entity.getFilePath());
                     return SmallObjectBlob.open(id, Path.of(entity.getFilePath()), props.isFsync(),
                             props.getSmallObject().getMaxFileBytes(),
-                            props.getSmallObject().getCheckpointIntervalBytes());
+                            props.getSmallObject().getCheckpointIntervalBytes(), metrics);
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }

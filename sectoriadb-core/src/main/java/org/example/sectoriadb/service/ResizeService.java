@@ -2,6 +2,7 @@ package org.example.sectoriadb.service;
 
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.format.BlobLayout;
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.repository.BlobFileRepository;
@@ -52,6 +53,18 @@ public class ResizeService {
      * @return the replacement BlobFileEntity
      */
     public BlobFileEntity resizeBlobFile(String blobId, int newNumBuckets) throws IOException {
+        long n0 = System.nanoTime();
+        boolean ok = false;
+        try {
+            BlobFileEntity result = doResize(blobId, newNumBuckets);
+            ok = true;
+            return result;
+        } finally {
+            cache.metrics().resize(System.nanoTime() - n0, ok);
+        }
+    }
+
+    private BlobFileEntity doResize(String blobId, int newNumBuckets) throws IOException {
         long t0 = System.currentTimeMillis();
         BlobFileEntity oldEntity = blobRepo.findById(blobId)
                 .orElseThrow(() -> new IllegalArgumentException("Blob not found: " + blobId));
@@ -102,8 +115,8 @@ public class ResizeService {
 
         BlobFile newBlobFile = new BlobFile(newId, newPath, newSize);
         CuckooHashTable newTable = new CuckooHashTable(
-                newBlobFile, new FileChannelStorageIOEngine(props.isFsync()), new XxHash64BytesHasher(),
-                newNumBuckets, chunkSize, props.getMaxEvictions());
+                newBlobFile, new FileChannelStorageIOEngine(props.isFsync(), cache.metrics()), new XxHash64BytesHasher(),
+                newNumBuckets, chunkSize, props.getMaxEvictions(), cache.metrics());
 
         // Migrate every active chunk from old → new
         AtomicInteger migrated = new AtomicInteger();
