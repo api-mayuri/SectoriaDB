@@ -1,12 +1,13 @@
 package org.example.sectoriadb;
 
+import org.example.sectoriadb.format.BlobLayout;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.model.ChunkLocation;
 import org.example.sectoriadb.service.StorageIOEngine;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 import org.example.sectoriadb.service.impl.FileChannelStorageIOEngine;
 import org.example.sectoriadb.service.impl.TableFullException;
-import org.example.sectoriadb.tools.MurmurBytesHasher;
+import org.example.sectoriadb.tools.XxHash64BytesHasher;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -38,15 +39,11 @@ class CuckooInsertSafetyTest {
     @TempDir
     Path tmp;
 
-    private final MurmurBytesHasher hasher = new MurmurBytesHasher();
+    private final XxHash64BytesHasher hasher = new XxHash64BytesHasher();
 
     private Path newBlob(String name, int buckets) throws IOException {
         Path p = tmp.resolve(name);
-        long size = CuckooHashTable.computeRequiredBlobSize(buckets, CHUNK);
-        try (FileChannel fc = FileChannel.open(p, StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
-            fc.position(size - 1);
-            fc.write(ByteBuffer.wrap(new byte[]{0}));
-        }
+        BlobLayout.createFile(p, buckets, CHUNK);
         return p;
     }
 
@@ -270,7 +267,7 @@ class CuckooInsertSafetyTest {
         long[] keys = {Long.MIN_VALUE, Long.MAX_VALUE, -1L, 0L, 1L, Long.MIN_VALUE + 1, -13L};
         Map<Long, byte[]> stored = new LinkedHashMap<>();
         for (long k : keys) {
-            ChunkLocation loc = t.insert(k, ByteBuffer.wrap(payload(k)));
+            ChunkLocation loc = t.insert(k, ByteBuffer.wrap(payload(k))).location();
             assertTrue(loc.bucketIndex() >= 0 && loc.bucketIndex() < buckets);
             stored.put(k, payload(k));
         }
@@ -278,14 +275,15 @@ class CuckooInsertSafetyTest {
     }
 
     @Test
-    void bucketMapping_staysCompatibleWithAbsModForExistingBlobs() throws IOException {
-        int buckets = 13;
-        Path p = newBlob("compat.raw", buckets);
-        CuckooHashTable t = open(p, buckets, 16, new FileChannelStorageIOEngine(false));
-        // old formula: |key| % n  (-5 -> 5, not floorMod's 8)
-        ChunkLocation loc = t.insert(-5L, ByteBuffer.wrap(payload(-5L)));
-        assertEquals(5, loc.bucketIndex());
-        assertEquals(org.example.sectoriadb.model.CuckooTable.A, loc.table());
+    void bucketIndexes_alwaysInRange_forAnyKeyAndBucketCount() {
+        long[] keys = {Long.MIN_VALUE, Long.MAX_VALUE, -1L, 0L, 1L, -5L, 0x8000000000000001L};
+        for (int n : new int[]{1, 2, 13, 1000, 1024}) {
+            for (long k : keys) {
+                int a = BlobLayout.bucketA(k, n);
+                int b = BlobLayout.bucketB(k, n);
+                assertTrue(a >= 0 && a < n && b >= 0 && b < n);
+            }
+        }
     }
 
     // ── C5 ───────────────────────────────────────────────────────────────────
@@ -295,7 +293,7 @@ class CuckooInsertSafetyTest {
         int buckets = 4;
         Path p = newBlob("order.raw", buckets);
         List<String> ops = new ArrayList<>();
-        long metaSize = (long) 2 * buckets * CuckooHashTable.SLOTS_PER_BUCKET * 9;
+        long metaSize = BlobLayout.tableAOffset(buckets); // header + meta section
         FileChannelStorageIOEngine real = new FileChannelStorageIOEngine(false);
         StorageIOEngine recording = new StorageIOEngine() {
             @Override public ByteBuffer readChunk(BlobFile f, long o, int l) throws IOException {

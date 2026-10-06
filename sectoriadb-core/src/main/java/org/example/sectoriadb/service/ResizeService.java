@@ -1,6 +1,7 @@
 package org.example.sectoriadb.service;
 
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.format.BlobLayout;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.BlobFile;
@@ -9,7 +10,7 @@ import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.PoolRepository;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 import org.example.sectoriadb.service.impl.FileChannelStorageIOEngine;
-import org.example.sectoriadb.tools.MurmurBytesHasher;
+import org.example.sectoriadb.tools.XxHash64BytesHasher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -63,8 +64,14 @@ public class ResizeService {
         CuckooHashTable oldTable = cache.get(oldEntity);
         CuckooHashTable.FillStats stats = oldTable.getFillStats();
         int activeSlots = stats.activeSlots();
+        if (stats.quarantinedSlots() > 0) {
+            // Their chunks cannot be read reliably; migrating would silently drop them.
+            throw new IllegalStateException("Blob " + blobId + " has " + stats.quarantinedSlots()
+                    + " quarantined slot(s) (damaged metadata); run 'scrub' and repair before resizing");
+        }
 
-        // Guard: cuckoo hash degrades sharply above ~70% fill — enforce a safe headroom
+        // Guard: a table reaches >90% fill before an insert fails (see docs/architecture/03-chunk-integrity.md),
+        // but insert cost (BFS path length) grows steeply near the limit — keep 70% as headroom after migration.
         final double MAX_SAFE_FILL = 0.70;
         int newTotalSlots  = 2 * newNumBuckets * CuckooHashTable.SLOTS_PER_BUCKET;
         int minSlotsNeeded = (int) Math.ceil(activeSlots / MAX_SAFE_FILL);
@@ -92,11 +99,11 @@ public class ResizeService {
                 blobId, oldEntity.getNumBuckets(), newNumBuckets, activeSlots,
                 String.format("%.2f", newSize / 1_073_741_824.0));
 
-        BlobService.allocateSparseFile(newPath, newSize);
+        BlobLayout.createFile(newPath, newNumBuckets, chunkSize);
 
         BlobFile newBlobFile = new BlobFile(newId, newPath, newSize);
         CuckooHashTable newTable = new CuckooHashTable(
-                newBlobFile, new FileChannelStorageIOEngine(props.isFsync()), new MurmurBytesHasher(),
+                newBlobFile, new FileChannelStorageIOEngine(props.isFsync()), new XxHash64BytesHasher(),
                 newNumBuckets, chunkSize, props.getMaxEvictions());
 
         // Migrate every active chunk from old → new
@@ -105,7 +112,7 @@ public class ResizeService {
         try {
             oldTable.forEachActiveChunk((key, data) -> {
                 try {
-                    newTable.insert(key, data);
+                    newTable.insertPreservingKey(key, data); // manifests reference these keys
                 } catch (IOException e) {
                     throw new UncheckedIOException(e);
                 }
@@ -118,12 +125,13 @@ public class ResizeService {
                     }
                 }
             });
-        } catch (UncheckedIOException e) {
+        } catch (UncheckedIOException | IOException e) {
+            IOException cause = (e instanceof UncheckedIOException u) ? u.getCause() : (IOException) e;
             try { newTable.close(); } catch (IOException ignored) {}
             try { Files.deleteIfExists(newPath); } catch (IOException ignored) {}
-            opLog.failure("RESIZE", blobId, oldEntity.getFileName(), e.getCause(),
+            opLog.failure("RESIZE", blobId, oldEntity.getFileName(), cause,
                     System.currentTimeMillis() - t0);
-            throw e.getCause();
+            throw cause;
         }
 
         // The cache opens its own table for the new blob on first use; release our channel.

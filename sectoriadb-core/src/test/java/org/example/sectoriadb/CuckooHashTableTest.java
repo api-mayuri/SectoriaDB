@@ -1,10 +1,11 @@
 package org.example.sectoriadb;
 
+import org.example.sectoriadb.format.BlobLayout;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.model.ChunkLocation;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 import org.example.sectoriadb.service.impl.FileChannelStorageIOEngine;
-import org.example.sectoriadb.tools.MurmurBytesHasher;
+import org.example.sectoriadb.tools.XxHash64BytesHasher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -27,7 +28,7 @@ class CuckooHashTableTest {
     Path tmpDir;
 
     private CuckooHashTable table;
-    private MurmurBytesHasher hasher;
+    private XxHash64BytesHasher hasher;
 
     private static final int NUM_BUCKETS = 16;
     private static final int CHUNK_SIZE  = 4096;
@@ -36,13 +37,9 @@ class CuckooHashTableTest {
     void setUp() throws IOException {
         Path blobPath = tmpDir.resolve("test.raw");
         long blobSize = CuckooHashTable.computeRequiredBlobSize(NUM_BUCKETS, CHUNK_SIZE);
-        try (FileChannel fc = FileChannel.open(blobPath,
-                StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
-            fc.position(blobSize - 1);
-            fc.write(ByteBuffer.wrap(new byte[]{0}));
-        }
+        BlobLayout.createFile(blobPath, NUM_BUCKETS, CHUNK_SIZE);
         BlobFile blobFile = new BlobFile("test", blobPath, blobSize);
-        hasher = new MurmurBytesHasher();
+        hasher = new XxHash64BytesHasher();
         table  = new CuckooHashTable(blobFile, new FileChannelStorageIOEngine(false), hasher, NUM_BUCKETS, CHUNK_SIZE);
     }
 
@@ -52,7 +49,7 @@ class CuckooHashTableTest {
         ByteBuffer chunk = ByteBuffer.wrap(data);
         long key = hasher.hash64(chunk.duplicate());
 
-        ChunkLocation loc = table.insert(key, chunk);
+        ChunkLocation loc = table.insert(key, chunk).location();
 
         assertNotNull(loc);
         Optional<ChunkLocation> found = table.lookup(key);
@@ -93,8 +90,8 @@ class CuckooHashTableTest {
         ByteBuffer chunk = ByteBuffer.wrap(data);
         long key = hasher.hash64(chunk.duplicate());
 
-        ChunkLocation first  = table.insert(key, chunk.duplicate());
-        ChunkLocation second = table.insert(key, chunk.duplicate());
+        ChunkLocation first  = table.insert(key, chunk.duplicate()).location();
+        ChunkLocation second = table.insert(key, chunk.duplicate()).location();
 
         assertEquals(first, second, "Duplicate insert should return the same ChunkLocation");
     }

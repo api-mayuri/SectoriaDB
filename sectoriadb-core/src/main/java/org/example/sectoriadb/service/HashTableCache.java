@@ -5,7 +5,7 @@ import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 import org.example.sectoriadb.service.impl.FileChannelStorageIOEngine;
-import org.example.sectoriadb.tools.MurmurBytesHasher;
+import org.example.sectoriadb.tools.XxHash64BytesHasher;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -80,7 +80,7 @@ public class HashTableCache {
         log.info("Loading CuckooHashTable: blobId={} path={}", e.getId(), e.getFilePath());
         BlobFile bf = new BlobFile(e.getId(), Path.of(e.getFilePath()), e.getTotalBytes());
         CuckooHashTable table = new CuckooHashTable(
-                bf, new FileChannelStorageIOEngine(props.isFsync()), new MurmurBytesHasher(),
+                bf, new FileChannelStorageIOEngine(props.isFsync()), new XxHash64BytesHasher(),
                 e.getNumBuckets(), e.getChunkSize(), props.getMaxEvictions());
         try {
             table.loadMetadataFromDisk();

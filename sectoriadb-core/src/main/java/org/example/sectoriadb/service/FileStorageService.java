@@ -8,7 +8,7 @@ import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.service.impl.BlobFileWriteService;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 import org.example.sectoriadb.service.impl.DefaultChunkingService;
-import org.example.sectoriadb.tools.MurmurBytesHasher;
+import org.example.sectoriadb.tools.XxHash64BytesHasher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -61,7 +61,7 @@ public class FileStorageService {
         BlobFileEntity blobEntity = blobService.chooseBlobFileForWrite(pool);
         CuckooHashTable table = cache.get(blobEntity);
         BlobFileWriteService writer = new BlobFileWriteService(
-                table, new DefaultChunkingService(), new MurmurBytesHasher());
+                table, new DefaultChunkingService(), new XxHash64BytesHasher());
 
         FileManifest manifest;
         try {

@@ -1,5 +1,6 @@
 package org.example.sectoriadb.service.impl;
 
+import org.example.sectoriadb.format.BlobLayout;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.model.Bucket;
 import org.example.sectoriadb.model.ChunkLocation;
@@ -17,19 +18,21 @@ import java.util.Arrays;
 import java.util.BitSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.zip.CRC32C;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
- * Bucketed cuckoo hash table backed by a single blob file.
+ * Bucketed cuckoo hash table backed by a single blob file (layout: see {@link BlobLayout}).
  *
- * Blob file layout:
- *   [0 .. META_SIZE-1]              — metadata: totalSlots * 9 bytes (8b chunkId + 1b state)
- *   [META_SIZE .. META_SIZE+TA-1]   — Table A: numBuckets * 4 slots * chunkSize bytes
- *   [META_SIZE+TA .. end]           — Table B: same size as Table A
+ * Each bucket has exactly SLOTS_PER_BUCKET = 4 slots. Table A and table B use two independent mixers of the
+ * 64-bit chunk key ({@link BlobLayout#bucketA}, {@link BlobLayout#bucketB}).
  *
- * Each bucket has exactly SLOTS_PER_BUCKET = 4 slots.
- * Hash A: floorMod(|key|, numBuckets)
- * Hash B: floorMod(|(key ^ TWIST) * MULT|, numBuckets)
+ * <h3>Integrity</h3>
+ * Every slot has a 32-byte meta entry with its own CRC32C and the CRC32C of the stored bytes. Reads verify
+ * length and CRC and throw {@link ChunkCorruptedException}. A meta entry that fails its CRC on load is put
+ * in memory-only state QUARANTINED: it is never returned by lookup, never chosen as a free slot (so its data
+ * is not overwritten), and is counted in {@link FillStats}. Dedup compares length, CRC and then the full
+ * bytes; a differing chunk under the same key is a real hash collision and is re-keyed with a salted hash.
  *
  * <h3>Insert</h3>
  * {@link #insert} is atomic with respect to failures: the eviction path is searched on the in-memory
@@ -48,16 +51,18 @@ public class CuckooHashTable implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(CuckooHashTable.class);
 
-    public static final int SLOTS_PER_BUCKET = 4;
+    public static final int SLOTS_PER_BUCKET = BlobLayout.SLOTS_PER_BUCKET;
+    /** Maximum number of keys tried for one chunk (primary key + salted re-keys) before giving up. */
+    public static final int MAX_KEY_ATTEMPTS = 8;
 
-    private static final int META_ENTRY_BYTES = 9; // 8 bytes chunkId (long) + 1 byte state
-    private static final long HASH_B_TWIST = 0x9e3779b97f4a7c15L;
-    private static final long HASH_B_MULT = 0x6c62272e07bb0142L;
+    private static final int META_ENTRY_BYTES = BlobLayout.META_ENTRY_BYTES;
+    private static final int META_LOAD_BATCH = 8192; // entries per read while loading
 
     private static final byte FREE = SlotStateMap.FREE.getValue();
     private static final byte ACTIVE = SlotStateMap.ACTIVE.getValue();
     private static final byte DELETED = SlotStateMap.DELETED.getValue();
     private static final byte RESERVED = SlotStateMap.RESERVED.getValue();
+    private static final byte QUARANTINED = SlotStateMap.QUARANTINED.getValue();
 
     private final BlobFile blobFile;
     private final StorageIOEngine ioEngine;
@@ -66,14 +71,16 @@ public class CuckooHashTable implements AutoCloseable {
     private final int chunkSize;
     private final int maxEvictions;
 
-    // Flat in-memory metadata.
+    // Flat in-memory metadata (17 bytes per slot).
     // Slot index = tableId * numBuckets * SLOTS_PER_BUCKET + bucket * SLOTS_PER_BUCKET + slot
     private final long[] chunkIdMeta;
     private final byte[] stateMeta;
+    private final int[] lengthMeta;
+    private final int[] crcMeta;
     private final int totalSlots;
     private final int slotsPerTable;
+    private long nextSequence = 1;
 
-    private final long metaSectionSize;
     private final long tableAOffset;
     private final long tableBOffset;
 
@@ -92,19 +99,26 @@ public class CuckooHashTable implements AutoCloseable {
     }
 
     /** Fill statistics for a blob file. */
-    public record FillStats(int activeSlots, int totalSlots) {
+    public record FillStats(int activeSlots, int totalSlots, int quarantinedSlots) {
+        public FillStats(int activeSlots, int totalSlots) {
+            this(activeSlots, totalSlots, 0);
+        }
         public double fillPercent() {
             return totalSlots == 0 ? 0.0 : 100.0 * activeSlots / totalSlots;
         }
         public long freeBytes(int chunkSize) {
-            return (long)(totalSlots - activeSlots) * chunkSize;
+            return (long)(totalSlots - activeSlots - quarantinedSlots) * chunkSize;
         }
         public long usedBytes(int chunkSize) {
             return (long) activeSlots * chunkSize;
         }
     }
 
-    /** Convenience constructor — uses a safe default of 32 evictions (matches original behaviour). */
+    /** Result of {@link #scrub()}. {@code problems} is capped at 100 lines. */
+    public record ScrubReport(int activeSlots, int ok, int corrupt, int quarantined, List<String> problems) {
+    }
+
+    /** Convenience constructor — uses a safe default of 32 evictions. */
     public CuckooHashTable(BlobFile blobFile,
                            StorageIOEngine ioEngine,
                            BytesHasher hasher,
@@ -130,12 +144,12 @@ public class CuckooHashTable implements AutoCloseable {
         this.totalSlots = 2 * slotsPerTable;
         this.chunkIdMeta = new long[totalSlots];
         this.stateMeta = new byte[totalSlots];
+        this.lengthMeta = new int[totalSlots];
+        this.crcMeta = new int[totalSlots];
         Arrays.fill(stateMeta, FREE);
 
-        this.metaSectionSize = (long) totalSlots * META_ENTRY_BYTES;
-        long tableSize = (long) slotsPerTable * chunkSize;
-        this.tableAOffset = metaSectionSize;
-        this.tableBOffset = metaSectionSize + tableSize;
+        this.tableAOffset = BlobLayout.tableAOffset(numBuckets);
+        this.tableBOffset = tableAOffset + (long) slotsPerTable * chunkSize;
     }
 
     // ─── Public API ──────────────────────────────────────────────────────────
@@ -152,46 +166,103 @@ public class CuckooHashTable implements AutoCloseable {
     }
 
     /**
-     * Inserts a chunk into the table. If the key already exists (dedup), returns the existing location.
-     * Returns the ChunkLocation where the chunk was placed.
+     * Inserts a chunk (1..chunkSize bytes, taken from the buffer's position to its limit).
+     *
+     * <ul>
+     *   <li>Key not present: the chunk is stored under {@code chunkKey}.</li>
+     *   <li>Key present with identical bytes (length, CRC and full bytes compared): dedup, nothing written.</li>
+     *   <li>Key present with different bytes: a real hash collision. The chunk is re-keyed with
+     *       {@code hasher.hash64(data, attempt)} (attempt = 1, 2, ...) and the first free / identical key wins.
+     *       The final key is in {@link InsertResult#key()} and must be recorded by the caller.</li>
+     * </ul>
      *
      * @throws TableFullException if no eviction path of at most maxEvictions moves exists; the table is unchanged
      */
-    public ChunkLocation insert(long chunkKey, ByteBuffer chunkData) throws IOException {
+    public InsertResult insert(long chunkKey, ByteBuffer chunkData) throws IOException {
+        return insertInternal(chunkKey, chunkData, true);
+    }
+
+    /**
+     * Like {@link #insert} but the chunk must be stored under exactly {@code chunkKey} (used when migrating
+     * chunks whose keys are already referenced by manifests). A different chunk under the same key is an error.
+     */
+    public InsertResult insertPreservingKey(long chunkKey, ByteBuffer chunkData) throws IOException {
+        return insertInternal(chunkKey, chunkData, false);
+    }
+
+    private InsertResult insertInternal(long chunkKey, ByteBuffer chunkData, boolean mayRekey) throws IOException {
+        ByteBuffer src = chunkData.duplicate();
+        int len = src.remaining();
+        if (len < 1 || len > chunkSize) {
+            throw new IllegalArgumentException("Chunk length " + len + " must be in [1, " + chunkSize + "]");
+        }
+        byte[] payload = new byte[len];
+        src.get(payload);
+        int crc = crc32c(payload, len);
+
         lock.writeLock().lock();
         try {
-            Optional<ChunkLocation> existing = lookupUnlocked(chunkKey);
-            if (existing.isPresent()) {
-                return existing.get();
+            long key = chunkKey;
+            for (int attempt = 0; ; attempt++) {
+                int idx = findActiveSlot(key);
+                if (idx < 0) {
+                    break;
+                }
+                if (lengthMeta[idx] == len && crcMeta[idx] == crc) {
+                    byte[] stored = readRaw(idx, len);
+                    if (Arrays.equals(stored, payload)) {
+                        return new InsertResult(key, locationOf(idx), true);
+                    }
+                    if (crc32c(stored, len) != crcMeta[idx]) {
+                        // Stored bytes are damaged but the new bytes match the recorded CRC: heal in place.
+                        log.warn("Healing corrupted chunk 0x{} in slot {} of blob {} from identical incoming data",
+                                Long.toHexString(key), idx, blobFile.id());
+                        ioEngine.writeChunk(blobFile, dataOffset(idx), ByteBuffer.wrap(payload));
+                        ioEngine.force(blobFile);
+                        return new InsertResult(key, locationOf(idx), true);
+                    }
+                }
+                // Same key, different content: a genuine 64-bit hash collision.
+                if (!mayRekey) {
+                    throw new IOException("Key 0x" + Long.toHexString(key) + " already holds a different chunk in blob "
+                            + blobFile.id() + " and re-keying is not allowed");
+                }
+                if (attempt + 1 >= MAX_KEY_ATTEMPTS) {
+                    throw new IOException("Could not find a collision-free key for a chunk after "
+                            + MAX_KEY_ATTEMPTS + " attempts in blob " + blobFile.id());
+                }
+                log.warn("Hash collision on key 0x{} in blob {}: re-keying chunk (attempt {})",
+                        Long.toHexString(key), blobFile.id(), attempt + 1);
+                key = hasher.hash64(payload, attempt + 1L);
             }
 
-            int[] path = findEvictionPath(chunkKey);
+            int[] path = findEvictionPath(key);
             if (path == null) {
                 throw new TableFullException("CuckooHashTable: no eviction path within " + maxEvictions
                         + " moves — table is too full");
             }
 
-            byte[] payload = padToChunkSize(chunkData);
-
             // Move chunks from the free end of the path backwards. Invariant after every step: each chunk
             // that was stored before the insert is ACTIVE (with its data) in at least one slot.
             for (int i = path.length - 1; i >= 1; i--) {
-                int src = path[i - 1];
+                int src0 = path[i - 1];
                 int dst = path[i];
-                long movedKey = chunkIdMeta[src];
+                long movedKey = chunkIdMeta[src0];
+                int movedLen = lengthMeta[src0];
+                int movedCrc = crcMeta[src0];
 
-                ByteBuffer data = ioEngine.readChunk(blobFile, dataOffset(src), chunkSize);
+                ByteBuffer data = ioEngine.readChunk(blobFile, dataOffset(src0), movedLen);
                 ioEngine.writeChunk(blobFile, dataOffset(dst), data);
-                ioEngine.force(blobFile);                       // data durable before it is announced
-                writeMeta(dst, movedKey, ACTIVE);               // chunk now lives in dst (and still in src)
-                writeMeta(src, movedKey, RESERVED);             // src may now be overwritten
+                ioEngine.force(blobFile);                                   // data durable before it is announced
+                writeMeta(dst, movedKey, ACTIVE, movedLen, movedCrc);       // chunk now lives in dst (and still in src)
+                writeMeta(src0, movedKey, RESERVED, 0, 0);                  // src may now be overwritten
             }
 
             int target = path[0];
             ioEngine.writeChunk(blobFile, dataOffset(target), ByteBuffer.wrap(payload));
             ioEngine.force(blobFile);
-            writeMeta(target, chunkKey, ACTIVE);
-            return locationOf(target);
+            writeMeta(target, key, ACTIVE, len, crc);
+            return new InsertResult(key, locationOf(target), false);
         } finally {
             lock.writeLock().unlock();
         }
@@ -210,7 +281,7 @@ public class CuckooHashTable implements AutoCloseable {
     }
 
     /**
-     * Reads chunk data from a known location.
+     * Reads (and verifies) chunk data from a known location.
      * actualSize trims the result (useful for the last chunk which may be smaller than chunkSize).
      *
      * Note: the location may become stale if another thread inserts concurrently (chunks move between
@@ -220,15 +291,20 @@ public class CuckooHashTable implements AutoCloseable {
         lock.readLock().lock();
         try {
             int idx = flatIndex(loc.table().getId(), loc.bucketIndex(), loc.slotIndex());
-            return trim(ioEngine.readChunk(blobFile, dataOffset(idx), chunkSize), actualSize);
+            if (stateMeta[idx] != ACTIVE) {
+                throw new IOException("Slot " + idx + " of blob " + blobFile.id() + " is not active");
+            }
+            return readVerified(idx, actualSize);
         } finally {
             lock.readLock().unlock();
         }
     }
 
     /**
-     * Atomically looks up a chunk and reads its data under one read lock.
+     * Atomically looks up a chunk and reads its data under one read lock; verifies stored length and CRC32C.
      * Returns empty if the key is not stored.
+     *
+     * @throws ChunkCorruptedException if the stored bytes do not match their recorded length / CRC
      */
     public Optional<ByteBuffer> readChunkByKey(long chunkKey, int actualSize) throws IOException {
         lock.readLock().lock();
@@ -237,7 +313,7 @@ public class CuckooHashTable implements AutoCloseable {
             if (idx < 0) {
                 return Optional.empty();
             }
-            return Optional.of(trim(ioEngine.readChunk(blobFile, dataOffset(idx), chunkSize), actualSize));
+            return Optional.of(readVerified(idx, actualSize));
         } finally {
             lock.readLock().unlock();
         }
@@ -262,20 +338,64 @@ public class CuckooHashTable implements AutoCloseable {
     }
 
     /**
-     * Loads metadata from disk into memory (used for hot-restart after process restart).
+     * Verifies the blob header and loads the metadata from disk (hot restart).
      *
-     * Also repairs the leftovers of an interrupted insert: RESERVED slots (their chunk was already copied
-     * to another ACTIVE slot) become FREE, and a key that is ACTIVE in both of its candidate slots keeps
-     * only its table-A copy.
+     * Header magic / version / CRC / geometry mismatch fails with {@link InvalidBlobHeaderException}.
+     * Meta entries whose CRC (or state) is invalid are QUARANTINED in memory (logged at ERROR, never rewritten
+     * and never reused). Also repairs the leftovers of an interrupted insert: RESERVED slots (their chunk was
+     * already copied to another ACTIVE slot) become FREE, and a key that is ACTIVE in both of its candidate
+     * slots keeps only its table-A copy.
      */
     public void loadMetadataFromDisk() throws IOException {
         lock.writeLock().lock();
         try {
-            int metaBytes = (int) metaSectionSize;
-            ByteBuffer buf = ioEngine.readChunk(blobFile, 0, metaBytes);
-            for (int i = 0; i < totalSlots; i++) {
-                chunkIdMeta[i] = buf.getLong();
-                stateMeta[i] = buf.get();
+            BlobLayout.verifyHeader(ioEngine.readChunk(blobFile, 0, BlobLayout.HEADER_SIZE),
+                    numBuckets, chunkSize, blobFile.id());
+
+            byte[] entry = new byte[META_ENTRY_BYTES];
+            long maxSeq = 0;
+            int quarantined = 0;
+            for (int first = 0; first < totalSlots; first += META_LOAD_BATCH) {
+                int count = Math.min(META_LOAD_BATCH, totalSlots - first);
+                ByteBuffer buf = ioEngine.readChunk(blobFile,
+                        BlobLayout.HEADER_SIZE + (long) first * META_ENTRY_BYTES, count * META_ENTRY_BYTES);
+                for (int i = 0; i < count; i++) {
+                    int idx = first + i;
+                    buf.get(entry);
+                    ByteBuffer e = ByteBuffer.wrap(entry);
+                    chunkIdMeta[idx] = 0;
+                    lengthMeta[idx] = 0;
+                    crcMeta[idx] = 0;
+                    if (isAllZero(entry)) {
+                        stateMeta[idx] = FREE;
+                        continue;
+                    }
+                    String problem = null;
+                    byte state = e.get(8);
+                    if (crc32c(entry, META_ENTRY_BYTES - 4) != e.getInt(META_ENTRY_BYTES - 4)) {
+                        problem = "meta entry CRC mismatch";
+                    } else if (state != FREE && state != ACTIVE && state != DELETED && state != RESERVED) {
+                        problem = "unknown slot state " + state;
+                    } else if (state == ACTIVE && (e.getInt(12) < 1 || e.getInt(12) > chunkSize)) {
+                        problem = "invalid dataLength " + e.getInt(12);
+                    }
+                    if (problem != null) {
+                        log.error("Blob {}: slot {} quarantined: {}", blobFile.id(), idx, problem);
+                        stateMeta[idx] = QUARANTINED;
+                        quarantined++;
+                        continue;
+                    }
+                    stateMeta[idx] = state;
+                    chunkIdMeta[idx] = e.getLong(0);
+                    lengthMeta[idx] = e.getInt(12);
+                    crcMeta[idx] = e.getInt(16);
+                    maxSeq = Math.max(maxSeq, e.getLong(20));
+                }
+            }
+            nextSequence = maxSeq + 1;
+            if (quarantined > 0) {
+                log.error("Blob {}: {} slot(s) quarantined (damaged meta entries); they are excluded from lookups "
+                        + "and will not be overwritten. Run 'scrub' for details.", blobFile.id(), quarantined);
             }
             repairAfterCrash();
         } finally {
@@ -285,26 +405,26 @@ public class CuckooHashTable implements AutoCloseable {
 
     /** Returns the total blob file size needed for the given parameters. */
     public static long computeRequiredBlobSize(int numBuckets, int chunkSize) {
-        int totalSlots = 2 * numBuckets * SLOTS_PER_BUCKET;
-        long metaSize = (long) totalSlots * META_ENTRY_BYTES;
-        long tableSize = (long) numBuckets * SLOTS_PER_BUCKET * chunkSize;
-        return metaSize + 2 * tableSize;
+        return BlobLayout.requiredSize(numBuckets, chunkSize);
     }
 
     /**
-     * Iterates every active chunk in this table and invokes the consumer.
-     * Used by ResizeService to migrate data to a new blob file.
+     * Iterates every active chunk in this table and invokes the consumer with the chunk's stored bytes
+     * (length 1..chunkSize), after verifying their length and CRC32C. Used by ResizeService to migrate data.
      *
      * Holds the read lock for the whole iteration, so writers to this table wait. The consumer must not
      * insert into this same table (read-to-write upgrade would deadlock).
+     *
+     * @throws ChunkCorruptedException if an active chunk fails verification
      */
     public void forEachActiveChunk(ChunkConsumer consumer) throws IOException {
         lock.readLock().lock();
         try {
             for (int idx = 0; idx < totalSlots; idx++) {
                 if (stateMeta[idx] == ACTIVE) {
-                    ByteBuffer data = ioEngine.readChunk(blobFile, dataOffset(idx), chunkSize);
-                    consumer.accept(chunkIdMeta[idx], data);
+                    byte[] data = readRaw(idx, lengthMeta[idx]);
+                    verify(idx, data);
+                    consumer.accept(chunkIdMeta[idx], ByteBuffer.wrap(data));
                 }
             }
         } finally {
@@ -312,15 +432,49 @@ public class CuckooHashTable implements AutoCloseable {
         }
     }
 
+    /** Verifies every ACTIVE slot's data CRC and reports ok / corrupt / quarantined counts. */
+    public ScrubReport scrub() throws IOException {
+        lock.readLock().lock();
+        try {
+            int active = 0, ok = 0, corrupt = 0, quarantined = 0;
+            List<String> problems = new ArrayList<>();
+            for (int idx = 0; idx < totalSlots; idx++) {
+                if (stateMeta[idx] == QUARANTINED) {
+                    quarantined++;
+                    addProblem(problems, "slot " + idx + ": quarantined (damaged meta entry)");
+                } else if (stateMeta[idx] == ACTIVE) {
+                    active++;
+                    try {
+                        verify(idx, readRaw(idx, lengthMeta[idx]));
+                        ok++;
+                    } catch (ChunkCorruptedException e) {
+                        corrupt++;
+                        addProblem(problems, e.getMessage());
+                    }
+                }
+            }
+            return new ScrubReport(active, ok, corrupt, quarantined, problems);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    private static void addProblem(List<String> problems, String msg) {
+        if (problems.size() < 100) {
+            problems.add(msg);
+        }
+    }
+
     /** Returns fill statistics for capacity monitoring and auto-resize decisions. */
     public FillStats getFillStats() {
         lock.readLock().lock();
         try {
-            int active = 0;
+            int active = 0, quarantined = 0;
             for (byte state : stateMeta) {
                 if (state == ACTIVE) active++;
+                else if (state == QUARANTINED) quarantined++;
             }
-            return new FillStats(active, totalSlots);
+            return new FillStats(active, totalSlots, quarantined);
         } finally {
             lock.readLock().unlock();
         }
@@ -452,44 +606,43 @@ public class CuckooHashTable implements AutoCloseable {
     }
 
     private int bucketA(long key) {
-        return toBucket(key);
+        return BlobLayout.bucketA(key, numBuckets);
     }
 
     private int bucketB(long key) {
-        long mixed = (key ^ HASH_B_TWIST) * HASH_B_MULT;
-        return toBucket(mixed);
+        return BlobLayout.bucketB(key, numBuckets);
     }
 
-    /**
-     * |x| mod numBuckets, kept identical to the original formula for every value that formula handled
-     * (existing blobs depend on it), but with floorMod so that Long.MIN_VALUE (where abs() stays negative)
-     * still yields an index in [0, numBuckets).
-     */
-    private int toBucket(long x) {
-        return (int) Math.floorMod(Math.abs(x), (long) numBuckets);
-    }
-
+    /** FREE and DELETED slots can take a new chunk. QUARANTINED, RESERVED and ACTIVE slots cannot. */
     private boolean isFreeSlot(int idx) {
         return stateMeta[idx] == FREE || stateMeta[idx] == DELETED;
     }
 
-    /** Writes the metadata entry, makes it durable, then updates the in-memory copy. */
-    private void writeMeta(int idx, long chunkKey, byte state) throws IOException {
+    /** Writes the meta entry, makes it durable, then updates the in-memory copy. */
+    private void writeMeta(int idx, long chunkKey, byte state, int dataLength, int dataCrc) throws IOException {
         ByteBuffer buf = ByteBuffer.allocate(META_ENTRY_BYTES);
         buf.putLong(chunkKey);
         buf.put(state);
+        buf.put((byte) 0);
+        buf.putShort((short) 0);
+        buf.putInt(dataLength);
+        buf.putInt(dataCrc);
+        buf.putLong(nextSequence++);
+        buf.putInt(crc32c(buf.array(), META_ENTRY_BYTES - 4));
         buf.flip();
-        ioEngine.writeChunk(blobFile, (long) idx * META_ENTRY_BYTES, buf);
+        ioEngine.writeChunk(blobFile, BlobLayout.HEADER_SIZE + (long) idx * META_ENTRY_BYTES, buf);
         ioEngine.force(blobFile);
         chunkIdMeta[idx] = chunkKey;
         stateMeta[idx] = state;
+        lengthMeta[idx] = dataLength;
+        crcMeta[idx] = dataCrc;
     }
 
     private void repairAfterCrash() throws IOException {
         for (int idx = 0; idx < totalSlots; idx++) {
             if (stateMeta[idx] == RESERVED) {
                 log.warn("Recovery: releasing RESERVED slot {} of blob {}", idx, blobFile.id());
-                writeMeta(idx, 0L, FREE);
+                writeMeta(idx, 0L, FREE, 0, 0);
             }
         }
         for (int idx = 0; idx < slotsPerTable; idx++) {
@@ -503,26 +656,51 @@ public class CuckooHashTable implements AutoCloseable {
                 if (stateMeta[dup] == ACTIVE && chunkIdMeta[dup] == key) {
                     log.warn("Recovery: dropping duplicate copy of chunk 0x{} in slot {} of blob {}",
                             Long.toHexString(key), dup, blobFile.id());
-                    writeMeta(dup, 0L, FREE);
+                    writeMeta(dup, 0L, FREE, 0, 0);
                 }
             }
         }
     }
 
-    private byte[] padToChunkSize(ByteBuffer data) {
-        ByteBuffer src = data.duplicate();
-        src.rewind();
-        byte[] padded = new byte[chunkSize];
-        src.get(padded, 0, Math.min(src.remaining(), chunkSize));
-        return padded;
+    private byte[] readRaw(int idx, int length) throws IOException {
+        ByteBuffer b = ioEngine.readChunk(blobFile, dataOffset(idx), length);
+        byte[] out = new byte[length];
+        b.get(out);
+        return out;
     }
 
-    private ByteBuffer trim(ByteBuffer buf, int actualSize) {
-        if (actualSize < chunkSize) {
-            byte[] bytes = new byte[actualSize];
-            buf.get(bytes);
-            return ByteBuffer.wrap(bytes);
+    private void verify(int idx, byte[] data) throws ChunkCorruptedException {
+        if (data.length != lengthMeta[idx]) {
+            throw new ChunkCorruptedException(blobFile.id(), idx, chunkIdMeta[idx],
+                    "length " + data.length + " != recorded " + lengthMeta[idx]);
         }
-        return buf;
+        int actual = crc32c(data, data.length);
+        if (actual != crcMeta[idx]) {
+            throw new ChunkCorruptedException(blobFile.id(), idx, chunkIdMeta[idx],
+                    String.format("CRC32C mismatch (stored bytes 0x%08x, recorded 0x%08x)", actual, crcMeta[idx]));
+        }
+    }
+
+    private ByteBuffer readVerified(int idx, int actualSize) throws IOException {
+        byte[] data = readRaw(idx, lengthMeta[idx]);
+        verify(idx, data);
+        if (actualSize > data.length) {
+            throw new ChunkCorruptedException(blobFile.id(), idx, chunkIdMeta[idx],
+                    "requested " + actualSize + " bytes but only " + data.length + " are stored");
+        }
+        return ByteBuffer.wrap(data, 0, actualSize).slice();
+    }
+
+    private static int crc32c(byte[] data, int length) {
+        CRC32C crc = new CRC32C();
+        crc.update(data, 0, length);
+        return (int) crc.getValue();
+    }
+
+    private static boolean isAllZero(byte[] b) {
+        for (byte x : b) {
+            if (x != 0) return false;
+        }
+        return true;
     }
 }

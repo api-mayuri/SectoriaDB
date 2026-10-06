@@ -1,6 +1,7 @@
 package org.example.sectoriadb.service;
 
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.format.BlobLayout;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.PoolEntity;
@@ -52,7 +53,7 @@ public class BlobService {
                 pool.getName(), numBuckets, chunkSize, filePath);
 
         long size = CuckooHashTable.computeRequiredBlobSize(numBuckets, chunkSize);
-        allocateSparseFile(filePath, size);
+        BlobLayout.createFile(filePath, numBuckets, chunkSize);
 
         BlobFileEntity entity = new BlobFileEntity();
         entity.setId(blobId);
@@ -131,16 +132,6 @@ public class BlobService {
     }
 
     // ── Static helpers (also used by ResizeService) ───────────────────────────
-
-    public static void allocateSparseFile(Path path, long size) throws IOException {
-        Files.createDirectories(path.getParent());
-        try (FileChannel fc = FileChannel.open(path,
-                StandardOpenOption.CREATE, StandardOpenOption.WRITE,
-                StandardOpenOption.READ, StandardOpenOption.TRUNCATE_EXISTING)) {
-            fc.position(size - 1);
-            fc.write(ByteBuffer.wrap(new byte[]{0}));
-        }
-    }
 
     public static BlobFile toEngineBlob(BlobFileEntity entity) {
         return new BlobFile(entity.getId(), Path.of(entity.getFilePath()), entity.getTotalBytes());

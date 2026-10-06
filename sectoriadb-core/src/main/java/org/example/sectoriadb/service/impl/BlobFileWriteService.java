@@ -55,8 +55,9 @@ public class BlobFileWriteService implements FileWriteService {
                 chunk.flip();
 
                 long key = hasher.hash64(chunk.duplicate());
-                cuckooHashTable.insert(key, chunk);
-                chunkKeys.add(key);
+                // The table may re-key the chunk on a hash collision: the manifest must record the final key.
+                InsertResult stored = cuckooHashTable.insert(key, chunk);
+                chunkKeys.add(stored.key());
 
                 lastChunkSize = size;
                 fileOffset += size;
