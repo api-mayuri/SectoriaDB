@@ -30,6 +30,7 @@ S3-совместимое хранилище объектов на Java и Sprin
 | Объекты | `PutObject`, `GetObject` (в том числе `Range`), `HeadObject`, `DeleteObject`, `CopyObject` |
 | Листинг | `ListObjectsV2` и `ListObjects` (v1) с префиксами и пагинацией |
 | Multipart | создание, загрузка частей, завершение, отмена, список частей и загрузок, копирование части |
+| Контрольные суммы | `x-amz-checksum-crc32` / `crc32c` / `crc64nvme` / `sha1` / `sha256` (заголовок или trailer `aws-chunked`), `Content-MD5`, `x-amz-checksum-algorithm`, составные суммы multipart (`COMPOSITE`/`FULL_OBJECT`), `x-amz-checksum-mode: ENABLED` на `HEAD`/`GET`; несовпадение — `BadDigest` и объект не сохраняется |
 | Доступ | ACL бакетов и объектов, политики бакетов, публичное чтение, presigned-ссылки |
 | Прочее | теги объектов, заглушки для `location`, `versioning`, `cors`, `lifecycle`, `encryption` |
 
@@ -37,7 +38,7 @@ S3-совместимое хранилище объектов на Java и Sprin
 
 - AWS Signature Version 4: заголовок `Authorization` и presigned-ссылки.
 - Несколько ключей доступа, их можно включать, выключать и удалять без перезапуска.
-- Поддержка `aws-chunked` (потоковая подпись, которую использует AWS CLI).
+- Поддержка `aws-chunked` (потоковая подпись, которую использует AWS CLI), в том числе trailing-контрольных сумм.
 
 **Эксплуатация**
 
@@ -147,7 +148,7 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 |---|---|
 | Пулы | `mkpool`, `pools`, `pool`, `rmpool` |
 | Блобы | `mkblob` (`--small` — файл малых объектов), `blobs`, `blob`, `resize`, `scrub`, `rmblob` |
-| Файлы | `store`, `ls`, `info`, `get`, `rm` |
+| Файлы | `store`, `ls`, `info`, `get`, `rm`, `verify`, `verify-all` |
 | Ключи | `mk-key`, `keys`, `rm-key`, `enable-key`, `disable-key` |
 | Доступ | `bucket-acl`, `object-acl`, `public-list` |
 | Служебные | `status`, `config`, `logs`, `audit` |
@@ -212,12 +213,30 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 | core | `repository` | хранение метаданных в JSON |
 | core | `service`, `service.impl` | бизнес-логика, запись и чтение чанков, кукушкина таблица, файлы малых объектов |
 | core | `format` | форматы файлов на диске: блоб-таблица и файл малых объектов |
+| core | `checksum` | алгоритмы S3-контрольных сумм (CRC32/CRC32C/CRC64NVME/SHA-1/SHA-256), однопроходный расчёт нескольких digest |
 | core | `config`, `tools` | настройки `sectoriadb.*`, хэширование |
 | server | `s3`, `s3.xml` | контроллеры S3 API, XML-ответы, обработка ошибок |
 | server | `s3.auth` | проверка SigV4, декодирование `aws-chunked` |
 | server | `s3.access` | ACL и политики доступа |
 | server | `shell` | команды консоли администратора |
 | server | `scheduler` | автоматическое расширение блобов |
+
+## Целостность данных
+
+Объект проверяется на каждом участке пути; подробности и поведение при несовпадениях —
+[`docs/architecture/05-object-checksums.md`](docs/architecture/05-object-checksums.md).
+
+| Слой | Что проверяется | При несовпадении |
+|---|---|---|
+| Транспорт (SigV4) | `x-amz-content-sha256`, подписи фрагментов и trailer `aws-chunked` | `400 XAmzContentSHA256Mismatch` / `403 SignatureDoesNotMatch`, объект не сохраняется |
+| S3-суммы загрузки | `x-amz-checksum-*` (заголовок или trailer), `Content-MD5` | `400 BadDigest`, объект не сохраняется (до записи в блоб и манифест) |
+| CRC32C чанка / записи | каждое чтение чанка кукушки или записи `.sob`, в том числе `Range` | ошибка чтения (`500`, либо обрыв ответа, если заголовки уже отправлены) |
+| CRC32C всего объекта | хранится в манифесте всегда, сверяется на каждом полном `GET`, `CopyObject`, `restore` | `GET` обрывается (соединение закрывается, последний чанк не отдаётся), в логе `ERROR`; копирование — `500` без фиксации |
+| Консоль | `verify --id ID`, `verify-all [--pool NAME]` — полный обход со строкой `RESULT: OK` / `RESULT: FAILED` | |
+
+`Range`-запросы опираются только на CRC32C чанков/записей. Контрольную сумму можно получить обратно:
+`aws s3api head-object --bucket B --key K --checksum-mode ENABLED`. Для загрузки с проверкой:
+`aws s3 cp file s3://B/K --checksum-algorithm SHA256` (CLI сам считает сумму).
 
 ## Тесты
 
@@ -259,7 +278,8 @@ mvn -pl sectoriadb-core test   # только движок
 ## Ограничения
 
 - Удаление объектов «мягкое»: место в блобе после удаления и перезаписи не освобождается (записи малых объектов
-  помечаются удалёнными, компакция файлов `.sob` будет в этапе `08-gc-and-resize`).
+  помечаются удалёнными, компакция файлов `.sob` будет в этапе `09-gc-and-resize`).
+- Контрольные суммы не защищают метаданные (манифесты): их CRC появится вместе с хранилищем метаданных (этапы `06`–`07`).
 - Загружаемый файл сначала записывается во временный каталог, поэтому там нужно свободное место не меньше размера
   самого большого файла.
 - Нет версионирования, шифрования на стороне сервера и репликации. Соответствующие запросы S3 возвращают заглушки.
