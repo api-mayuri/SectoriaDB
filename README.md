@@ -131,11 +131,11 @@ aws s3 --endpoint-url http://localhost:8080 presign s3://my-bucket/photo.jpg --e
 mvn package -DskipTests
 
 # С авторизацией (по умолчанию)
-java -Dspring.shell.interactive.enabled=false -jar target/SectoriaDB-1.0-SNAPSHOT.jar
+java -Dspring.shell.interactive.enabled=false -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar
 
 # Для разработки, без авторизации
 java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false \
-     -jar target/SectoriaDB-1.0-SNAPSHOT.jar
+     -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar
 ```
 
 Без флага `spring.shell.interactive.enabled=false` запускается интерактивная консоль администратора.
@@ -185,22 +185,32 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 хэш-таблицу блоба. Манифест хранит только упорядоченный список ключей чанков. Благодаря этому `Range`-запросы
 читают лишь нужные чанки, а видео можно перематывать.
 
-Структура исходников (`src/main/java/org/example`):
+Проект состоит из двух Maven-модулей:
 
-| Пакет | Назначение |
+| Модуль | Что внутри |
 |---|---|
-| `s3/` | контроллеры S3 API, XML-ответы, обработка ошибок |
-| `s3/auth/` | проверка SigV4, декодирование `aws-chunked` |
-| `s3/access/` | ACL и политики доступа |
-| `service/`, `services/` | бизнес-логика, запись и чтение чанков, кукушкина таблица |
-| `repository/` | хранение метаданных в JSON |
-| `shell/` | команды консоли администратора |
-| `scheduler/` | автоматическое расширение блобов |
+| `sectoriadb-core` | движок хранилища: кукушкина хэш-таблица, чанкинг, блоб-файлы, JSON-репозитории метаданных |
+| `sectoriadb-server` | Spring Boot приложение: S3 API, проверка подписи SigV4, консоль администратора, планировщик |
+
+Пакеты (`org.example`):
+
+| Модуль | Пакет | Назначение |
+|---|---|---|
+| core | `model` | сущности и значения: манифесты, пулы, блобы, ключи доступа, журнал операций |
+| core | `repository` | хранение метаданных в JSON |
+| core | `service`, `service.impl` | бизнес-логика, запись и чтение чанков, кукушкина таблица |
+| core | `config`, `tools` | настройки `sectoriadb.*`, хэширование |
+| server | `s3`, `s3.xml` | контроллеры S3 API, XML-ответы, обработка ошибок |
+| server | `s3.auth` | проверка SigV4, декодирование `aws-chunked` |
+| server | `s3.access` | ACL и политики доступа |
+| server | `shell` | команды консоли администратора |
+| server | `scheduler` | автоматическое расширение блобов |
 
 ## Тесты
 
 ```bash
-mvn test
+mvn test             # оба модуля
+mvn -pl sectoriadb-core test   # только движок
 ```
 
 Интеграционные тесты поднимают сервер на случайном порту и во временных каталогах. Рабочие данные они не трогают.

@@ -1,12 +1,12 @@
-target/
+**/target/
 .idea/
 .git/
 .vscode/
+.claude/
 
 # Runtime data (never bake into image)
 sectoriadb-meta/
 sectoriadb-data/
-mys3-meta/
 pools/
 output/
 
@@ -14,10 +14,8 @@ output/
 *.mp4
 *.raw
 
-
 # Logs
 *.log
-MYS3.log
 
 # Env secrets
 .env
