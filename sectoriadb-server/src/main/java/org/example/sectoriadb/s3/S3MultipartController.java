@@ -137,6 +137,10 @@ public class S3MultipartController {
         try (InputStream body = S3Support.openBody(request);
              DigestInputStream dis = new DigestInputStream(body, md5)) {
             Files.copy(dis, tmpFile, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException | RuntimeException e) {
+            // e.g. payload hash / chunk signature mismatch: the part must not be kept
+            Files.deleteIfExists(tmpFile);
+            throw e;
         }
 
         // Atomic move to final location

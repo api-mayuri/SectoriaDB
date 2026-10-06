@@ -95,6 +95,27 @@ class S3SigV4PayloadTest {
     }
 
     @Test
+    void multipartPartWithWrongPayloadHashIsRejectedAndLeavesNoFile() throws Exception {
+        String emptyHash = SigV4TestClient.sha256(new byte[0]);
+        var init = client.request("POST", "/sigbkt/mp.bin", "uploads", emptyHash, null);
+        assertEquals(200, init.statusCode(), init.body());
+        var m = java.util.regex.Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(init.body());
+        assertTrue(m.find());
+        String id = m.group(1);
+        String q = "partNumber=1&uploadId=" + id;
+
+        byte[] part = bytes("part body");
+        var bad = client.request("PUT", "/sigbkt/mp.bin", q, SigV4TestClient.sha256(bytes("other")), part);
+        assertEquals(400, bad.statusCode());
+        try (var files = java.nio.file.Files.list(tempRoot.resolve("data").resolve(".multipart").resolve(id))) {
+            assertEquals(java.util.List.of("meta.properties"),
+                    files.map(f -> f.getFileName().toString()).sorted().toList(), "no part or temp file may remain");
+        }
+        var good = client.request("PUT", "/sigbkt/mp.bin", q, SigV4TestClient.sha256(part), part);
+        assertEquals(200, good.statusCode(), good.body());
+    }
+
+    @Test
     void unsignedPayloadIsAllowedByDefault() throws Exception {
         var r = client.put("/sigbkt/unsigned.txt", bytes("x"), "UNSIGNED-PAYLOAD");
         assertEquals(200, r.statusCode(), r.body());
