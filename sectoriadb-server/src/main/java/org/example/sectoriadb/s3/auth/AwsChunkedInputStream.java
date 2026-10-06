@@ -30,9 +30,12 @@ import java.util.Map;
  * x-amz-trailer-signature = HMAC(signingKey, "AWS4-HMAC-SHA256-TRAILER\n" + timestamp + "\n" + scope + "\n"
  *                     + sig(last chunk) + "\n" + sha256(canonical trailer)).
  *
- * Unsigned streaming (STREAMING-UNSIGNED-PAYLOAD-TRAILER) has no signatures; the trailing headers
- * (x-amz-checksum-*) are parsed and ignored. Without a signing context no verification is done
- * (authentication disabled or open setup mode).
+ * Unsigned streaming (STREAMING-UNSIGNED-PAYLOAD-TRAILER) has no signatures. Without a signing context no
+ * signature verification is done (authentication disabled or open setup mode).
+ *
+ * The trailing headers (x-amz-checksum-*) are handed to an optional {@link TrailerListener} once the final chunk
+ * (and, if signed, the trailer signature) has been read; the listener owns the checksum comparison, which happens
+ * before the upload is committed (see S3Checksums). The listener may throw an IOException to reject the upload.
  */
 public class AwsChunkedInputStream extends InputStream {
 
@@ -40,8 +43,15 @@ public class AwsChunkedInputStream extends InputStream {
     private static final int MAX_LINE = 8192;
     private static final String EMPTY_SHA256 = SigV4Utils.sha256HexEmpty();
 
+    /** Receives the parsed trailer headers (lower-case names, signature excluded) after the final chunk. */
+    @FunctionalInterface
+    public interface TrailerListener {
+        void onTrailers(Map<String, String> trailers) throws IOException;
+    }
+
     private final InputStream delegate;
     private final ChunkSigningContext signing;   // null => no verification
+    private final TrailerListener trailerListener;
     private String previousSignature;
     private byte[] currentChunk;
     private int pos;
@@ -52,8 +62,13 @@ public class AwsChunkedInputStream extends InputStream {
     }
 
     public AwsChunkedInputStream(InputStream delegate, ChunkSigningContext signing) {
+        this(delegate, signing, null);
+    }
+
+    public AwsChunkedInputStream(InputStream delegate, ChunkSigningContext signing, TrailerListener trailerListener) {
         this.delegate = delegate;
         this.signing = signing;
+        this.trailerListener = trailerListener;
         this.previousSignature = signing != null ? signing.seedSignature() : null;
     }
 
@@ -182,6 +197,7 @@ public class AwsChunkedInputStream extends InputStream {
                 throw PayloadVerificationException.chunkSignature();
             }
         }
+        if (trailerListener != null) trailerListener.onTrailers(trailers);
     }
 
     private static boolean constantTimeEquals(String a, String b) {

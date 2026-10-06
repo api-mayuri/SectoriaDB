@@ -123,15 +123,22 @@ final class SigV4TestClient {
 
     HttpResponse<String> putChunked(String path, String streamingType, byte[][] chunks, int tamperIndex,
                                     boolean omitFinal, String trailerLine, boolean signTrailer) throws Exception {
+        return putChunked(path, streamingType, chunks, tamperIndex, omitFinal, trailerLine, signTrailer, true);
+    }
+
+    /** {@code announceTrailer}: send x-amz-trailer with the name of the trailer line, as SDKs do. */
+    HttpResponse<String> putChunked(String path, String streamingType, byte[][] chunks, int tamperIndex,
+                                    boolean omitFinal, String trailerLine, boolean signTrailer,
+                                    boolean announceTrailer) throws Exception {
         Signed s = sign("PUT", path, null, streamingType, Instant.now());
         byte[] body = chunkedBody(s, chunks, tamperIndex, omitFinal, trailerLine, signTrailer);
-        HttpRequest req = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+        HttpRequest.Builder b = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
                 .header("Authorization", s.authorization())
                 .header("x-amz-date", s.timestamp())
                 .header("x-amz-content-sha256", streamingType)
-                .header("Content-Encoding", "aws-chunked")
-                .PUT(BodyPublishers.ofByteArray(body)).build();
-        return http.send(req, BodyHandlers.ofString());
+                .header("Content-Encoding", "aws-chunked");
+        if (trailerLine != null && announceTrailer) b.header("x-amz-trailer", trailerLine.substring(0, trailerLine.indexOf(':')));
+        return http.send(b.PUT(BodyPublishers.ofByteArray(body)).build(), BodyHandlers.ofString());
     }
 
     /** Presigned GET URL (query-string auth). */

@@ -164,7 +164,10 @@ class S3SigV4PayloadTest {
     @Test
     void signedChunkedUploadWithSignedTrailer() throws Exception {
         byte[][] chunks = { bytes("trailer payload") };
-        String trailer = "x-amz-checksum-crc32:AAAAAA==";
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(chunks[0]);
+        String trailer = "x-amz-checksum-crc32:"
+                + java.util.Base64.getEncoder().encodeToString(java.nio.ByteBuffer.allocate(4).putInt((int) crc.getValue()).array());
         var ok = client.putChunked("/sigbkt/trailer.txt", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER",
                 chunks, -1, false, trailer, true);
         assertEquals(200, ok.statusCode(), ok.body());
@@ -180,11 +183,15 @@ class S3SigV4PayloadTest {
     void unsignedTrailerStreamingIsAccepted() throws Exception {
         // STREAMING-UNSIGNED-PAYLOAD-TRAILER: chunk framing without signatures, checksum in the trailer
         var s = client.sign("PUT", "/sigbkt/ut.txt", null, "STREAMING-UNSIGNED-PAYLOAD-TRAILER", Instant.now());
-        String body = "7\r\nunsigne\r\n2\r\nd!\r\n0\r\nx-amz-checksum-crc32:AAAAAA==\r\n\r\n";
+        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        crc.update(bytes("unsigned!"));
+        String crcB64 = java.util.Base64.getEncoder().encodeToString(
+                java.nio.ByteBuffer.allocate(4).putInt((int) crc.getValue()).array());
+        String body = "7\r\nunsigne\r\n2\r\nd!\r\n0\r\nx-amz-checksum-crc32:" + crcB64 + "\r\n\r\n";
         var req = java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://localhost:" + port + "/sigbkt/ut.txt"))
                 .header("Authorization", s.authorization()).header("x-amz-date", s.timestamp())
                 .header("x-amz-content-sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
-                .header("Content-Encoding", "aws-chunked")
+                .header("Content-Encoding", "aws-chunked").header("x-amz-trailer", "x-amz-checksum-crc32")
                 .PUT(java.net.http.HttpRequest.BodyPublishers.ofString(body)).build();
         var r = client.http.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
         assertEquals(200, r.statusCode(), r.body());

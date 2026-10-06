@@ -78,6 +78,14 @@ public final class S3Support {
      * (Content-Encoding: aws-chunked, or x-amz-content-sha256: STREAMING-*).
      */
     public static InputStream openBody(HttpServletRequest request) throws IOException {
+        return openBody(request, null);
+    }
+
+    /**
+     * As {@link #openBody(HttpServletRequest)}; when the body is aws-chunked, a trailing checksum is handed to
+     * {@code declared} (and checked there) at the end of the stream.
+     */
+    public static InputStream openBody(HttpServletRequest request, S3Checksums.Declared declared) throws IOException {
         InputStream raw = request.getInputStream();
         String encoding = request.getHeader("Content-Encoding");
         String sha = request.getHeader("x-amz-content-sha256");
@@ -85,6 +93,7 @@ public final class S3Support {
                 || (sha != null && sha.startsWith("STREAMING-"));
         if (!chunked) return raw;
         Object ctx = request.getAttribute(ChunkSigningContext.REQUEST_ATTRIBUTE);
-        return new AwsChunkedInputStream(raw, ctx instanceof ChunkSigningContext c ? c : null);
+        return new AwsChunkedInputStream(raw, ctx instanceof ChunkSigningContext c ? c : null,
+                declared != null ? declared::acceptTrailers : null);
     }
 }

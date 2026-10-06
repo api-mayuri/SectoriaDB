@@ -3,6 +3,7 @@ package org.example.sectoriadb.shell;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.service.FileStorageService;
+import org.example.sectoriadb.service.ObjectVerificationService;
 import org.example.sectoriadb.service.PoolService;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
@@ -11,16 +12,19 @@ import org.springframework.shell.standard.ShellOption;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.function.Predicate;
 
 @ShellComponent
 public class FileCommands {
 
     private final FileStorageService fileService;
     private final PoolService poolService;
+    private final ObjectVerificationService verifier;
 
-    public FileCommands(FileStorageService fileService, PoolService poolService) {
+    public FileCommands(FileStorageService fileService, PoolService poolService, ObjectVerificationService verifier) {
         this.fileService = fileService;
         this.poolService = poolService;
+        this.verifier = verifier;
     }
 
     @ShellMethod(key = "store", value = "Store a file into a pool  |  store --file PATH --pool NAME")
@@ -78,12 +82,18 @@ public class FileCommands {
                 "  Pool:        %s%n" +
                 "  Size:        %s%n" +
                 "  Stored as:   %s%n" +
-                "  Stored at:   %s",
+                "  Stored at:   %s%n" +
+                "  CRC32C:      %s%n" +
+                "  Checksum:    %s",
                 m.getSourceFileName(), m.getId(), m.getStorageKind(),
                 phys != null ? phys.getId() : "-", poolName,
                 ShellTable.humanSize(m.getTotalBytes()),
                 stored,
-                m.getCreatedAt());
+                m.getCreatedAt(),
+                m.getCrc32c() != null ? m.getCrc32c() : "(not stored)",
+                m.getChecksumAlgorithm() != null
+                        ? m.getChecksumAlgorithm() + " " + m.getChecksumValue() + " (" + m.getChecksumType() + ")"
+                        : "-");
     }
 
     @ShellMethod(key = "get",
@@ -120,29 +130,41 @@ public class FileCommands {
     }
 
     @ShellMethod(key = "verify",
-            value = "Re-read an object and compare its MD5 with the stored ETag  |  verify --id FILE_ID")
-    public String verify(@ShellOption(help = "File ID") String id) throws IOException {
+            value = "Re-read an object and check chunk/record CRCs, the stored whole-object CRC32C, the client " +
+                    "checksum and (non-multipart) MD5/ETag  |  verify --id FILE_ID")
+    public String verify(@ShellOption(help = "File ID") String id) {
         ManifestEntity m = fileService.getActiveManifest(id);
-        String etag = m.getEtag() == null ? "" : m.getEtag().replace("\"", "");
-        if (etag.isEmpty() || etag.contains("-")) {
-            return "Not applicable: object has no plain MD5 ETag (multipart or stored via the shell). "
-                    + "Chunk CRCs are still checked on read; use 'scrub --id BLOB_ID' for the whole blob.";
+        ObjectVerificationService.Result r = verifier.verify(m);
+        StringBuilder sb = new StringBuilder();
+        sb.append(r.status()).append(": ").append(r.name()).append("  (id=").append(r.manifestId()).append(')');
+        for (String d : r.details()) sb.append(System.lineSeparator()).append("  ").append(d);
+        return sb.toString();
+    }
+
+    @ShellMethod(key = "verify-all",
+            value = "Verify every live object (optionally only one pool) and print a summary  |  " +
+                    "verify-all [--pool NAME]")
+    public String verifyAll(
+            @ShellOption(defaultValue = ShellOption.NULL, help = "Only objects of this pool / bucket") String pool) {
+        Predicate<ManifestEntity> filter = m -> true;
+        if (pool != null) {
+            PoolEntity poolEntity = poolService.getByName(pool);
+            filter = m -> poolEntity.getId().equals(m.getPoolId())
+                    || (m.getPhysicalBlob() != null && poolEntity.getId().equals(m.getPhysicalBlob().getPoolId()));
         }
-        java.security.MessageDigest md5;
-        try {
-            md5 = java.security.MessageDigest.getInstance("MD5");
-        } catch (java.security.NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
+        ObjectVerificationService.Summary s = verifier.verifyAll(filter);
+        StringBuilder sb = new StringBuilder();
+        for (ObjectVerificationService.Result r : s.problems()) {
+            sb.append(r.status()).append(": ").append(r.name()).append("  (id=").append(r.manifestId()).append(')')
+              .append(System.lineSeparator());
+            for (String d : r.details()) sb.append("    ").append(d).append(System.lineSeparator());
         }
-        try (java.io.OutputStream out = new java.security.DigestOutputStream(java.io.OutputStream.nullOutputStream(), md5)) {
-            fileService.streamToOutput(m, out);
-        } catch (org.example.sectoriadb.service.impl.ChunkCorruptedException e) {
-            return "CORRUPT: " + e.getMessage();
-        }
-        String actual = java.util.HexFormat.of().formatHex(md5.digest());
-        return actual.equalsIgnoreCase(etag)
-                ? "OK: MD5 " + actual + " matches the stored ETag"
-                : "MISMATCH: computed MD5 " + actual + " but stored ETag is " + etag;
+        sb.append(String.format("Verified %d object(s): ok=%d corrupt=%d missing=%d%n",
+                s.total(), s.ok(), s.corrupt(), s.missing()));
+        sb.append(s.allOk()
+                ? "RESULT: OK"
+                : "RESULT: FAILED (corrupt=" + s.corrupt() + ", missing=" + s.missing() + ")");
+        return sb.toString();
     }
 
     @ShellMethod(key = "rm", value = "Soft-delete a stored file  |  rm --id FILE_ID [--yes]")

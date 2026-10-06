@@ -1,6 +1,13 @@
 package org.example.sectoriadb.s3;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.example.sectoriadb.checksum.ChecksumAlgorithm;
+import org.example.sectoriadb.checksum.ChecksumMismatchException;
+import org.example.sectoriadb.checksum.ChecksumType;
+import org.example.sectoriadb.checksum.MultiDigest;
+import org.example.sectoriadb.checksum.MultiDigestInputStream;
+import org.example.sectoriadb.checksum.MultiDigestOutputStream;
+import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
@@ -23,8 +30,6 @@ import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.*;
 import java.nio.file.*;
-import java.security.DigestInputStream;
-import java.security.DigestOutputStream;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
@@ -96,12 +101,22 @@ public class S3MultipartController {
         meta.setProperty("key", objectKey);
         meta.setProperty("contentType", contentType);
         meta.setProperty("initiatedAt", String.valueOf(System.currentTimeMillis()));
+        ChecksumAlgorithm checksumAlg = S3Checksums.declaredAlgorithm(request);
+        ChecksumType checksumType = S3Checksums.multipartType(request, checksumAlg);
+        if (checksumAlg != null) {
+            meta.setProperty("checksumAlgorithm", checksumAlg.name());
+            meta.setProperty("checksumType", checksumType.name());
+        }
         try (OutputStream os = Files.newOutputStream(uploadDir.resolve("meta.properties"))) {
             meta.store(os, null);
         }
 
-        return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
+        var created = ResponseEntity.ok().header("x-amz-request-id", S3Support.requestId());
+        if (checksumAlg != null) {
+            created.header(S3Checksums.HEADER_ALGORITHM, checksumAlg.name())
+                   .header(S3Checksums.HEADER_TYPE, checksumType.name());
+        }
+        return created
                 .body("<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                       "<InitiateMultipartUploadResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">" +
                       "<Bucket>" + S3Support.xmlEscape(bucket) + "</Bucket>" +
@@ -133,12 +148,29 @@ public class S3MultipartController {
         Path tmpFile = uploadDir.resolve(String.format("part-%05d.tmp.%s", partNumber,
                 UUID.randomUUID().toString().substring(0, 8)));
 
-        MessageDigest md5 = md5Digest();
-        try (InputStream body = S3Support.openBody(request);
-             DigestInputStream dis = new DigestInputStream(body, md5)) {
+        // Content-MD5 and the part's x-amz-checksum-* are verified here; a bad part is never kept.
+        S3Checksums.Declared declared = S3Checksums.parse(request);
+        UploadChecksums wanted = declared.checksums();
+        ChecksumAlgorithm uploadAlg = uploadChecksumAlgorithm(uploadDir);
+        if (uploadAlg != null) {
+            if (wanted.algorithm() == null) {
+                wanted.algorithm(uploadAlg, null);   // lenient: the client sent none, compute it so the composite works
+            } else if (wanted.algorithm() != uploadAlg) {
+                throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidRequest",
+                        "Checksum Type mismatch occurred, expected checksum Type: " + uploadAlg.name().toLowerCase(Locale.ROOT)
+                        + ", actual checksum Type: " + wanted.algorithm().name().toLowerCase(Locale.ROOT));
+            }
+        }
+        EnumSet<ChecksumAlgorithm> algs = EnumSet.noneOf(ChecksumAlgorithm.class);
+        if (wanted.algorithm() != null) algs.add(wanted.algorithm());
+        MultiDigest digest = new MultiDigest(true, algs);
+        try (InputStream body = S3Support.openBody(request, declared);
+             InputStream dis = new MultiDigestInputStream(body, digest)) {
             Files.copy(dis, tmpFile, StandardCopyOption.REPLACE_EXISTING);
+            digest.finish();
+            wanted.verify(digest);
         } catch (IOException | RuntimeException e) {
-            // e.g. payload hash / chunk signature mismatch: the part must not be kept
+            // e.g. payload hash / chunk signature / checksum mismatch: the part must not be kept
             Files.deleteIfExists(tmpFile);
             throw e;
         }
@@ -147,14 +179,18 @@ public class S3MultipartController {
         Files.move(tmpFile, partFile, StandardCopyOption.REPLACE_EXISTING,
                    StandardCopyOption.ATOMIC_MOVE);
 
-        // Store ETag for later validation
-        String etagValue = HexFormat.of().formatHex(md5.digest());
+        // Store ETag (and checksum) for later validation
+        String etagValue = HexFormat.of().formatHex(digest.md5());
         recordPartEtag(uploadDir, partNumber, etagValue);
-
-        return ResponseEntity.ok()
+        var ok = ResponseEntity.ok()
                 .header("ETag", "\"" + etagValue + "\"")
-                .header("x-amz-request-id", S3Support.requestId())
-                .build();
+                .header("x-amz-request-id", S3Support.requestId());
+        if (wanted.algorithm() != null) {
+            String value = digest.encoded(wanted.algorithm());
+            recordPartProperty(uploadDir, CHECKSUMS_FILE, partNumber, wanted.algorithm().name() + ":" + value);
+            ok.header(wanted.algorithm().headerName(), value);
+        }
+        return ok.build();
     }
 
     /**
@@ -163,17 +199,25 @@ public class S3MultipartController {
      */
     private static final Object ETAG_LOCK = new Object();
 
+    private static final String CHECKSUMS_FILE = "checksums.properties";
+
     private static void recordPartEtag(Path uploadDir, int partNumber, String etag) throws IOException {
+        recordPartProperty(uploadDir, "etags.properties", partNumber, etag);
+    }
+
+    /** Per-part "ALG:base64" checksums, kept beside etags.properties and replaced atomically in the same way. */
+    private static void recordPartProperty(Path uploadDir, String fileName, int partNumber, String value)
+            throws IOException {
         synchronized (ETAG_LOCK) {
-            Path file = uploadDir.resolve("etags.properties");
+            Path file = uploadDir.resolve(fileName);
             Properties props = new Properties();
             if (Files.exists(file)) {
                 try (InputStream is = Files.newInputStream(file)) {
                     props.load(is);
                 }
             }
-            props.setProperty(String.valueOf(partNumber), etag);
-            Path tmp = uploadDir.resolve("etags.properties.tmp");
+            props.setProperty(String.valueOf(partNumber), value);
+            Path tmp = uploadDir.resolve(fileName + ".tmp");
             try (OutputStream os = Files.newOutputStream(tmp)) {
                 props.store(os, null);
             }
@@ -220,8 +264,9 @@ public class S3MultipartController {
         Path tmpFile = uploadDir.resolve(String.format("part-%05d.tmp.%s", partNumber,
                 UUID.randomUUID().toString().substring(0, 8)));
 
-        MessageDigest md5 = md5Digest();
-        try (OutputStream out = new DigestOutputStream(Files.newOutputStream(tmpFile), md5)) {
+        ChecksumAlgorithm uploadAlg = uploadChecksumAlgorithm(uploadDir);
+        MultiDigest digest = new MultiDigest(true, uploadAlg != null ? EnumSet.of(uploadAlg) : EnumSet.noneOf(ChecksumAlgorithm.class));
+        try (OutputStream out = new MultiDigestOutputStream(Files.newOutputStream(tmpFile), digest)) {
             if (copyRange != null) {
                 // Parse "bytes=a-b"
                 String[] parts = copyRange.replaceAll("bytes=", "").split("-");
@@ -229,22 +274,33 @@ public class S3MultipartController {
                 long end = Long.parseLong(parts[1]);
                 fileService.streamRange(srcManifest, out, start, end - start + 1);
             } else {
+                // a corrupt source (whole-object CRC32C mismatch) fails the copy with 500 and no part is stored
                 fileService.streamToOutput(srcManifest, out);
             }
+        } catch (IOException | RuntimeException e) {
+            Files.deleteIfExists(tmpFile);
+            throw e;
         }
+        digest.finish();
 
         // Atomic move to final location
         Files.move(tmpFile, partFile, StandardCopyOption.REPLACE_EXISTING,
                    StandardCopyOption.ATOMIC_MOVE);
 
-        String etagValue = HexFormat.of().formatHex(md5.digest());
+        String etagValue = HexFormat.of().formatHex(digest.md5());
         recordPartEtag(uploadDir, partNumber, etagValue);
+        String checksumXml = "";
+        if (uploadAlg != null) {
+            String value = digest.encoded(uploadAlg);
+            recordPartProperty(uploadDir, CHECKSUMS_FILE, partNumber, uploadAlg.name() + ":" + value);
+            checksumXml = "<" + S3Checksums.xmlElement(uploadAlg) + ">" + value + "</" + S3Checksums.xmlElement(uploadAlg) + ">";
+        }
 
         String lastModified = S3Support.isoDate(Instant.now());
         String responseBody = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                       "<CopyPartResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">" +
                       "<LastModified>" + lastModified + "</LastModified>" +
-                      "<ETag>\"" + etagValue + "\"</ETag>" +
+                      "<ETag>\"" + etagValue + "\"</ETag>" + checksumXml +
                       "</CopyPartResult>";
         return ResponseEntity.ok()
                 .header("x-amz-request-id", S3Support.requestId())
@@ -268,6 +324,9 @@ public class S3MultipartController {
         }
         String objectKey = meta.getProperty("key");
         String contentType = meta.getProperty("contentType", "application/octet-stream");
+        ChecksumAlgorithm uploadAlg = ChecksumAlgorithm.fromAwsName(meta.getProperty("checksumAlgorithm")).orElse(null);
+        ChecksumType uploadType = uploadAlg == null ? null
+                : ChecksumType.valueOf(meta.getProperty("checksumType", uploadAlg.defaultMultipartType().name()));
 
         // Parse and validate parts
         ParsedParts parsedParts = parseCompleteXml(S3Support.openBody(request));
@@ -293,8 +352,16 @@ public class S3MultipartController {
             etagProps.load(is);
         }
 
+        Properties partChecksums = new Properties();
+        Path checksumFile = uploadDir.resolve(CHECKSUMS_FILE);
+        if (Files.exists(checksumFile)) {
+            try (InputStream is = Files.newInputStream(checksumFile)) {
+                partChecksums.load(is);
+            }
+        }
+
         List<InputStream> streams = new ArrayList<>();
-        MessageDigest md5Concat = md5Digest();
+        List<byte[]> partDigests = new ArrayList<>();
         byte[] etagConcat = new byte[16 * partNums.size()];
         int concatIdx = 0;
 
@@ -315,12 +382,60 @@ public class S3MultipartController {
                 }
             }
 
+            // Per-part checksums: verify the ones given in the Complete XML, collect the upload algorithm's for the composite
+            String storedChecksum = partChecksums.getProperty(String.valueOf(pn));
+            String storedAlg = storedChecksum == null ? null : storedChecksum.substring(0, storedChecksum.indexOf(':'));
+            String storedValue = storedChecksum == null ? null : storedChecksum.substring(storedChecksum.indexOf(':') + 1);
+            for (Map.Entry<ChecksumAlgorithm, String> given : parsedParts.checksums.getOrDefault(pn, Map.of()).entrySet()) {
+                if (storedAlg == null || !storedAlg.equals(given.getKey().name())) {
+                    throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidPart",
+                            "Part " + pn + " was not uploaded with a " + given.getKey().name() + " checksum");
+                }
+                if (!storedValue.equals(given.getValue())) {
+                    throw new S3Exception(HttpStatus.BAD_REQUEST, "BadDigest", "The " + given.getKey().name()
+                            + " you specified for part " + pn + " did not match what we received.");
+                }
+            }
+            if (uploadAlg != null) {
+                if (storedAlg == null || !storedAlg.equals(uploadAlg.name())) {
+                    throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidPart",
+                            "Part " + pn + " has no " + uploadAlg.name() + " checksum");
+                }
+                partDigests.add(uploadAlg.decode(storedValue));
+            }
+
             // Add binary MD5 to concatenation
             byte[] md5Bytes = hexToBytes(storedEtag);
             System.arraycopy(md5Bytes, 0, etagConcat, concatIdx, 16);
             concatIdx += 16;
 
             streams.add(Files.newInputStream(uploadDir.resolve(String.format("part-%05d", pn))));
+        }
+
+        // The composite checksum (algorithm over the concatenated binary part checksums, suffixed "-N"), and the
+        // whole-upload checksum the client may have sent in the Complete request headers.
+        String composite = uploadType == ChecksumType.COMPOSITE ? uploadAlg.composite(partDigests) : null;
+        UploadChecksums wholeObject = UploadChecksums.none();
+        for (ChecksumAlgorithm a : ChecksumAlgorithm.values()) {
+            String header = request.getHeader(a.headerName());
+            if (header == null) continue;
+            if (a != uploadAlg) {
+                throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidRequest",
+                        "The upload was not created with the " + a.name() + " checksum algorithm.");
+            }
+            if (composite != null) {
+                if (!composite.equals(header.trim())) throw ChecksumMismatchException.forAlgorithm(a);
+            } else {
+                try {
+                    wholeObject.algorithm(a, a.decode(header));
+                } catch (IllegalArgumentException e) {
+                    throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidRequest",
+                            "Value for " + a.headerName() + " header is invalid.");
+                }
+            }
+        }
+        if (uploadType == ChecksumType.FULL_OBJECT && wholeObject.algorithm() == null) {
+            wholeObject = UploadChecksums.compute(uploadAlg);
         }
 
         // Delete previous version
@@ -331,13 +446,17 @@ public class S3MultipartController {
         PoolEntity pool = poolService.getByName(bucket);
         ManifestEntity entity;
         try (InputStream combined = new LazySequenceInputStream(streams)) {
-            entity = fileService.storeStream(combined, pool, objectKey, contentType);
+            entity = fileService.storeStream(combined, pool, objectKey, contentType, wholeObject);
         }
 
         // Compute S3 multipart ETag: md5(concat of binary md5s)-{partCount}
-        md5Concat.update(etagConcat);
-        String s3Etag = "\"" + HexFormat.of().formatHex(md5Concat.digest()) + "-" + partNums.size() + "\"";
+        String s3Etag = "\"" + HexFormat.of().formatHex(md5Digest().digest(etagConcat)) + "-" + partNums.size() + "\"";
         entity.setEtag(s3Etag);
+        if (composite != null) {
+            entity.setChecksumAlgorithm(uploadAlg);
+            entity.setChecksumValue(composite);
+            entity.setChecksumType(ChecksumType.COMPOSITE);
+        }
         manifestRepo.save(entity);
 
         // Delete old version AFTER successful save
@@ -361,7 +480,7 @@ public class S3MultipartController {
                       S3Support.xmlEscape(objectKey) + "</Location>" +
                       "<Bucket>" + S3Support.xmlEscape(bucket) + "</Bucket>" +
                       "<Key>" + S3Support.xmlEscape(objectKey) + "</Key>" +
-                      "<ETag>" + escapedEtag + "</ETag>" +
+                      "<ETag>" + escapedEtag + "</ETag>" + checksumResultXml(entity) +
                       "</CompleteMultipartUploadResult>");
     }
 
@@ -383,6 +502,12 @@ public class S3MultipartController {
             meta.load(is);
         }
         String objectKey = meta.getProperty("key");
+        Properties partChecksums = new Properties();
+        try (InputStream is = Files.newInputStream(uploadDir.resolve(CHECKSUMS_FILE))) {
+            partChecksums.load(is);
+        } catch (IOException ignored) {
+            // upload without part checksums
+        }
 
         // Load part ETags
         Properties etagProps = new Properties();
@@ -407,6 +532,10 @@ public class S3MultipartController {
                 .append("<PartNumberMarker>").append(partNumberMarker).append("</PartNumberMarker>")
                 .append("<MaxParts>").append(maxParts).append("</MaxParts>")
                 .append("<IsTruncated>").append(partNums.size() > maxParts).append("</IsTruncated>");
+        if (meta.getProperty("checksumAlgorithm") != null) {
+            xml.append("<ChecksumAlgorithm>").append(meta.getProperty("checksumAlgorithm")).append("</ChecksumAlgorithm>")
+               .append("<ChecksumType>").append(meta.getProperty("checksumType")).append("</ChecksumType>");
+        }
 
         int nextMarker = 0;
         int count = 0;
@@ -421,8 +550,14 @@ public class S3MultipartController {
                .append("<PartNumber>").append(pn).append("</PartNumber>")
                .append("<LastModified>").append(S3Support.isoDate(Instant.now())).append("</LastModified>")
                .append("<ETag>\"").append(etag).append("\"</ETag>")
-               .append("<Size>").append(size).append("</Size>")
-               .append("</Part>");
+               .append("<Size>").append(size).append("</Size>");
+            String pc = partChecksums.getProperty(String.valueOf(pn));
+            if (pc != null) {
+                String alg = pc.substring(0, pc.indexOf(':'));
+                xml.append("<Checksum").append(alg).append(">").append(pc.substring(pc.indexOf(':') + 1))
+                   .append("</Checksum").append(alg).append(">");
+            }
+            xml.append("</Part>");
             count++;
         }
 
@@ -623,13 +758,33 @@ public class S3MultipartController {
         return uploadDir;
     }
 
+    /** The checksum algorithm the upload was created with (x-amz-checksum-algorithm), or null. */
+    private static ChecksumAlgorithm uploadChecksumAlgorithm(Path uploadDir) throws IOException {
+        Properties meta = new Properties();
+        try (InputStream is = Files.newInputStream(uploadDir.resolve("meta.properties"))) {
+            meta.load(is);
+        }
+        return ChecksumAlgorithm.fromAwsName(meta.getProperty("checksumAlgorithm")).orElse(null);
+    }
+
+    private static String checksumResultXml(ManifestEntity entity) {
+        if (entity.getChecksumAlgorithm() == null || entity.getChecksumValue() == null) return "";
+        String el = S3Checksums.xmlElement(entity.getChecksumAlgorithm());
+        return "<" + el + ">" + entity.getChecksumValue() + "</" + el + ">"
+                + "<ChecksumType>" + entity.getChecksumType() + "</ChecksumType>";
+    }
+
     static class ParsedParts {
         List<Integer> partNumbers;
         Map<Integer, String> etags;
+        /** Per part: checksum values given in the Complete XML (ChecksumCRC32C, ...). */
+        Map<Integer, Map<ChecksumAlgorithm, String>> checksums;
 
-        ParsedParts(List<Integer> partNumbers, Map<Integer, String> etags) {
+        ParsedParts(List<Integer> partNumbers, Map<Integer, String> etags,
+                    Map<Integer, Map<ChecksumAlgorithm, String>> checksums) {
             this.partNumbers = partNumbers;
             this.etags = etags;
+            this.checksums = checksums;
         }
     }
 
@@ -640,11 +795,13 @@ public class S3MultipartController {
             NodeList parts = doc.getElementsByTagName("Part");
             List<Integer> result = new ArrayList<>();
             Map<Integer, String> etags = new HashMap<>();
+            Map<Integer, Map<ChecksumAlgorithm, String>> checksums = new HashMap<>();
 
             for (int i = 0; i < parts.getLength(); i++) {
                 Element partElem = (Element) parts.item(i);
                 int partNum = 0;
                 String etag = null;
+                Map<ChecksumAlgorithm, String> partChecksums = new EnumMap<>(ChecksumAlgorithm.class);
 
                 NodeList children = partElem.getChildNodes();
                 for (int j = 0; j < children.getLength(); j++) {
@@ -654,6 +811,9 @@ public class S3MultipartController {
                         partNum = Integer.parseInt(content);
                     } else if ("ETag".equals(nodeName)) {
                         etag = content;
+                    } else if (nodeName.startsWith("Checksum") && !content.isEmpty()) {
+                        ChecksumAlgorithm.fromAwsName(nodeName.substring("Checksum".length()))
+                                .ifPresent(a -> partChecksums.put(a, content));
                     }
                 }
 
@@ -662,11 +822,12 @@ public class S3MultipartController {
                     if (etag != null) {
                         etags.put(partNum, etag);
                     }
+                    if (!partChecksums.isEmpty()) checksums.put(partNum, partChecksums);
                 }
             }
 
             result.sort(Integer::compareTo);
-            return new ParsedParts(result, etags);
+            return new ParsedParts(result, etags, checksums);
         } catch (Exception e) {
             throw new IOException("Failed to parse CompleteMultipartUpload XML", e);
         }

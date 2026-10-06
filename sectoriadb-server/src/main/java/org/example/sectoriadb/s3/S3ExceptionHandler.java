@@ -1,5 +1,6 @@
 package org.example.sectoriadb.s3;
 
+import org.example.sectoriadb.checksum.ChecksumMismatchException;
 import org.example.sectoriadb.s3.auth.PayloadVerificationException;
 import org.example.sectoriadb.s3.xml.S3Error;
 import org.apache.catalina.connector.ClientAbortException;
@@ -44,6 +45,25 @@ public class S3ExceptionHandler {
         return ResponseEntity.status(ex.getHttpStatus())
                 .contentType(MediaType.APPLICATION_XML)
                 .body(new S3Error(ex.getS3Code(), ex.getMessage(), null, requestId));
+    }
+
+    /** A declared Content-MD5 / x-amz-checksum-* did not match the received bytes; nothing was committed. */
+    @ExceptionHandler(ChecksumMismatchException.class)
+    public ResponseEntity<S3Error> handleChecksumMismatch(ChecksumMismatchException ex) {
+        String requestId = UUID.randomUUID().toString();
+        log.warn("Rejected upload [BadDigest]: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_XML)
+                .body(new S3Error("BadDigest", ex.getMessage(), null, requestId));
+    }
+
+    /**
+     * The body of a GET could not be completed after its headers were sent. Rethrown on purpose: the container
+     * then aborts the connection (no clean end of body, no appended error document).
+     */
+    @ExceptionHandler(ResponseAbortedException.class)
+    public void handleResponseAborted(ResponseAbortedException ex) {
+        throw ex;
     }
 
     /**

@@ -2,12 +2,22 @@ package org.example.sectoriadb.s3;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.apache.catalina.connector.ClientAbortException;
+import org.example.sectoriadb.checksum.ChecksumAlgorithm;
+import org.example.sectoriadb.checksum.ChecksumType;
+import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.s3.access.AccessControlService;
 import org.example.sectoriadb.service.FileStorageService;
+import org.example.sectoriadb.service.impl.ChunkCorruptedException;
+import org.example.sectoriadb.service.impl.ChunkNotFoundException;
+import org.example.sectoriadb.service.impl.ObjectCorruptedException;
+import org.example.sectoriadb.service.impl.SmallObjectCorruptedException;
 import org.example.sectoriadb.service.PoolService;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -23,9 +33,7 @@ import java.time.ZoneOffset;
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
-import java.util.Base64;
 import java.util.Collections;
-import java.util.HexFormat;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -40,6 +48,8 @@ import java.util.Map;
  */
 @RestController
 public class S3ObjectController {
+
+    private static final Logger log = LoggerFactory.getLogger(S3ObjectController.class);
 
     private static final DateTimeFormatter HTTP_DATE =
             DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.ENGLISH)
@@ -71,7 +81,6 @@ public class S3ObjectController {
             @RequestHeader(value = "Content-Disposition", required = false) String contentDisposition,
             @RequestHeader(value = "Content-Encoding", required = false) String contentEncoding,
             @RequestHeader(value = "Content-Language", required = false) String contentLanguage,
-            @RequestHeader(value = "Content-MD5", required = false) String contentMd5,
             @RequestHeader(value = "x-amz-acl", required = false) String acl,
             HttpServletRequest request) throws IOException {
 
@@ -84,9 +93,12 @@ public class S3ObjectController {
         // Find old version (to delete after successful write)
         var oldManifest = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, objectKey);
 
+        // Content-MD5 / x-amz-checksum-* / trailing checksum: verified inside storeStream before anything is committed
+        S3Checksums.Declared declared = S3Checksums.parse(request);
+
         // Store the new object
-        try (InputStream rawIn = S3Support.openBody(request)) {
-            ManifestEntity entity = fileService.storeStream(rawIn, pool, objectKey, contentType);
+        try (InputStream rawIn = S3Support.openBody(request, declared)) {
+            ManifestEntity entity = fileService.storeStream(rawIn, pool, objectKey, contentType, declared.checksums());
 
             // Set additional metadata
             if (cacheControl != null) entity.setCacheControl(cacheControl);
@@ -96,12 +108,6 @@ public class S3ObjectController {
 
             entity.setUserMetadata(extractUserMetadata(request));
 
-            if (contentMd5 != null && !contentMd5.isBlank() && !md5Matches(entity.getEtag(), contentMd5)) {
-                fileService.delete(entity.getId());
-                throw new S3Exception(HttpStatus.BAD_REQUEST, "BadDigest",
-                        "The Content-MD5 you specified did not match what we received.");
-            }
-
             accessControl.applyObjectAcl(request, new byte[0], entity);
             manifestRepo.save(entity);
 
@@ -110,11 +116,12 @@ public class S3ObjectController {
                 fileService.delete(oldManifest.get().getId());
             }
 
-            return ResponseEntity.ok()
+            var ok = ResponseEntity.ok()
                     .header("ETag", entity.getEtag() != null ? entity.getEtag() : "\"\"")
                     .header("x-amz-request-id", S3Support.requestId())
-                    .header("Server", "SectoriaDB")
-                    .build();
+                    .header("Server", "SectoriaDB");
+            S3Checksums.addClientHeaders(entity, ok::header);
+            return ok.build();
         }
     }
 
@@ -185,14 +192,43 @@ public class S3ObjectController {
         setIfPresent(response, "Content-Language", respContentLanguage, entity.getContentLanguage());
         if (respExpires != null) response.setHeader("Expires", respExpires);
         if (entity.getUserMetadata() != null) entity.getUserMetadata().forEach(response::setHeader);
+        // Like S3, checksums are returned for full-object reads only; a range cannot be checked against them.
+        if (!partial && S3Checksums.modeEnabled(request)) S3Checksums.addObjectHeaders(entity, response::setHeader);
 
         if (length == 0) return;
         OutputStream out = response.getOutputStream();
-        if (partial) {
-            fileService.streamRange(entity, out, start, length);
-        } else {
-            fileService.streamToOutput(entity, out);
+        try {
+            if (partial) {
+                // Range reads rely on the per-chunk / per-record CRC32C only.
+                fileService.streamRange(entity, out, start, length);
+            } else {
+                // Verifies the whole-object CRC32C while streaming; the last chunk is held back until it matches.
+                fileService.streamToOutput(entity, out);
+            }
+        } catch (ClientAbortException e) {
+            throw e;
+        } catch (ObjectCorruptedException | ChunkCorruptedException | SmallObjectCorruptedException
+                 | ChunkNotFoundException e) {
+            failStreaming(entity, response, e);
         }
+    }
+
+    /**
+     * Stored data failed an integrity check while a GET was being served. If nothing has been sent yet the client
+     * gets a clean 500; otherwise the body cannot be completed, so the connection is aborted instead of ending
+     * the response as if everything were fine.
+     */
+    private void failStreaming(ManifestEntity entity, HttpServletResponse response, IOException cause) {
+        if (!(cause instanceof ObjectCorruptedException)) {   // that one logged itself
+            log.error("Integrity failure while serving GET: bucket={} key={} manifest={}: {}",
+                    entity.getBucketName(), entity.getObjectKey(), entity.getId(), cause.getMessage());
+        }
+        if (!response.isCommitted()) {
+            response.reset();
+            throw new S3Exception(HttpStatus.INTERNAL_SERVER_ERROR, "InternalError",
+                    "We encountered an internal error. Please try again.");
+        }
+        throw new ResponseAbortedException("Aborting response: stored object failed verification", cause);
     }
 
     private static void setIfPresent(HttpServletResponse response, String name, String override, String stored) {
@@ -282,6 +318,7 @@ public class S3ObjectController {
             resp.header("Content-Language", entity.getContentLanguage());
         }
         addUserMetadata(resp, entity);
+        if (S3Checksums.modeEnabled(request)) S3Checksums.addObjectHeaders(entity, resp::header);
 
         resp.header("x-amz-request-id", reqId)
             .header("Server", "SectoriaDB");
@@ -320,6 +357,8 @@ public class S3ObjectController {
             @RequestHeader(value = "Content-Language", required = false) String contentLanguage,
             HttpServletRequest request) throws IOException {
 
+        // x-amz-checksum-algorithm on a copy picks the destination's algorithm; otherwise the source's is kept
+        ChecksumAlgorithm requestedAlg = S3Checksums.declaredAlgorithm(request);
         String destKey = S3Support.extractKey(request, bucket);
         lookup.validateObjectKey(destKey);
 
@@ -366,9 +405,12 @@ public class S3ObjectController {
             try (OutputStream out = Files.newOutputStream(tmp)) {
                 fileService.streamToOutput(srcEntity, out);
             }
+            ChecksumAlgorithm destAlg = requestedAlg != null ? requestedAlg
+                    : (srcEntity.getChecksumType() == ChecksumType.FULL_OBJECT ? srcEntity.getChecksumAlgorithm() : null);
             ManifestEntity entity;
             try (InputStream in = Files.newInputStream(tmp)) {
-                entity = fileService.storeStream(in, destPool, destKey, newContentType);
+                entity = fileService.storeStream(in, destPool, destKey, newContentType,
+                        destAlg != null ? UploadChecksums.compute(destAlg) : UploadChecksums.none());
             }
 
             if (replace) {
@@ -421,16 +463,6 @@ public class S3ObjectController {
     private void addUserMetadata(ResponseEntity.HeadersBuilder<?> resp, ManifestEntity entity) {
         if (entity.getUserMetadata() != null) {
             entity.getUserMetadata().forEach(resp::header);
-        }
-    }
-
-    /** Content-MD5 is base64 of the raw digest; the stored ETag is quoted hex. */
-    private static boolean md5Matches(String etag, String contentMd5) {
-        try {
-            String hex = HexFormat.of().formatHex(Base64.getDecoder().decode(contentMd5.trim()));
-            return etag != null && etag.replace("\"", "").equalsIgnoreCase(hex);
-        } catch (IllegalArgumentException e) {
-            return false;
         }
     }
 
