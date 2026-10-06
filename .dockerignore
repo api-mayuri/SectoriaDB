@@ -1,0 +1,26 @@
+target/
+.idea/
+.git/
+.vscode/
+
+# Runtime data (never bake into image)
+sectoriadb-meta/
+sectoriadb-data/
+mys3-meta/
+pools/
+output/
+
+# Large test/media files
+*.mp4
+*.raw
+
+
+# Logs
+*.log
+MYS3.log
+
+# Env secrets
+.env
+
+# Docker files themselves (avoid infinite context)
+docker-compose.override.yml

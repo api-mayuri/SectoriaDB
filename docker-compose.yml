@@ -1,0 +1,47 @@
+services:
+  sectoriadb:
+    build: .
+    image: sectoriadb:latest
+    container_name: sectoriadb
+    stdin_open: true
+    tty: true
+    ports:
+      - "${HOST_PORT:-8080}:${SERVER_PORT:-8080}"
+    environment:
+      SECTORIADB_META_DIR: /data/meta
+      SECTORIADB_DATA_DIR: /data/storage
+      SECTORIADB_S3_AUTH_ENABLED: ${SECTORIADB_S3_AUTH_ENABLED:-true}
+      SECTORIADB_S3_REGION: ${SECTORIADB_S3_REGION:-us-east-1}
+      SECTORIADB_S3_ACCESS_KEY: ${SECTORIADB_S3_ACCESS_KEY}
+      SECTORIADB_S3_SECRET_KEY: ${SECTORIADB_S3_SECRET_KEY}
+      SECTORIADB_S3_CREDENTIALS: ${SECTORIADB_S3_CREDENTIALS}
+      SERVER_PORT: ${SERVER_PORT:-8080}
+      JAVA_OPTS: ${JAVA_OPTS:--Xmx512m -XX:+UseG1GC}
+      SPRING_SHELL_INTERACTIVE_ENABLED: ${SPRING_SHELL_INTERACTIVE_ENABLED:-true}
+    volumes:
+      - sectoriadb-meta:/data/meta
+      - sectoriadb-data:/data/storage
+    restart: unless-stopped
+
+  s3manager:
+    image: cloudlena/s3manager:latest
+    container_name: s3manager
+    ports:
+      - "8081:8080"
+    environment:
+      ENDPOINT: sectoriadb:8080
+      REGION: ${SECTORIADB_S3_REGION:-us-east-1}
+      ACCESS_KEY_ID: ${SECTORIADB_S3_ACCESS_KEY}
+      SECRET_ACCESS_KEY: ${SECTORIADB_S3_SECRET_KEY}
+      USE_SSL: "false"
+      SIGNATURE_TYPE: "V4"
+      ALLOW_DELETE: "true"
+    depends_on:
+      - sectoriadb
+    restart: unless-stopped
+
+volumes:
+  sectoriadb-meta:
+    driver: local
+  sectoriadb-data:
+    driver: local
