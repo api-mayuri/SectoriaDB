@@ -5,6 +5,9 @@ import org.example.sectoriadb.service.ChunkingService;
 import org.example.sectoriadb.service.FileWriteService;
 import org.example.sectoriadb.tools.BytesHasher;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
@@ -12,6 +15,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 public class BlobFileWriteService implements FileWriteService {
+
+    private static final Logger log = LoggerFactory.getLogger(BlobFileWriteService.class);
 
     private final CuckooHashTable cuckooHashTable;
     private final ChunkingService chunkingService;
@@ -41,7 +46,12 @@ public class BlobFileWriteService implements FileWriteService {
             while (fileOffset < fileSize) {
                 int size = (int) Math.min(chunkSize, fileSize - fileOffset);
                 ByteBuffer chunk = ByteBuffer.allocate(size);
-                fc.read(chunk, fileOffset);
+                try {
+                    FileChannelStorageIOEngine.readFully(fc::read, chunk, fileOffset);
+                } catch (IOException e) {
+                    throw new IOException("Source file shrank while being read: " + filePath
+                            + " (expected " + fileSize + " bytes, failed at offset " + fileOffset + ")", e);
+                }
                 chunk.flip();
 
                 long key = hasher.hash64(chunk.duplicate());
@@ -57,7 +67,7 @@ public class BlobFileWriteService implements FileWriteService {
                     if (decile > lastDecile) {
                         lastDecile = decile;
                         int pct = (int)(100.0 * chunksDone / totalChunks);
-                        System.out.printf("  %3d%% (%d/%d чанков)%n", pct, chunksDone, totalChunks);
+                        log.debug("Writing {}: {}% ({}/{} chunks)", filePath.getFileName(), pct, chunksDone, totalChunks);
                     }
                 }
             }

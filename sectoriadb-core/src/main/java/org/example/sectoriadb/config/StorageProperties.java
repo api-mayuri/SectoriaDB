@@ -12,6 +12,8 @@ public class StorageProperties {
     private int defaultChunkSize = 1_048_576;
     private int defaultNumBuckets = 1_280;
     private int maxEvictions = 32;
+    /** fsync data and metadata writes (data → force → meta → force). Disable only for tests/benchmarks. */
+    private boolean fsync = true;
     private AutoResize autoResize = new AutoResize();
     private S3 s3 = new S3();
 
@@ -29,6 +31,9 @@ public class StorageProperties {
 
     public int getMaxEvictions() { return maxEvictions; }
     public void setMaxEvictions(int v) { this.maxEvictions = v; }
+
+    public boolean isFsync() { return fsync; }
+    public void setFsync(boolean v) { this.fsync = v; }
 
     public AutoResize getAutoResize() { return autoResize; }
     public void setAutoResize(AutoResize v) { this.autoResize = v; }
