@@ -75,4 +75,13 @@ class VerifyCommandsTest {
         assertTrue(failed.contains("CORRUPT: vbkt/small"), failed);
         assertTrue(failed.endsWith("RESULT: FAILED (corrupt=1, missing=0)"), failed);
     }
+
+    /** `java -jar sectoriadb.jar verify-all` must run as a one-shot CLI command (no web server, JVM exits). */
+    @Test
+    void verifyCommandsRunInCliMode() {
+        assertTrue(Application.isCliMode(new String[]{"verify-all"}));
+        assertTrue(Application.isCliMode(new String[]{"--foo=bar", "verify-all", "--pool", "b"}));
+        assertTrue(Application.isCliMode(new String[]{"verify", "--id", "x"}));
+        assertFalse(Application.isCliMode(new String[]{"--server.port=1"}));
+    }
 }

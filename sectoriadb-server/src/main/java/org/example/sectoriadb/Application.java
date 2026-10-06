@@ -51,9 +51,12 @@ public class Application {
 
     private static final java.util.Set<String> CLI_COMMANDS = java.util.Set.of(
             "mk-key", "keys", "rm-key", "enable-key", "disable-key",
-            "bucket-acl", "object-acl", "public-list");
+            "bucket-acl", "object-acl", "public-list",
+            // offline integrity check: `java -jar sectoriadb.jar verify-all [--pool NAME]` with the server stopped
+            // (the metastore is single-process); prints "RESULT: OK" or "RESULT: FAILED (...)"
+            "verify-all", "verify");
 
-    private static boolean isCliMode(String[] args) {
+    static boolean isCliMode(String[] args) {
         for (String arg : args) {
             if (!arg.startsWith("-")) {
                 return CLI_COMMANDS.contains(arg);
