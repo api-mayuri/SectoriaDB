@@ -16,6 +16,7 @@ S3-совместимое хранилище объектов на Java и Sprin
 - [Запуск без Docker](#запуск-без-docker)
 - [Настройка](#настройка)
 - [Как это устроено](#как-это-устроено)
+- [Мониторинг](#мониторинг)
 - [Тесты](#тесты)
 - [Безопасность](#безопасность)
 - [Ограничения](#ограничения)
@@ -172,6 +173,8 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 | `sectoriadb.s3.region` | `us-east-1` | регион для подписи запросов |
 | `sectoriadb.s3.auth.enabled` | `true` | проверка подписи SigV4 |
 | `server.port` | `8080` | порт HTTP |
+| `management.server.port` | `9464` | порт метрик и health (`/actuator/prometheus`, `/actuator/health`), без подписи SigV4, см. [Мониторинг](#мониторинг) |
+| `sectoriadb.observability.slow-request-ms` | `2000` | запросы дольше этого порога пишутся в лог на уровне WARN (`0` выключает) |
 
 Переменные окружения для Docker (`HOST_PORT`, `JAVA_OPTS` и другие) описаны в [`.env.example`](.env.example).
 Для больших файлов увеличьте память: `JAVA_OPTS=-Xmx1g`.
@@ -251,6 +254,30 @@ sectoriadb-data/<бакет>/   blob_*.raw и small_*.sob
 `Range`-запросы опираются только на CRC32C чанков/записей. Контрольную сумму можно получить обратно:
 `aws s3api head-object --bucket B --key K --checksum-mode ENABLED`. Для загрузки с проверкой:
 `aws s3 cp file s3://B/K --checksum-algorithm SHA256` (CLI сам считает сумму).
+
+## Мониторинг
+
+Метрики в формате Prometheus отдаются на **отдельном порту** `9464` (свойство `management.server.port`), а не на S3-порту:
+
+```bash
+curl -s localhost:9464/actuator/prometheus | grep ^sectoriadb_s3_requests_seconds_count
+curl -s localhost:9464/actuator/health
+```
+
+* Доступны только `health` и `prometheus`. Порт не защищён подписью SigV4, поэтому закройте его сетевыми правилами или
+  привяжите к внутреннему интерфейсу (`management.server.address=127.0.0.1`). `docker-compose.yml` публикует его только
+  на `127.0.0.1` хоста. Через порт S3 `/actuator/*` недоступен (`403`/`404`).
+* Для каждой S3-операции (`PutObject`, `GetObject`, `ListObjectsV2`, `UploadPart`, ...) измеряются rate, ошибки (по классу
+  статуса и по коду S3) и задержка (гистограмма `sectoriadb_s3_requests_seconds`); отдельно считаются отказы
+  аутентификации по причинам, `fsync`, чтение и запись диска, блокировки метахранилища, заполнение кукушки,
+  малые объекты, ёмкость и свободное место диска, JVM, Tomcat. Все метки низкокардинальные: имён бакетов и ключей
+  в метриках нет.
+* Каждый ответ получает `x-amz-request-id` и `x-amz-id-2`; идентификатор и операция попадают в лог (MDC), запросы дольше
+  `sectoriadb.observability.slow-request-ms` пишутся предупреждением (без ключей).
+* Перцентили считает Prometheus: `histogram_quantile(0.99, sum by (operation, le) (rate(sectoriadb_s3_requests_seconds_bucket[5m])))`.
+
+Полный каталог метрик, границы гистограмм, правила кардинальности и примеры PromQL:
+[docs/architecture/08-observability-bench.md](docs/architecture/08-observability-bench.md).
 
 ## Тесты
 

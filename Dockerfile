@@ -36,7 +36,8 @@ ENV SERVER_PORT="8080"
 ENV JAVA_OPTS="-Xmx512m -XX:+UseG1GC"
 ENV SPRING_SHELL_INTERACTIVE_ENABLED="false"
 
-EXPOSE 8080
+# 8080: S3 API; 9464: management port (/actuator/health, /actuator/prometheus; not SigV4-protected)
+EXPOSE 8080 9464
 
 #HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 #  CMD curl -sf http://localhost:${SERVER_PORT}/ || exit 1

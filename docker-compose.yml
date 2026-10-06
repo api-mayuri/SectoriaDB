@@ -7,6 +7,8 @@ services:
     tty: true
     ports:
       - "${HOST_PORT:-8080}:${SERVER_PORT:-8080}"
+      # Prometheus metrics / health (management port, no SigV4): published on the host's loopback only
+      - "127.0.0.1:${METRICS_HOST_PORT:-9464}:${MANAGEMENT_SERVER_PORT:-9464}"
     environment:
       SECTORIADB_META_DIR: /data/meta
       SECTORIADB_DATA_DIR: /data/storage
@@ -18,6 +20,7 @@ services:
       SECTORIADB_S3_SECRET_KEY: ${SECTORIADB_S3_SECRET_KEY}
       SECTORIADB_S3_CREDENTIALS: ${SECTORIADB_S3_CREDENTIALS}
       SERVER_PORT: ${SERVER_PORT:-8080}
+      MANAGEMENT_SERVER_PORT: ${MANAGEMENT_SERVER_PORT:-9464}
       JAVA_OPTS: ${JAVA_OPTS:--Xmx512m -XX:+UseG1GC}
       SPRING_SHELL_INTERACTIVE_ENABLED: ${SPRING_SHELL_INTERACTIVE_ENABLED:-true}
     volumes:
