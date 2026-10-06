@@ -170,7 +170,11 @@ public class S3ExceptionHandler {
             // bad or missing parameter values are InvalidArgument in S3; an unreadable body is InvalidRequest
             boolean body = ex instanceof HttpMessageNotReadableException;
             code = body ? "InvalidRequest" : "InvalidArgument";
-            message = body ? "The request body could not be read." : "Invalid or missing request parameter: " + ex.getMessage();
+            String name = ex instanceof org.springframework.web.method.annotation.MethodArgumentTypeMismatchException m ? m.getName()
+                    : ex instanceof org.springframework.web.bind.MissingServletRequestParameterException m ? m.getParameterName() : null;
+            message = body ? "The request body could not be read."
+                    : name != null ? "Invalid or missing value of the request parameter '" + name + "'"
+                    : "Invalid request parameter or header.";
         } else {
             code = S3MvcErrors.codeFor(status);
             message = S3MvcErrors.messageFor(status);
