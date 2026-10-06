@@ -1,0 +1,612 @@
+{
+  "uid": "warp-client",
+  "title": "warp — client (InfluxDB)",
+  "tags": [
+    "warp",
+    "influxdb"
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "graphTooltip": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "panels": [
+    {
+      "id": 63,
+      "type": "row",
+      "title": "Client-side throughput (warp writes cumulative totals; panels use derivative())",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Operations/s",
+      "description": "",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influx-warp"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influx-warp"
+          },
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"warp\")\n  |> filter(fn: (r) => r.op =~ /^${op:regex}$/ and r.warp_id =~ /^${warp_id:regex}$/)\n  |> filter(fn: (r) => r._field == \"requests\")\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> derivative(unit: 1s, nonNegative: true)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> yield(name: \"rate\")",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 64,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Throughput",
+      "description": "",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influx-warp"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influx-warp"
+          },
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"warp\")\n  |> filter(fn: (r) => r.op =~ /^${op:regex}$/ and r.warp_id =~ /^${warp_id:regex}$/)\n  |> filter(fn: (r) => r._field == \"bytes_total\")\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> derivative(unit: 1s, nonNegative: true)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> yield(name: \"rate\")",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 65,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 1
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors/s",
+      "description": "A run with any errors is not comparable (methodology: error-free runs only).",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influx-warp"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influx-warp"
+          },
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"warp\")\n  |> filter(fn: (r) => r.op =~ /^${op:regex}$/ and r.warp_id =~ /^${warp_id:regex}$/)\n  |> filter(fn: (r) => r._field == \"errors\")\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> derivative(unit: 1s, nonNegative: true)\n  |> aggregateWindow(every: v.windowPeriod, fn: mean, createEmpty: false)\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> yield(name: \"rate\")",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.01
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 66,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Mean request latency (per interval)",
+      "description": "warp streams only totals, so the mean per interval = Δrequest_total_secs / Δrequests. Percentiles and max are NOT in InfluxDB: take them from `warp analyze` (meta in bench/results) or from the server dashboard (histograms).",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influx-warp"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influx-warp"
+          },
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"warp\")\n  |> filter(fn: (r) => r.op =~ /^${op:regex}$/ and r.warp_id =~ /^${warp_id:regex}$/)\n  |> filter(fn: (r) => r._field == \"request_total_secs\" or r._field == \"requests\")\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\", \"_field\"])\n  |> difference(nonNegative: true)\n  |> toFloat()\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, op: r.op, warp_id: r.warp_id, endpoint: r.endpoint,\n       _value: if r.requests > 0 then r.request_total_secs / float(v: r.requests) else 0.0}))\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> yield(name: \"mean_latency\")",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "mean",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 67,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 9
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Mean time to first byte (GET)",
+      "description": "",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influx-warp"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influx-warp"
+          },
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"warp\")\n  |> filter(fn: (r) => r.op =~ /^${op:regex}$/ and r.warp_id =~ /^${warp_id:regex}$/)\n  |> filter(fn: (r) => r._field == \"request_ttfb_total_secs\" or r._field == \"requests\")\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\", \"_field\"])\n  |> difference(nonNegative: true)\n  |> toFloat()\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> pivot(rowKey: [\"_time\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> map(fn: (r) => ({_time: r._time, op: r.op, warp_id: r.warp_id, endpoint: r.endpoint,\n       _value: if r.requests > 0 then r.request_ttfb_total_secs / float(v: r.requests) else 0.0}))\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> yield(name: \"mean_latency\")",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 68,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 9
+      }
+    },
+    {
+      "id": 69,
+      "type": "row",
+      "title": "Totals",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Objects (cumulative)",
+      "description": "",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influx-warp"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influx-warp"
+          },
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"warp\")\n  |> filter(fn: (r) => r.op =~ /^${op:regex}$/ and r.warp_id =~ /^${warp_id:regex}$/)\n  |> filter(fn: (r) => r._field == \"objects\")\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> yield(name: \"cumulative\")",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 70,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 18
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Bytes (cumulative)",
+      "description": "",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influx-warp"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influx-warp"
+          },
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"warp\")\n  |> filter(fn: (r) => r.op =~ /^${op:regex}$/ and r.warp_id =~ /^${warp_id:regex}$/)\n  |> filter(fn: (r) => r._field == \"bytes_total\")\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> yield(name: \"cumulative\")",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 71,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 18
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors (cumulative)",
+      "description": "",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influx-warp"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influx-warp"
+          },
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"warp\")\n  |> filter(fn: (r) => r.op =~ /^${op:regex}$/ and r.warp_id =~ /^${warp_id:regex}$/)\n  |> filter(fn: (r) => r._field == \"errors\")\n  |> group(columns: [\"op\", \"warp_id\", \"endpoint\"])\n  |> aggregateWindow(every: v.windowPeriod, fn: last, createEmpty: false)\n  |> yield(name: \"cumulative\")",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 72,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 18
+      }
+    },
+    {
+      "id": 73,
+      "type": "row",
+      "title": "Run summaries (written by warp at the end of each run)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 26
+      },
+      "panels": []
+    },
+    {
+      "type": "table",
+      "title": "warp_run_summary",
+      "description": "Per run and operation: totals, and mean/min/max request latency (seconds).",
+      "datasource": {
+        "type": "influxdb",
+        "uid": "influx-warp"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "influxdb",
+            "uid": "influx-warp"
+          },
+          "query": "from(bucket: v.defaultBucket)\n  |> range(start: v.timeRangeStart, stop: v.timeRangeStop)\n  |> filter(fn: (r) => r._measurement == \"warp_run_summary\")\n  |> filter(fn: (r) => r.op =~ /^${op:regex}$/ and r.warp_id =~ /^${warp_id:regex}$/)\n  |> last()\n  |> toFloat()\n  |> group(columns: [\"op\", \"warp_id\"])\n  |> pivot(rowKey: [\"op\", \"warp_id\"], columnKey: [\"_field\"], valueColumn: \"_value\")\n  |> drop(columns: [\"_start\", \"_stop\", \"_measurement\", \"_time\"])",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      },
+      "id": 74,
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 27
+      }
+    }
+  ],
+  "links": [],
+  "templating": {
+    "list": [
+      {
+        "name": "op",
+        "label": "operation",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "influx-warp"
+        },
+        "refresh": 2,
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: v.defaultBucket, tag: \"op\")",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "warp_id",
+        "label": "warp run id",
+        "type": "query",
+        "datasource": {
+          "type": "influxdb",
+          "uid": "influx-warp"
+        },
+        "refresh": 2,
+        "query": "import \"influxdata/influxdb/schema\"\nschema.tagValues(bucket: v.defaultBucket, tag: \"warp_id\")",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "warp runs",
+        "enable": true,
+        "iconColor": "orange",
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "target": {
+          "type": "tags",
+          "tags": [
+            "warp"
+          ],
+          "limit": 100,
+          "matchAny": false
+        }
+      }
+    ]
+  }
+}
