@@ -77,6 +77,9 @@ public class S3MultipartController {
         return mpuDir;
     }
 
+    /** Key prefix of user metadata ("x-amz-meta-*") inside the upload's meta.properties. */
+    private static final String USER_META_PREFIX = "usermeta.";
+
     // ── CreateMultipartUpload ─────────────────────────────────────────────────
 
     @PostMapping(value = "/{bucket}/**", params = "uploads",
@@ -104,6 +107,16 @@ public class S3MultipartController {
         meta.setProperty("key", objectKey);
         meta.setProperty("contentType", contentType);
         meta.setProperty("initiatedAt", String.valueOf(System.currentTimeMillis()));
+        // Object attributes given at CreateMultipartUpload belong to the finished object (applied at Complete)
+        for (String[] h : new String[][]{{"Cache-Control", "cacheControl"}, {"Content-Disposition", "contentDisposition"},
+                {"Content-Encoding", "contentEncoding"}, {"Content-Language", "contentLanguage"}}) {
+            String v = request.getHeader(h[0]);
+            if (v != null) meta.setProperty(h[1], v);
+        }
+        for (String name : java.util.Collections.list(request.getHeaderNames())) {
+            String lower = name.toLowerCase(java.util.Locale.ROOT);
+            if (lower.startsWith("x-amz-meta-")) meta.setProperty(USER_META_PREFIX + lower, request.getHeader(name));
+        }
         ChecksumAlgorithm checksumAlg = S3Checksums.declaredAlgorithm(request);
         ChecksumType checksumType = S3Checksums.multipartType(request, checksumAlg);
         if (checksumAlg != null) {
@@ -451,6 +464,15 @@ public class S3MultipartController {
         // Compute S3 multipart ETag: md5(concat of binary md5s)-{partCount}
         String s3Etag = "\"" + HexFormat.of().formatHex(md5Digest().digest(etagConcat)) + "-" + partNums.size() + "\"";
         entity.setEtag(s3Etag);
+        if (meta.getProperty("cacheControl") != null) entity.setCacheControl(meta.getProperty("cacheControl"));
+        if (meta.getProperty("contentDisposition") != null) entity.setContentDisposition(meta.getProperty("contentDisposition"));
+        if (meta.getProperty("contentEncoding") != null) entity.setContentEncoding(meta.getProperty("contentEncoding"));
+        if (meta.getProperty("contentLanguage") != null) entity.setContentLanguage(meta.getProperty("contentLanguage"));
+        Map<String, String> userMeta = new java.util.LinkedHashMap<>();
+        for (String name : meta.stringPropertyNames()) {
+            if (name.startsWith(USER_META_PREFIX)) userMeta.put(name.substring(USER_META_PREFIX.length()), meta.getProperty(name));
+        }
+        if (!userMeta.isEmpty()) entity.setUserMetadata(userMeta);
         if (composite != null) {
             entity.setChecksumAlgorithm(uploadAlg);
             entity.setChecksumValue(composite);

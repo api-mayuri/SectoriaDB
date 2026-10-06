@@ -512,4 +512,26 @@ class S3ApiRegressionTest {
         assertEquals(204, send(HttpRequest.newBuilder(uri("/del-xid/o?x-id=DeleteObject")).DELETE()).statusCode());
         assertEquals(204, send(HttpRequest.newBuilder(uri("/del-xid?x-id=DeleteBucket")).DELETE()).statusCode());
     }
+
+    /** minio-py test_put_object (11 MiB = multipart): user metadata and content headers given at initiate were lost. */
+    @Test
+    void multipartUploadKeepsUserMetadataAndContentHeaders() throws Exception {
+        mkBucket("mp-meta");
+        var init = send(HttpRequest.newBuilder(uri("/mp-meta/k?uploads")).header("x-amz-meta-testing", "value")
+                .header("Cache-Control", "max-age=60").header("Content-Disposition", "attachment; filename=a.bin")
+                .header("Content-Language", "ru").header("Content-Type", "text/bla").POST(BodyPublishers.noBody()));
+        Matcher m = Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(new String(init.body()));
+        assertTrue(m.find());
+        String uid = m.group(1);
+        var r1 = send(HttpRequest.newBuilder(uri("/mp-meta/k?partNumber=1&uploadId=" + uid)).PUT(BodyPublishers.ofByteArray(new byte[100])));
+        String body = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>" + r1.headers().firstValue("ETag").get()
+                + "</ETag></Part></CompleteMultipartUpload>";
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/mp-meta/k?uploadId=" + uid)).POST(BodyPublishers.ofString(body))).statusCode());
+        var head = send(HttpRequest.newBuilder(uri("/mp-meta/k")).method("HEAD", BodyPublishers.noBody()));
+        assertEquals("value", head.headers().firstValue("x-amz-meta-testing").orElse(null));
+        assertEquals("max-age=60", head.headers().firstValue("Cache-Control").orElse(null));
+        assertEquals("attachment; filename=a.bin", head.headers().firstValue("Content-Disposition").orElse(null));
+        assertEquals("ru", head.headers().firstValue("Content-Language").orElse(null));
+        assertEquals("text/bla", head.headers().firstValue("Content-Type").orElse(null));
+    }
 }
