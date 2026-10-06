@@ -13,6 +13,10 @@ import org.example.sectoriadb.model.StorageKind;
 import org.example.sectoriadb.repository.*;
 import org.example.sectoriadb.service.*;
 import org.example.sectoriadb.service.impl.ObjectCorruptedException;
+import org.example.sectoriadb.metastore.MetaStore;
+import org.example.sectoriadb.metastore.MetaStoreOptions;
+import org.example.sectoriadb.repository.metastore.*;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -44,6 +48,12 @@ class ObjectChecksumStorageTest {
     ObjectVerificationService verifier;
     PoolEntity pool;
     ObjectMapper mapper;
+    MetaStore store;
+
+    @AfterEach
+    void closeStore() {
+        store.close();
+    }
 
     @BeforeEach
     void setUp() throws Exception {
@@ -54,13 +64,16 @@ class ObjectChecksumStorageTest {
         props.setDefaultNumBuckets(64);
         props.setFsync(false);
         mapper = new ObjectMapper().findAndRegisterModules();
-        poolRepo = new JsonPoolRepository(mapper, props);
-        blobRepo = new JsonBlobFileRepository(mapper, poolRepo, props);
-        manifestRepo = new JsonManifestRepository(mapper, blobRepo, props);
+        Files.createDirectories(root.resolve("meta"));
+        store = MetaStore.open(root.resolve("meta/sectoria.db"), MetaStoreOptions.defaults().fsync(false));
+        MetaStoreProvider stores = MetaStoreProvider.of(store);
+        poolRepo = new MetaStorePoolRepository(stores);
+        blobRepo = new MetaStoreBlobFileRepository(stores);
+        manifestRepo = new MetaStoreManifestRepository(stores);
         var cache = new HashTableCache(props);
         var smallCache = new SmallBlobCache(props);
         OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
-        BlobService blobService = new BlobService(blobRepo, manifestRepo, cache, smallCache, props, opLog);
+        BlobService blobService = new BlobService(blobRepo, cache, smallCache, props, opLog);
         files = new FileStorageService(manifestRepo, blobService, cache, smallCache, opLog, props);
         verifier = new ObjectVerificationService(files);
         pool = new PoolEntity("pool-1", "bkt", root.resolve("data/bkt").toString(), java.time.Instant.now());
@@ -128,7 +141,7 @@ class ObjectChecksumStorageTest {
                 assertEquals("The " + alg + " you specified did not match the calculated checksum.", ex.getMessage());
             }
         }
-        assertEquals(0, manifestRepo.findAll().size(), "no manifest");
+        assertEquals(0, manifestRepo.count(), "no manifest");
         assertEquals(0, blobRepo.findByPoolId(pool.getId()).size(), "no blob: no small record, no chunk was written");
     }
 
@@ -138,7 +151,7 @@ class ObjectChecksumStorageTest {
         byte[] wrongMd5 = MessageDigest.getInstance("MD5").digest(bytes(3 * CHUNK, 6));
         var ex = assertThrows(ChecksumMismatchException.class, () -> put("md5", data, UploadChecksums.none().contentMd5(wrongMd5)));
         assertEquals("Content-MD5", ex.getLabel());
-        assertEquals(0, manifestRepo.findAll().size());
+        assertEquals(0, manifestRepo.count());
         assertEquals(0, blobRepo.findByPoolId(pool.getId()).size());
         // and the right one is accepted
         put("md5ok", data, UploadChecksums.none().contentMd5(MessageDigest.getInstance("MD5").digest(data)));
@@ -157,7 +170,7 @@ class ObjectChecksumStorageTest {
             }
         };
         files.storeStream(in, pool, "late", null, late);
-        assertEquals(1, manifestRepo.findAll().size());
+        assertEquals(1, manifestRepo.count());
     }
 
     // ── read side ─────────────────────────────────────────────────────────────
@@ -201,14 +214,14 @@ class ObjectChecksumStorageTest {
     }
 
     @Test
-    void manifestWithoutNewFieldsStillDeserializesAndReads() throws Exception {
+    void manifestWithoutWholeObjectCrcStillReadsAndVerifies() throws Exception {
         byte[] data = bytes(100, 40);
         ManifestEntity m = put("old", data, UploadChecksums.none());
-        Path json = root.resolve("meta/manifests").resolve(m.getId() + ".json");
-        String text = Files.readString(json);
-        assertTrue(text.contains("crc32c"));
-        Files.writeString(json, text.replaceAll(",\\s*\"crc32c\"\\s*:\\s*\"[^\"]*\"", ""));
         ManifestEntity old = manifestRepo.findById(m.getId()).orElseThrow();
+        assertNotNull(old.getCrc32c());
+        old.setCrc32c(null);   // a manifest that carries no whole-object checksum
+        manifestRepo.save(old);
+        old = manifestRepo.findById(m.getId()).orElseThrow();
         assertNull(old.getCrc32c());
         assertArrayEquals(data, get(old));
         var r = verifier.verify(old);
@@ -277,7 +290,7 @@ class ObjectChecksumStorageTest {
         flipDataByte(manifestRepo.findById(corruptChunk.getId()).orElseThrow(), chunked);
         flipDataByte(manifestRepo.findById(corruptSmall.getId()).orElseThrow(), bytes(200, 62));
         ManifestEntity mm = manifestRepo.findById(missing.getId()).orElseThrow();
-        mm.setChunkKeys(ManifestEntity.encodeChunkKeys(java.util.List.of(0x1111L, 0x2222L)));   // keys not in the blob
+        mm.setChunkKeys(java.util.List.of(0x1111L, 0x2222L));   // keys not in the blob
         manifestRepo.save(mm);
 
         var s = verifier.verifyAll(m -> true);

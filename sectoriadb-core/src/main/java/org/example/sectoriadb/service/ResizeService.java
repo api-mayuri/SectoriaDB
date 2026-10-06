@@ -3,10 +3,8 @@ package org.example.sectoriadb.service;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.format.BlobLayout;
 import org.example.sectoriadb.model.BlobFileEntity;
-import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.repository.BlobFileRepository;
-import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.PoolRepository;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 import org.example.sectoriadb.service.impl.FileChannelStorageIOEngine;
@@ -20,7 +18,6 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -31,17 +28,15 @@ public class ResizeService {
     private static final Logger log = LoggerFactory.getLogger(ResizeService.class);
 
     private final BlobFileRepository blobRepo;
-    private final ManifestRepository manifestRepo;
     private final PoolRepository poolRepo;
     private final HashTableCache cache;
     private final StorageProperties props;
     private final OperationLogService opLog;
 
-    public ResizeService(BlobFileRepository blobRepo, ManifestRepository manifestRepo,
+    public ResizeService(BlobFileRepository blobRepo,
                          PoolRepository poolRepo, HashTableCache cache,
                          StorageProperties props, OperationLogService opLog) {
         this.blobRepo     = blobRepo;
-        this.manifestRepo = manifestRepo;
         this.poolRepo     = poolRepo;
         this.cache        = cache;
         this.props        = props;
@@ -162,13 +157,18 @@ public class ResizeService {
         return newEntity;
     }
 
+    /**
+     * ONE metastore transaction: registers the new blob, repoints every manifest of the old blob (live and dead,
+     * found through {@code manifests_by_blob}) to it, and removes the old blob record. A reader sees either the old
+     * blob with all its manifests or the new one with all of them, never a mix. The caller deletes the old file after
+     * the commit; a crash before that leaves an unreferenced file.
+     */
     private BlobFileEntity commitResize(BlobFileEntity old, String newId, String newName,
                                          String newPath, String poolId, int newBuckets,
                                          int chunkSize, long newSize) {
         BlobFileEntity newEntity = new BlobFileEntity();
         newEntity.setId(newId);
         newEntity.setPoolId(poolId);
-        // Resolve and set pool reference for convenience
         poolRepo.findById(poolId).ifPresent(newEntity::setPool);
         newEntity.setFileName(newName);
         newEntity.setFilePath(newPath);
@@ -176,18 +176,9 @@ public class ResizeService {
         newEntity.setChunkSize(chunkSize);
         newEntity.setTotalBytes(newSize);
         newEntity.setCreatedAt(Instant.now());
-        blobRepo.save(newEntity);
 
-        // Move all manifests (active + deleted) to new blob file
-        List<ManifestEntity> manifests = manifestRepo.findByBlobFileId(old.getId());
-        for (ManifestEntity m : manifests) {
-            m.setBlobFile(newEntity);
-        }
-        manifestRepo.saveAll(manifests);
-
-        blobRepo.delete(old);
-        log.debug("Committed resize in JSON store: oldId={} newId={} manifestsMoved={}",
-                old.getId(), newId, manifests.size());
+        int moved = blobRepo.replaceBlob(old.getId(), newEntity);
+        log.debug("Committed resize in the metastore: oldId={} newId={} manifestsMoved={}", old.getId(), newId, moved);
         return newEntity;
     }
 

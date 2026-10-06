@@ -35,6 +35,9 @@ public class Application {
             System.setProperty("spring.main.banner-mode", "off");
             System.setProperty("spring.shell.interactive.enabled", "false");
             System.setProperty("sectoriadb.auto-resize.enabled", "false");
+            // The metadata store is single-process: open it only if a command needs it (credential commands do not),
+            // so they keep working while the server holds the file.
+            System.setProperty("sectoriadb.metastore.lazy", "true");
             System.setProperty("logging.level.root", "WARN");
             System.setProperty("logging.level.org.example.sectoriadb", "WARN");
         }

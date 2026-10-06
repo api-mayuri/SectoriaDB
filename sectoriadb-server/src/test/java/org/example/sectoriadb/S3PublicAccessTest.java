@@ -78,7 +78,7 @@ class S3PublicAccessTest {
     void publicObjectAclOpensOnlyThatObject() throws Exception {
         putObject("obj-bkt", "pub.txt");
         putObject("obj-bkt", "other.txt");
-        ManifestEntity m = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse("obj-bkt", "pub.txt").orElseThrow();
+        ManifestEntity m = manifestRepo.findCurrent("obj-bkt", "pub.txt").orElseThrow();
         m.setAcl("public-read");
         manifestRepo.save(m);
 
@@ -146,7 +146,7 @@ class S3PublicAccessTest {
         putObject("mix-bkt", "pub.txt");
         putObject("mix-bkt", "priv.txt");
         poolService.setAcl("mix-bkt", "public-read");
-        ManifestEntity m = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse("mix-bkt", "pub.txt").orElseThrow();
+        ManifestEntity m = manifestRepo.findCurrent("mix-bkt", "pub.txt").orElseThrow();
         m.setAcl("public-read");
         manifestRepo.save(m);
         assertEquals(200, status("GET", "/mix-bkt/pub.txt"));
@@ -163,7 +163,7 @@ class S3PublicAccessTest {
         assertEquals(200, status("GET", "/deny-bkt/docs/a.txt"));
         assertEquals(403, status("GET", "/deny-bkt/docs/secret/b.txt"));
         // object ACL public-read does not beat an explicit Deny either
-        ManifestEntity m = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse("deny-bkt", "docs/secret/b.txt").orElseThrow();
+        ManifestEntity m = manifestRepo.findCurrent("deny-bkt", "docs/secret/b.txt").orElseThrow();
         m.setAcl("public-read");
         manifestRepo.save(m);
         assertEquals(403, status("GET", "/deny-bkt/docs/secret/b.txt"));

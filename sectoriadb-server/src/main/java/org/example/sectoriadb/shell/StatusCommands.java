@@ -5,6 +5,7 @@ import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.model.OperationLogEntity;
 import org.example.sectoriadb.model.PoolEntity;
+import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.OperationLogRepository;
 import org.example.sectoriadb.service.BlobService;
 import org.example.sectoriadb.service.HashTableCache;
@@ -32,9 +33,11 @@ public class StatusCommands {
     private final HashTableCache cache;
     private final StorageProperties props;
     private final OperationLogRepository opLogRepo;
+    private final ManifestRepository manifestRepo;
 
     public StatusCommands(PoolService poolService, BlobService blobService, HashTableCache cache,
-                          StorageProperties props, OperationLogRepository opLogRepo) {
+                          StorageProperties props, OperationLogRepository opLogRepo, ManifestRepository manifestRepo) {
+        this.manifestRepo = manifestRepo;
         this.poolService = poolService;
         this.blobService = blobService;
         this.cache       = cache;
@@ -51,7 +54,9 @@ public class StatusCommands {
         sb.append("═".repeat(60)).append('\n');
         for (PoolEntity pool : pools) {
             List<BlobFileEntity> blobs = blobService.listByPool(pool);
-            sb.append(String.format("Pool: %-20s  (%d blob(s))%n", pool.getName(), blobs.size()));
+            ManifestRepository.BucketStats stats = manifestRepo.countAndSize(pool.getName());
+            sb.append(String.format("Pool: %-20s  (%d blob(s), %d object(s), %s)%n", pool.getName(), blobs.size(),
+                    stats.objects(), ShellTable.humanSize(stats.bytes())));
             if (!blobs.isEmpty()) {
                 sb.append(ShellTable.blobTableHeader());
                 for (BlobFileEntity b : blobs) {

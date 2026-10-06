@@ -25,23 +25,19 @@ public class S3Lookup {
      * Retrieves a bucket (pool) by name, throwing NoSuchBucket if not found.
      */
     public PoolEntity requireBucket(String bucketName) {
-        if (!poolService.existsByName(bucketName)) {
-            throw S3Exception.noSuchBucket(bucketName);
-        }
-        return poolService.getByName(bucketName);
+        return poolService.findByName(bucketName).orElseThrow(() -> S3Exception.noSuchBucket(bucketName));
     }
 
     /**
      * Retrieves an object by bucket and key, throwing NoSuchBucket or NoSuchKey as appropriate.
      */
     public ManifestEntity requireObject(String bucketName, String objectKey) {
-        // Check bucket exists first
-        if (!poolService.existsByName(bucketName)) {
-            throw S3Exception.noSuchBucket(bucketName);
-        }
-        // Then check object
-        return manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucketName, objectKey)
-                .orElseThrow(() -> S3Exception.noSuchKey(bucketName, objectKey));
+        // The hot path is one index lookup (objects tree) plus the manifest read; only a miss checks the bucket
+        // to tell NoSuchBucket from NoSuchKey.
+        return manifestRepo.findCurrent(bucketName, objectKey).orElseThrow(() ->
+                poolService.existsByName(bucketName)
+                        ? S3Exception.noSuchKey(bucketName, objectKey)
+                        : S3Exception.noSuchBucket(bucketName));
     }
 
     /**
@@ -108,8 +104,9 @@ public class S3Lookup {
         if (key == null || key.isEmpty()) {
             throw S3Exception.invalidArgument("Object key cannot be empty");
         }
-        if (key.length() > 1024) {
-            throw S3Exception.invalidArgument("Object key must not exceed 1024 bytes");
+        if (key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 1024) {
+            throw new S3Exception(org.springframework.http.HttpStatus.BAD_REQUEST, "KeyTooLongError",
+                    "Your key is too long");
         }
     }
 }

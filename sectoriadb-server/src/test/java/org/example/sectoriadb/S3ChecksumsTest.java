@@ -102,11 +102,11 @@ class S3ChecksumsTest {
     private static String text(HttpResponse<byte[]> r) { return new String(r.body(), StandardCharsets.UTF_8); }
 
     private boolean exists(String key) {
-        return manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(B, key).isPresent();
+        return manifestRepo.findCurrent(B, key).isPresent();
     }
 
     private ManifestEntity manifest(String key) {
-        return manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(B, key).orElseThrow();
+        return manifestRepo.findCurrent(B, key).orElseThrow();
     }
 
     // ── upload verification ──────────────────────────────────────────────────

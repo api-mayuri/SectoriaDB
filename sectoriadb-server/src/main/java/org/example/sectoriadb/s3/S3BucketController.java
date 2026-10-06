@@ -1,7 +1,6 @@
 package org.example.sectoriadb.s3;
 
 import jakarta.servlet.http.HttpServletRequest;
-import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.s3.access.AccessControlService;
@@ -121,8 +120,7 @@ public class S3BucketController {
                 "<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
 
         for (String key : keys) {
-            manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, key)
-                    .ifPresent(e -> fileService.delete(e.getId()));
+            fileService.deleteObject(bucket, key);   // one transaction per key
             result.append("<Deleted><Key>").append(S3Support.xmlEscape(key)).append("</Key></Deleted>");
         }
         result.append("</DeleteResult>");
@@ -173,90 +171,21 @@ public class S3BucketController {
         if (maxKeys <= 0) maxKeys = 1000;
         if (maxKeys > 1000) maxKeys = 1000;
 
-        List<ManifestEntity> all = manifestRepo.findByBucketNameAndDeletedFalse(bucket);
-
-        // Filter by prefix
-        List<ManifestEntity> prefixed = all.stream()
-                .filter(m -> m.getObjectKey() != null && !m.getObjectKey().isEmpty())
-                .filter(m -> prefix.isEmpty() || m.getObjectKey().startsWith(prefix))
-                .toList();
-
-        // Determine pagination start point
-        String pageStart = null;
+        // ListObjectsV2: continuation-token wins over start-after; V1: marker
+        String after;
         if (listType == 2) {
-            // ListObjectsV2: use continuation-token or start-after
-            pageStart = continuationToken != null ? continuationToken : startAfter;
+            after = continuationToken != null ? continuationToken : startAfter;
         } else {
-            // ListObjectsV1: use marker
-            pageStart = marker.isEmpty() ? null : marker;
+            after = marker.isEmpty() ? null : marker;
         }
 
-        // Collect and deduplicate common prefixes (if delimiter is set)
-        List<String> commonPrefixes = new ArrayList<>();
-        List<ManifestEntity> objectsToReturn = new ArrayList<>();
-
-        if (delimiter != null && !delimiter.isEmpty()) {
-            java.util.Set<String> seenPrefixes = new java.util.LinkedHashSet<>();
-            for (ManifestEntity m : prefixed) {
-                String key = m.getObjectKey();
-                // Find the next delimiter after prefix
-                int delimIdx = key.indexOf(delimiter, prefix.length());
-                if (delimIdx >= 0) {
-                    // This key is under a directory
-                    String commonPrefix = key.substring(0, delimIdx + delimiter.length());
-                    if (!seenPrefixes.contains(commonPrefix)) {
-                        seenPrefixes.add(commonPrefix);
-                        commonPrefixes.add(commonPrefix);
-                    }
-                } else {
-                    // This key is at this level
-                    objectsToReturn.add(m);
-                }
-            }
-        } else {
-            // No delimiter: all objects at this level
-            objectsToReturn = new ArrayList<>(prefixed);
-        }
-
-        // Sort by key lexicographically
-        objectsToReturn.sort((a, b) -> a.getObjectKey().compareTo(b.getObjectKey()));
-        commonPrefixes.sort(String::compareTo);
-
-        // Apply pagination marker/continuation-token
-        int resultCount = 0;
-        List<ManifestEntity> pageObjects = new ArrayList<>();
-        String nextMarker = null;
-
-        for (ManifestEntity m : objectsToReturn) {
-            if (pageStart != null && m.getObjectKey().compareTo(pageStart) <= 0) {
-                continue; // Skip until we're past the marker
-            }
-            if (resultCount < maxKeys) {
-                pageObjects.add(m);
-                nextMarker = m.getObjectKey();
-                resultCount++;
-            } else {
-                break;
-            }
-        }
-
-        // Also count common prefixes toward max-keys
-        List<String> pageCommonPrefixes = new ArrayList<>();
-        for (String cp : commonPrefixes) {
-            if (pageStart != null && cp.compareTo(pageStart) <= 0) {
-                continue; // Skip until we're past the marker
-            }
-            if (resultCount < maxKeys) {
-                pageCommonPrefixes.add(cp);
-                nextMarker = cp;
-                resultCount++;
-            } else {
-                break;
-            }
-        }
-
-        boolean isTruncated = resultCount == maxKeys &&
-                (pageObjects.size() + pageCommonPrefixes.size() < objectsToReturn.size() + commonPrefixes.size());
+        // Range scan of the (bucket, key) index from max(prefix, after), maxKeys entries (keys and common prefixes
+        // together); delimiter groups are skipped as whole ranges. See MetaStoreManifestRepository.listObjects.
+        ManifestRepository.ObjectListing page = manifestRepo.listObjects(bucket, prefix, delimiter, after, maxKeys);
+        List<ManifestRepository.ObjectSummary> pageObjects = page.objects();
+        List<String> pageCommonPrefixes = page.commonPrefixes();
+        boolean isTruncated = page.truncated();
+        String nextMarker = page.nextMarker();
 
         // Build response
         ListBucketResult result = new ListBucketResult();
@@ -269,11 +198,11 @@ public class S3BucketController {
         result.setTruncated(isTruncated);
 
         List<S3ObjectEntry> contents = pageObjects.stream()
-                .map(m -> new S3ObjectEntry(
-                        m.getObjectKey(),
-                        S3Support.isoDate(m.getCreatedAt()),
-                        m.getEtag() != null ? m.getEtag() : "\"\"",
-                        m.getTotalBytes()))
+                .map(o -> new S3ObjectEntry(
+                        o.key(),
+                        S3Support.isoDate(o.lastModified()),
+                        o.etag() != null ? o.etag() : "\"\"",
+                        o.size()))
                 .toList();
 
         result.setContents(contents);
@@ -283,7 +212,7 @@ public class S3BucketController {
             if (continuationToken != null) {
                 result.setContinuationToken(continuationToken);
             }
-            result.setKeyCount(contents.size()); // Only Contents count, not CommonPrefixes
+            result.setKeyCount(contents.size() + pageCommonPrefixes.size());   // keys and common prefixes, as in S3
             if (isTruncated) {
                 result.setNextContinuationToken(nextMarker);
             }

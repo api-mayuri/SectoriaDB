@@ -8,7 +8,6 @@ import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.service.impl.SmallObjectBlob;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.BlobFileRepository;
-import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,18 +31,16 @@ public class BlobService {
     private static final Logger log = LoggerFactory.getLogger(BlobService.class);
 
     private final BlobFileRepository blobRepo;
-    private final ManifestRepository manifestRepo;
     private final HashTableCache cache;
     private final SmallBlobCache smallCache;
     private final Object smallChooseLock = new Object();
     private final StorageProperties props;
     private final OperationLogService opLog;
 
-    public BlobService(BlobFileRepository blobRepo, ManifestRepository manifestRepo,
+    public BlobService(BlobFileRepository blobRepo,
                        HashTableCache cache, SmallBlobCache smallCache,
                        StorageProperties props, OperationLogService opLog) {
         this.blobRepo     = blobRepo;
-        this.manifestRepo = manifestRepo;
         this.cache        = cache;
         this.smallCache   = smallCache;
         this.props        = props;
@@ -182,17 +179,19 @@ public class BlobService {
         long t0 = System.currentTimeMillis();
         BlobFileEntity entity = getById(blobId);
 
-        long activeManifests = manifestRepo.countByBlobFileIdAndDeletedFalse(blobId);
-        if (activeManifests > 0) {
+        try {
+            // one transaction: re-checks that no live manifest references the blob, then drops the record and the
+            // dead manifests that still point at it
+            blobRepo.deleteUnreferenced(blobId);
+        } catch (BlobFileRepository.BlobInUseException e) {
             throw new IllegalStateException(
-                    "Cannot delete blob '" + entity.getFileName() + "' — " + activeManifests +
+                    "Cannot delete blob '" + entity.getFileName() + "' — " + e.liveManifests() +
                     " file(s) still reference it. Soft-delete those files first with 'file-delete'.");
         }
-
+        // the record is gone; a crash before the file is removed leaves an unreferenced file (garbage)
         cache.evict(blobId);
         smallCache.evict(blobId);
         Files.deleteIfExists(Path.of(entity.getFilePath()));
-        blobRepo.delete(entity);
 
         opLog.success("BLOB_DELETE", blobId, entity.getFileName(),
                 Map.of("poolId", entity.getPoolId()),

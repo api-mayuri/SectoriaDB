@@ -2,10 +2,8 @@ package org.example.sectoriadb.service;
 
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.model.BlobFileEntity;
-import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.BlobFileRepository;
-import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.PoolRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -26,19 +24,16 @@ public class PoolService {
 
     private final PoolRepository poolRepo;
     private final BlobFileRepository blobRepo;
-    private final ManifestRepository manifestRepo;
     private final OperationLogService opLog;
     private final HashTableCache cache;
     private final SmallBlobCache smallCache;
     private final StorageProperties props;
 
     public PoolService(PoolRepository poolRepo, BlobFileRepository blobRepo,
-                       ManifestRepository manifestRepo,
                        OperationLogService opLog, StorageProperties props,
                        HashTableCache cache, SmallBlobCache smallCache) {
         this.poolRepo     = poolRepo;
         this.blobRepo     = blobRepo;
-        this.manifestRepo = manifestRepo;
         this.opLog        = opLog;
         this.props        = props;
         this.cache        = cache;
@@ -74,6 +69,10 @@ public class PoolService {
                 .orElseThrow(() -> new IllegalArgumentException("Pool not found: " + name));
     }
 
+    public java.util.Optional<PoolEntity> findByName(String name) {
+        return poolRepo.findByName(name);
+    }
+
     public PoolEntity getById(String id) {
         return poolRepo.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Pool not found: " + id));
@@ -85,29 +84,35 @@ public class PoolService {
             return getByName(bucketName);
         }
         String basePath = Path.of(props.getDataDir()).resolve(bucketName).toString();
-        return create(bucketName, basePath);
+        try {
+            return create(bucketName, basePath);
+        } catch (IllegalArgumentException e) {
+            // lost a race with a concurrent CreateBucket of the same name: the bucket exists, which is what was asked
+            if (poolRepo.existsByName(bucketName)) return getByName(bucketName);
+            throw e;
+        }
     }
 
     public boolean existsByName(String name) {
         return poolRepo.existsByName(name);
     }
 
+    /** ACL and policy changes are single-transaction read-modify-writes: concurrent changes cannot overwrite each other. */
     public void setAcl(String bucket, String acl) {
-        PoolEntity pool = getByName(bucket);
-        pool.setAcl(acl);
-        poolRepo.save(pool);
+        update(bucket, p -> p.setAcl(acl));
     }
 
     public void setPolicy(String bucket, String policyJson) {
-        PoolEntity pool = getByName(bucket);
-        pool.setPolicy(policyJson);
-        poolRepo.save(pool);
+        update(bucket, p -> p.setPolicy(policyJson));
     }
 
     public void deletePolicy(String bucket) {
-        PoolEntity pool = getByName(bucket);
-        pool.setPolicy(null);
-        poolRepo.save(pool);
+        update(bucket, p -> p.setPolicy(null));
+    }
+
+    private void update(String bucket, java.util.function.Consumer<PoolEntity> change) {
+        poolRepo.updateByName(bucket, change)
+                .orElseThrow(() -> new IllegalArgumentException("Pool not found: " + bucket));
     }
 
     public void delete(String name) {
@@ -125,28 +130,20 @@ public class PoolService {
         log.info("Pool deleted: id={} name={}", pool.getId(), name);
     }
 
-    /** S3 DeleteBucket: checks active objects, purges orphaned blobs, then removes the pool. */
+    /**
+     * S3 DeleteBucket. One transaction checks that the {@code objects} index has no entry for the bucket
+     * (BucketNotEmpty otherwise) and removes the pool, its blob records and all their manifests; afterwards the blob
+     * files are deleted. A crash after the commit leaves orphan files, never records without files.
+     */
     public void deleteBucket(String bucketName) throws IOException {
         long t0 = System.currentTimeMillis();
         PoolEntity pool = getByName(bucketName);
 
-        // Reject if any active (non-deleted) S3 objects remain
-        List<ManifestEntity> activeManifests = manifestRepo.findByBucketNameAndDeletedFalse(bucketName);
-        if (!activeManifests.isEmpty()) {
-            throw new IllegalStateException("BucketNotEmpty: bucket '" + bucketName + "' still has " +
-                    activeManifests.size() + " object(s).");
-        }
-
-        // Purge all manifests for this bucket (including soft-deleted) and every blob file of the pool
-        // (cuckoo .raw and small-object .sob alike; EMPTY/SMALL manifests reference no cuckoo blob)
-        for (BlobFileEntity blob : blobRepo.findByPoolId(pool.getId())) {
+        List<BlobFileEntity> removed = poolRepo.deleteBucket(pool.getId());   // throws IllegalStateException BucketNotEmpty
+        for (BlobFileEntity blob : removed) {
             cache.evict(blob.getId());
             smallCache.evict(blob.getId());
             Files.deleteIfExists(Path.of(blob.getFilePath()));
-            blobRepo.delete(blob);
-        }
-        for (ManifestEntity m : manifestRepo.findByBucketName(bucketName)) {
-            manifestRepo.delete(m);
         }
 
         // Delete the pool directory if empty
@@ -157,7 +154,6 @@ public class PoolService {
             }
         } catch (IOException ignored) {}
 
-        poolRepo.delete(pool);
         opLog.success("BUCKET_DELETE", pool.getId(), bucketName, Map.of("name", bucketName),
                 System.currentTimeMillis() - t0);
         log.info("Bucket deleted: id={} name={}", pool.getId(), bucketName);

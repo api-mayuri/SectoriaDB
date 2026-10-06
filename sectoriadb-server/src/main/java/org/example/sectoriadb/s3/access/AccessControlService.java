@@ -361,7 +361,7 @@ public class AccessControlService {
      * grants listing, not reading of objects; a bucket policy is checked separately by the caller.
      */
     private boolean isObjectPublicReadable(String bucket, String key) {
-        return manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, key)
+        return manifestRepo.findCurrent(bucket, key)
                 .map(m -> "public-read".equals(m.getAcl()) || "public-read-write".equals(m.getAcl()))
                 .orElse(false);
     }

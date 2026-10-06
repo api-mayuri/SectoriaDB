@@ -10,6 +10,10 @@ import org.example.sectoriadb.model.StorageKind;
 import org.example.sectoriadb.repository.*;
 import org.example.sectoriadb.service.*;
 import org.example.sectoriadb.service.impl.SmallObjectCorruptedException;
+import org.example.sectoriadb.metastore.MetaStore;
+import org.example.sectoriadb.metastore.MetaStoreOptions;
+import org.example.sectoriadb.repository.metastore.*;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -40,6 +44,12 @@ class SmallObjectStorageTest {
     FileStorageService files;
     PoolEntity pool;
     ObjectMapper mapper;
+    MetaStore store;
+
+    @AfterEach
+    void closeStore() {
+        if (store != null) store.close();
+    }
 
     @BeforeEach
     void setUp() throws Exception {
@@ -58,13 +68,21 @@ class SmallObjectStorageTest {
     /** (Re)builds the whole object graph, as after a process restart. */
     private void wire() {
         mapper = new ObjectMapper().findAndRegisterModules();
-        poolRepo = new JsonPoolRepository(mapper, props);
-        blobRepo = new JsonBlobFileRepository(mapper, poolRepo, props);
-        manifestRepo = new JsonManifestRepository(mapper, blobRepo, props);
+        if (store != null) store.close();
+        try {
+            Files.createDirectories(root.resolve("meta"));
+        } catch (java.io.IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+        store = MetaStore.open(root.resolve("meta/sectoria.db"), MetaStoreOptions.defaults().fsync(false));
+        MetaStoreProvider stores = MetaStoreProvider.of(store);
+        poolRepo = new MetaStorePoolRepository(stores);
+        blobRepo = new MetaStoreBlobFileRepository(stores);
+        manifestRepo = new MetaStoreManifestRepository(stores);
         cache = new HashTableCache(props);
         smallCache = new SmallBlobCache(props);
         OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
-        blobService = new BlobService(blobRepo, manifestRepo, cache, smallCache, props, opLog);
+        blobService = new BlobService(blobRepo, cache, smallCache, props, opLog);
         files = new FileStorageService(manifestRepo, blobService, cache, smallCache, opLog, props);
     }
 
@@ -93,7 +111,7 @@ class SmallObjectStorageTest {
         assertEquals(StorageKind.CHUNKED, put(bytes(CHUNK + 1)).getStorageKind());
 
         for (int n : new int[]{0, 1, CHUNK - 1, CHUNK, CHUNK + 1}) {
-            ManifestEntity m = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse("bkt", "k" + n).orElseThrow();
+            ManifestEntity m = manifestRepo.findCurrent("bkt", "k" + n).orElseThrow();
             assertEquals(n, m.getTotalBytes());
             assertArrayEquals(n == 0 ? new byte[0] : bytes(n), get(m), "size " + n);
         }
@@ -209,14 +227,20 @@ class SmallObjectStorageTest {
     }
 
     @Test
-    void oldManifestsWithoutNewFieldsDeserializeAsChunked() throws Exception {
-        String json = "{\"id\":\"x\",\"blobFileId\":\"b\",\"sourceFileName\":\"f\",\"chunkSize\":4096,\"totalChunks\":1,"
-                + "\"totalBytes\":10,\"chunkKeys\":\"0000000000000001\",\"lastChunkSize\":10,\"deleted\":false}";
-        ManifestEntity m = mapper.readValue(json, ManifestEntity.class);
+    void manifestWithoutOptionalFieldsDecodesAsChunked() throws Exception {
+        // a record that carries only the fields every manifest has: the optional ones default (storage kind CHUNKED)
+        ManifestEntity bare = new ManifestEntity();
+        bare.setId("x");
+        bare.setBlobFileId("b");
+        bare.setChunkKeys(java.util.List.of(1L));
+        bare.setTotalChunks(1);
+        bare.setTotalBytes(10);
+        bare.setLastChunkSize(10);
+        ManifestEntity m = ManifestCodec.decode(ManifestCodec.encode(bare));
         assertEquals(StorageKind.CHUNKED, m.getStorageKind());
         assertNull(m.getSmallBlobId());
-        BlobFileEntity b = mapper.readValue("{\"id\":\"b\",\"poolId\":\"p\",\"numBuckets\":8,\"chunkSize\":4096}",
-                BlobFileEntity.class);
+        assertEquals(java.util.List.of(1L), m.parseChunkKeys());
+        BlobFileEntity b = BlobCodec.decode(BlobCodec.encode(new BlobFileEntity()));
         assertEquals(BlobKind.CUCKOO, b.getKind());
     }
 }

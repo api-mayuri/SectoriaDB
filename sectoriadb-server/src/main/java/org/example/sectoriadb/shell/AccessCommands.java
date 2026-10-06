@@ -8,7 +8,6 @@ import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;
 
-import java.util.List;
 import java.util.Set;
 
 /** Public/private sharing of buckets and objects (the same ACLs the S3 API manages). */
@@ -44,13 +43,14 @@ public class AccessCommands {
             @ShellOption(help = "Bucket name") String bucket,
             @ShellOption(help = "Object key") String key,
             @ShellOption(defaultValue = ShellOption.NULL, help = "New ACL; omit to show the current one") String acl) {
-        ManifestEntity object = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, key)
-                .orElseThrow(() -> new IllegalArgumentException("Object not found: " + bucket + "/" + key));
         if (acl == null) {
+            ManifestEntity object = manifestRepo.findCurrent(bucket, key)
+                    .orElseThrow(() -> new IllegalArgumentException("Object not found: " + bucket + "/" + key));
             return bucket + "/" + key + ": " + effective(object.getAcl());
         }
-        object.setAcl(requireAcl(acl));
-        manifestRepo.save(object);
+        String newAcl = requireAcl(acl);
+        manifestRepo.updateCurrent(bucket, key, o -> o.setAcl(newAcl))
+                .orElseThrow(() -> new IllegalArgumentException("Object not found: " + bucket + "/" + key));
         return bucket + "/" + key + " is now " + acl;
     }
 
@@ -63,13 +63,22 @@ public class AccessCommands {
             boolean bucketPublic = isPublic(pool.getAcl());
             if (bucketPublic) {
                 sb.append(String.format("bucket  %-20s %s  (all objects)%n", pool.getName(), effective(pool.getAcl())));
+                continue;
             }
-            List<ManifestEntity> objects = manifestRepo.findByBucketNameAndDeletedFalse(pool.getName());
-            for (ManifestEntity o : objects) {
-                if (!bucketPublic && isPublic(o.getAcl())) {
-                    sb.append(String.format("object  %s/%s%n        %s/%s/%s%n",
-                            pool.getName(), o.getObjectKey(), baseUrl, pool.getName(), o.getObjectKey()));
+            // administrative scan of the bucket's key range, 1000 keys per page
+            String after = null;
+            while (true) {
+                ManifestRepository.ObjectListing page =
+                        manifestRepo.listObjects(pool.getName(), "", null, after, 1000);
+                for (ManifestRepository.ObjectSummary o : page.objects()) {
+                    ManifestEntity m = manifestRepo.findById(o.manifestId()).orElse(null);
+                    if (m != null && isPublic(m.getAcl())) {
+                        sb.append(String.format("object  %s/%s%n        %s/%s/%s%n",
+                                pool.getName(), o.key(), baseUrl, pool.getName(), o.key()));
+                    }
                 }
+                if (!page.truncated()) break;
+                after = page.nextMarker();
             }
         }
         return sb.isEmpty() ? "Nothing is public." : sb.toString().stripTrailing();

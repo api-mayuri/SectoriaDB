@@ -92,12 +92,11 @@ public class S3AclController {
         }
 
         String key = S3Support.extractKey(request, bucket);
-        ManifestEntity manifest = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, key)
-                .orElseThrow(() -> S3Exception.noSuchKey(bucket, key));
-
         byte[] body = request.getInputStream().readAllBytes();
-        aclService.applyObjectAcl(request, body, manifest);
-        manifestRepo.save(manifest);
+        // one transaction reads the current version, applies the ACL and writes it back: a concurrent PUT of the key
+        // cannot be overwritten with the old version's manifest
+        manifestRepo.updateCurrent(bucket, key, manifest -> aclService.applyObjectAcl(request, body, manifest))
+                .orElseThrow(() -> S3Exception.noSuchKey(bucket, key));
 
         return ResponseEntity.ok()
                 .header("x-amz-request-id", UUID.randomUUID().toString())
@@ -115,7 +114,7 @@ public class S3AclController {
         }
 
         String key = S3Support.extractKey(request, bucket);
-        ManifestEntity manifest = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, key)
+        ManifestEntity manifest = manifestRepo.findCurrent(bucket, key)
                 .orElseThrow(() -> S3Exception.noSuchKey(bucket, key));
 
         String acl = manifest.getAcl();
@@ -314,7 +313,7 @@ public class S3AclController {
         }
 
         String key = S3Support.extractKey(request, bucket);
-        if (!manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, key).isPresent()) {
+        if (!manifestRepo.existsCurrent(bucket, key)) {
             throw S3Exception.noSuchKey(bucket, key);
         }
 
@@ -339,7 +338,7 @@ public class S3AclController {
         }
 
         String key = S3Support.extractKey(request, bucket);
-        if (!manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, key).isPresent()) {
+        if (!manifestRepo.existsCurrent(bucket, key)) {
             throw S3Exception.noSuchKey(bucket, key);
         }
 
@@ -359,7 +358,7 @@ public class S3AclController {
         }
 
         String key = S3Support.extractKey(request, bucket);
-        if (!manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, key).isPresent()) {
+        if (!manifestRepo.existsCurrent(bucket, key)) {
             throw S3Exception.noSuchKey(bucket, key);
         }
 

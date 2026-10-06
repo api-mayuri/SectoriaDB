@@ -64,6 +64,10 @@ public class FileStorageService {
 
     // ── Store ─────────────────────────────────────────────────────────────────
 
+    /**
+     * Shell store: writes the file into the pool and registers its manifest by id (no bucket / key, so it is not an
+     * S3 object). The data is written first, the manifest saved after.
+     */
     public ManifestEntity store(Path filePath, PoolEntity pool) throws IOException {
         if (!Files.exists(filePath)) {
             throw new IllegalArgumentException("File not found: " + filePath.toAbsolutePath());
@@ -72,41 +76,35 @@ public class FileStorageService {
         try (InputStream in = new MultiDigestInputStream(Files.newInputStream(filePath), digest)) {
             in.transferTo(java.io.OutputStream.nullOutputStream());
         }
-        return store(filePath, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
+        ManifestEntity entity = stage(filePath, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
+        manifestRepo.save(entity);
+        logStored(entity);
+        return entity;
     }
 
-    /** Stores a file whose whole-object CRC32C (base64) is already known. */
-    private ManifestEntity store(Path filePath, PoolEntity pool, String crc32c) throws IOException {
+    /**
+     * Writes the bytes of a file to the pool and returns the manifest that describes them, NOT yet persisted.
+     * <p>
+     * Ordering rule of the whole write path: <b>blob data first, manifest commit after</b>. The data is on disk
+     * (forced) before any metastore transaction mentions it, so a crash in between leaves orphan chunks / an ACTIVE
+     * small record that no manifest points to (garbage for the GC stage) and never a manifest pointing to missing data.
+     */
+    private ManifestEntity stage(Path filePath, PoolEntity pool, String crc32c) throws IOException {
         long t0 = System.currentTimeMillis();
         log.info("Storing file: {} → pool '{}'", filePath.toAbsolutePath(), pool.getName());
 
         long size = Files.size(filePath);
         if (size == 0) {
-            return storeEmpty(filePath, pool, crc32c, t0);
+            return newManifest(filePath, pool, StorageKind.EMPTY, crc32c);   // no blob, no chunks
         }
         if (size < props.getDefaultChunkSize() && size <= SmallObjectBlob.MAX_RECORD_DATA) {
-            return storeSmall(filePath, (int) size, pool, crc32c, t0);
+            return stageSmall(filePath, (int) size, pool, crc32c, t0);
         }
-        return storeChunked(filePath, pool, crc32c, t0);
+        return stageChunked(filePath, pool, crc32c, t0);
     }
 
-    /** Zero-byte object: no blob, no chunks — the manifest alone describes it. */
-    private ManifestEntity storeEmpty(Path filePath, PoolEntity pool, String crc32c, long t0) {
-        ManifestEntity entity = newManifest(filePath, pool, StorageKind.EMPTY, crc32c);
-        manifestRepo.save(entity);
-        opLog.success("STORE", entity.getId(), entity.getSourceFileName(),
-                Map.of("poolId", pool.getId(), "totalBytes", 0L, "storageKind", "EMPTY"),
-                System.currentTimeMillis() - t0);
-        log.info("Stored: id={} file={} size=0 kind=EMPTY", entity.getId(), entity.getSourceFileName());
-        return entity;
-    }
-
-    /**
-     * Object smaller than the chunk size: stored whole as one record of a small-object blob.
-     * Order: record appended and forced first, manifest saved after. A crash in between leaves an ACTIVE record no
-     * manifest points to (a leak that the GC stage can reclaim), never a manifest without data.
-     */
-    private ManifestEntity storeSmall(Path filePath, int size, PoolEntity pool, String crc32c, long t0) throws IOException {
+    /** Object smaller than the chunk size: stored whole as one record of a small-object blob (appended and forced). */
+    private ManifestEntity stageSmall(Path filePath, int size, PoolEntity pool, String crc32c, long t0) throws IOException {
         byte[] data = Files.readAllBytes(filePath);
         if (data.length != size) {
             throw new IOException("File changed while being stored: expected " + size + " bytes, read " + data.length);
@@ -129,14 +127,6 @@ public class FileStorageService {
         entity.setSmallLength(loc.length());
         entity.setSmallCrc32c(loc.crc32c());
         entity.setTotalBytes(size);
-        manifestRepo.save(entity);
-
-        opLog.success("STORE", entity.getId(), entity.getSourceFileName(),
-                Map.of("blobFileId", blobEntity.getId(), "poolId", pool.getId(), "totalBytes", (long) size,
-                        "storageKind", "SMALL", "offset", loc.offset()),
-                System.currentTimeMillis() - t0);
-        log.info("Stored: id={} file={} size={} kind=SMALL blob={} offset={}",
-                entity.getId(), entity.getSourceFileName(), size, blobEntity.getId(), loc.offset());
         return entity;
     }
 
@@ -152,7 +142,7 @@ public class FileStorageService {
         return entity;
     }
 
-    private ManifestEntity storeChunked(Path filePath, PoolEntity pool, String crc32c, long t0) throws IOException {
+    private ManifestEntity stageChunked(Path filePath, PoolEntity pool, String crc32c, long t0) throws IOException {
         BlobFileEntity blobEntity = blobService.chooseBlobFileForWrite(pool);
         CuckooHashTable table = cache.get(blobEntity);
         BlobFileWriteService writer = new BlobFileWriteService(
@@ -167,7 +157,6 @@ public class FileStorageService {
             throw e;
         }
 
-        // Calculate total bytes; handle empty files (0 chunks)
         long totalBytes;
         if (manifest.chunkKeys().isEmpty()) {
             totalBytes = 0;
@@ -182,22 +171,28 @@ public class FileStorageService {
         entity.setChunkSize(manifest.chunkSize());
         entity.setTotalChunks(manifest.chunkKeys().size());
         entity.setTotalBytes(totalBytes);
-        entity.setChunkKeys(ManifestEntity.encodeChunkKeys(manifest.chunkKeys()));
+        entity.setChunkKeys(manifest.chunkKeys());
         entity.setLastChunkSize(manifest.lastChunkActualSize());
-        manifestRepo.save(entity);
-
-        opLog.success("STORE", entity.getId(), manifest.sourceFileName(),
-                Map.of("blobFileId", blobEntity.getId(),
-                        "poolId", pool.getId(),
-                        "totalBytes", totalBytes,
-                        "totalChunks", manifest.chunkKeys().size(),
-                        "chunkKeys", manifest.chunkKeys().stream()
-                                .map(k -> String.format("%016x", k)).toList()),
-                System.currentTimeMillis() - t0);
-        log.info("Stored: id={} file={} size={} chunks={} blob={}",
-                entity.getId(), manifest.sourceFileName(), totalBytes,
-                manifest.chunkKeys().size(), blobEntity.getId());
         return entity;
+    }
+
+    /** Audit entry for a stored manifest; written after the commit, failures never affect the operation. */
+    private void logStored(ManifestEntity entity) {
+        long ms = Math.max(0, System.currentTimeMillis() - entity.getCreatedAt().toEpochMilli());
+        Map<String, Object> details = new java.util.LinkedHashMap<>();
+        details.put("poolId", entity.getPoolId());
+        details.put("totalBytes", entity.getTotalBytes());
+        details.put("storageKind", entity.getStorageKind().name());
+        String blobId = entity.getBlobFileId() != null ? entity.getBlobFileId() : entity.getSmallBlobId();
+        if (blobId != null) details.put("blobFileId", blobId);
+        if (entity.getStorageKind() == StorageKind.SMALL) details.put("offset", entity.getSmallOffset());
+        if (entity.getStorageKind() == StorageKind.CHUNKED) {
+            details.put("totalChunks", entity.getTotalChunks());
+            details.put("chunkKeys", entity.parseChunkKeys().stream().map(k -> String.format("%016x", k)).toList());
+        }
+        opLog.success("STORE", entity.getId(), entity.getSourceFileName(), details, ms);
+        log.info("Stored: id={} file={} size={} kind={} blob={}", entity.getId(), entity.getSourceFileName(),
+                entity.getTotalBytes(), entity.getStorageKind(), blobId);
     }
 
     // ── Restore (full) ────────────────────────────────────────────────────────
@@ -329,11 +324,9 @@ public class FileStorageService {
     // ── S3 Store (InputStream) ────────────────────────────────────────────────
 
     /**
-     * Stores an object uploaded via the S3 REST API.
-     * Writes the stream to a temp file while computing MD5 (the ETag), the always-on CRC32C and the client's
-     * additional checksum in a single pass. The client-declared Content-MD5 / checksum is verified BEFORE
-     * anything is committed: on a mismatch the temp file is removed and neither a blob record, nor chunks,
-     * nor a manifest exist. Only then is the temp file handed to the storage engine.
+     * Writes an object uploaded via the S3 REST API and commits it: {@link #stageStream} followed by
+     * {@link #commitObject}. Callers that still have attributes to set (ACL, user metadata, ETag of a multipart
+     * upload) call the two steps themselves, so the manifest is committed once, complete.
      */
     public ManifestEntity storeStream(InputStream in, PoolEntity pool,
                                       String objectKey, String contentType) throws IOException {
@@ -341,6 +334,20 @@ public class FileStorageService {
     }
 
     public ManifestEntity storeStream(InputStream in, PoolEntity pool, String objectKey, String contentType,
+                                      UploadChecksums declared) throws IOException {
+        return commitObject(stageStream(in, pool, objectKey, contentType, declared));
+    }
+
+    /**
+     * Step 1 of an S3 PUT: writes the stream to a temp file while computing MD5 (the ETag), the always-on CRC32C and
+     * the client's additional checksum in a single pass. The client-declared Content-MD5 / checksum is verified BEFORE
+     * anything is written to a blob: on a mismatch the temp file is removed and neither a blob record, nor chunks,
+     * nor a manifest exist. Then the data goes into the blobs and a manifest with key, ETag, content type and
+     * checksums is returned, <b>not yet visible</b>: the object appears only with {@link #commitObject}.
+     * If the process dies (or the caller abandons the manifest) between the steps, the written data is garbage
+     * that no manifest references.
+     */
+    public ManifestEntity stageStream(InputStream in, PoolEntity pool, String objectKey, String contentType,
                                       UploadChecksums declared) throws IOException {
         Path tmp = Files.createTempFile("sectoriadb-upload-", ".tmp");
         try {
@@ -354,7 +361,7 @@ public class FileStorageService {
             declared.verify(digest);   // throws ChecksumMismatchException: nothing has been written anywhere yet
 
             String etag = "\"" + HexFormat.of().formatHex(digest.md5()) + "\"";
-            ManifestEntity entity = store(tmp, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
+            ManifestEntity entity = stage(tmp, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
             entity.setObjectKey(objectKey);
             entity.setBucketName(pool.getName());
             entity.setContentType(contentType != null ? contentType : "application/octet-stream");
@@ -364,11 +371,37 @@ public class FileStorageService {
                 entity.setChecksumValue(digest.encoded(declared.algorithm()));
                 entity.setChecksumType(ChecksumType.FULL_OBJECT);
             }
-            manifestRepo.save(entity);
             return entity;
         } finally {
             Files.deleteIfExists(tmp);
         }
+    }
+
+    /**
+     * Step 2 of an S3 PUT: ONE metastore transaction saves the manifest with all its fields, points
+     * {@code objects[(bucket, key)]} at it and retires the version it replaces. Afterwards the data of a replaced
+     * small object is marked DELETED (best effort; the chunks of a replaced chunked object stay until GC).
+     *
+     * @throws org.example.sectoriadb.repository.ManifestRepository.PoolNotFoundException if the bucket vanished
+     */
+    public ManifestEntity commitObject(ManifestEntity entity) {
+        ManifestRepository.CommitResult r = manifestRepo.commitObject(entity);
+        r.superseded().ifPresent(old -> releaseData(old, "PUT"));
+        logStored(r.current());
+        return r.current();
+    }
+
+    /** Result of an S3 PUT as seen by a later read, used by tests and the shell. */
+    public java.util.Optional<ManifestEntity> findObject(String bucket, String key) {
+        return manifestRepo.findCurrent(bucket, key);
+    }
+
+    /**
+     * Read-modify-write of the current version of an object in one transaction (ACL changes).
+     */
+    public java.util.Optional<ManifestEntity> updateObject(String bucket, String key,
+                                                           java.util.function.Consumer<ManifestEntity> mutator) {
+        return manifestRepo.updateCurrent(bucket, key, mutator);
     }
 
     // ── S3 Stream output ──────────────────────────────────────────────────────
@@ -492,12 +525,13 @@ public class FileStorageService {
 
     // ── List / Info ───────────────────────────────────────────────────────────
 
+    /** Every live manifest (administrative full scan: shell {@code ls}, {@code verify-all}). */
     public List<ManifestEntity> listAll() {
-        return manifestRepo.findByDeletedFalse();
+        return manifestRepo.findAllLive();
     }
 
     public List<ManifestEntity> listByBlobFileId(String blobFileId) {
-        return manifestRepo.findByBlobFileIdAndDeletedFalse(blobFileId);
+        return manifestRepo.findByBlobId(blobFileId, true);
     }
 
     public ManifestEntity getActiveManifest(String id) {
@@ -507,32 +541,49 @@ public class FileStorageService {
         return e;
     }
 
-    // ── Delete (soft) ─────────────────────────────────────────────────────────
+    // ── Delete ────────────────────────────────────────────────────────────────
 
+    /** S3 DeleteObject: one transaction unlinks the current version and queues it for GC. */
+    public boolean deleteObject(String bucket, String key) {
+        long t0 = System.currentTimeMillis();
+        java.util.Optional<ManifestEntity> removed = manifestRepo.deleteObject(bucket, key);
+        removed.ifPresent(m -> afterDelete(m, t0));
+        return removed.isPresent();
+    }
+
+    /** Shell {@code rm}: retires one manifest by id (and unlinks it if it is the current version of an object). */
     public void delete(String manifestId) {
         long t0 = System.currentTimeMillis();
-        ManifestEntity entity = getActiveManifest(manifestId);
-        entity.setDeleted(true);
-        manifestRepo.save(entity);
-        // Only after the manifest is durably deleted is the record marked DELETED. A crash in between leaves a
-        // dead object whose record is still ACTIVE (a leak for the GC stage), never a live object without data.
-        if (entity.getStorageKind() == StorageKind.SMALL) {
-            try {
-                BlobFileEntity blob = entity.getSmallBlob();
-                if (blob != null) {
-                    smallCache.get(blob).markDeleted(entity.getSmallOffset());
-                } else {
-                    log.warn("Small-object blob {} of deleted file {} is gone", entity.getSmallBlobId(), manifestId);
-                }
-            } catch (IOException e) {
-                log.warn("Could not mark small-object record DELETED (file {} stays deleted, space leaks): {}",
-                        manifestId, e.getMessage());
-            }
-        }
+        getActiveManifest(manifestId);
+        manifestRepo.deleteManifest(manifestId).ifPresent(m -> afterDelete(m, t0));
+    }
+
+    private void afterDelete(ManifestEntity entity, long t0) {
+        releaseData(entity, "DELETE");
         String blobId = entity.getPhysicalBlob() != null ? entity.getPhysicalBlob().getId() : "";
-        opLog.success("DELETE", manifestId, entity.getSourceFileName(),
+        opLog.success("DELETE", entity.getId(), entity.getSourceFileName(),
                 Map.of("blobFileId", blobId, "storageKind", entity.getStorageKind().name()),
                 System.currentTimeMillis() - t0);
-        log.info("File soft-deleted: id={} name={}", manifestId, entity.getSourceFileName());
+        log.info("Object deleted: id={} name={}", entity.getId(), entity.getSourceFileName());
+    }
+
+    /**
+     * Called AFTER the transaction that retired {@code entity} committed. A small object's record is flipped to DELETED
+     * (one byte). A crash in between leaves a dead manifest whose record is still ACTIVE: a leak for the GC stage,
+     * never a live object without data. Chunks of a chunked object are reclaimed by the GC stage from the queue.
+     */
+    private void releaseData(ManifestEntity entity, String reason) {
+        if (entity.getStorageKind() != StorageKind.SMALL) return;
+        try {
+            BlobFileEntity blob = entity.getSmallBlob();
+            if (blob != null) {
+                smallCache.get(blob).markDeleted(entity.getSmallOffset());
+            } else {
+                log.warn("Small-object blob {} of retired manifest {} is gone", entity.getSmallBlobId(), entity.getId());
+            }
+        } catch (IOException | RuntimeException e) {
+            log.warn("Could not mark small-object record DELETED after {} (manifest {} stays retired, space leaks): {}",
+                    reason, entity.getId(), e.getMessage());
+        }
     }
 }

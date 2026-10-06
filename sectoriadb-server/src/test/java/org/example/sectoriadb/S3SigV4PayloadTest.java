@@ -54,7 +54,7 @@ class S3SigV4PayloadTest {
     }
 
     private boolean exists(String key) {
-        return manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse("sigbkt", key).isPresent();
+        return manifestRepo.findCurrent("sigbkt", key).isPresent();
     }
 
     private static byte[] bytes(String s) { return s.getBytes(StandardCharsets.UTF_8); }

@@ -10,7 +10,10 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
-/** Metadata record describing how a stored file is split across chunk slots. */
+/**
+ * Metadata record describing how a stored object is laid out in the blobs, plus its S3 attributes.
+ * Persisted by {@code MetaStoreManifestRepository}; see {@code ManifestCodec} for the value encoding.
+ */
 public class ManifestEntity {
 
     private String id;
@@ -19,10 +22,16 @@ public class ManifestEntity {
     private int chunkSize;
     private int totalChunks;
     private long totalBytes;
-    /** Comma-separated hex-encoded 64-bit chunk keys, e.g. "deadbeef00000001,..." */
-    private String chunkKeys;
+    /** 64-bit chunk keys in file order. Stored by the metastore as a compact binary long array, not in the JSON part. */
+    @JsonIgnore
+    private long[] chunkKeys = new long[0];
     private int lastChunkSize;
     private Instant createdAt;
+    /**
+     * True once the manifest is no longer the current version of an object (superseded by a newer PUT, deleted).
+     * Such a manifest is kept only until the garbage collector releases its chunks; it is never reachable
+     * through the {@code objects} index. Live objects are exactly the manifests with {@code deleted == false}.
+     */
     private boolean deleted = false;
 
     /** Absent in old manifests: CHUNKED. */
@@ -88,20 +97,24 @@ public class ManifestEntity {
 
     // ── Chunk-key helpers ────────────────────────────────────────────────────
 
+    /** The chunk keys as a list (a copy). */
+    @JsonIgnore
     public List<Long> parseChunkKeys() {
-        if (chunkKeys == null || chunkKeys.isBlank()) return List.of();
-        return Arrays.stream(chunkKeys.split(","))
-                .map(h -> Long.parseUnsignedLong(h.strip(), 16))
-                .toList();
+        return Arrays.stream(chunkKeys).boxed().toList();
     }
 
-    public static String encodeChunkKeys(List<Long> keys) {
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < keys.size(); i++) {
-            if (i > 0) sb.append(',');
-            sb.append(String.format("%016x", keys.get(i)));
-        }
-        return sb.toString();
+    /** The chunk keys as an array; the returned array is the entity's own, do not modify it. */
+    @JsonIgnore
+    public long[] chunkKeyArray() { return chunkKeys; }
+
+    @JsonIgnore
+    public void setChunkKeys(List<Long> keys) {
+        this.chunkKeys = keys == null ? new long[0] : keys.stream().mapToLong(Long::longValue).toArray();
+    }
+
+    @JsonIgnore
+    public void setChunkKeyArray(long[] keys) {
+        this.chunkKeys = keys == null ? new long[0] : keys;
     }
 
     // ── Getters / Setters ────────────────────────────────────────────────────
@@ -166,8 +179,6 @@ public class ManifestEntity {
     public long getTotalBytes() { return totalBytes; }
     public void setTotalBytes(long totalBytes) { this.totalBytes = totalBytes; }
 
-    public String getChunkKeys() { return chunkKeys; }
-    public void setChunkKeys(String chunkKeys) { this.chunkKeys = chunkKeys; }
 
     public int getLastChunkSize() { return lastChunkSize; }
     public void setLastChunkSize(int lastChunkSize) { this.lastChunkSize = lastChunkSize; }

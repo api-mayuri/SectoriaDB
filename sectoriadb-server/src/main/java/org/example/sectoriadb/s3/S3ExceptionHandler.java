@@ -1,6 +1,7 @@
 package org.example.sectoriadb.s3;
 
 import org.example.sectoriadb.checksum.ChecksumMismatchException;
+import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.s3.auth.PayloadVerificationException;
 import org.example.sectoriadb.s3.xml.S3Error;
 import org.apache.catalina.connector.ClientAbortException;
@@ -94,6 +95,15 @@ public class S3ExceptionHandler {
         return ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_XML)
                 .body(new S3Error(code, msg, null, requestId));
+    }
+
+    /** The bucket was deleted between the start of a PUT and its commit; nothing was committed. */
+    @ExceptionHandler(ManifestRepository.PoolNotFoundException.class)
+    public ResponseEntity<S3Error> handlePoolGone(ManifestRepository.PoolNotFoundException ex) {
+        String requestId = UUID.randomUUID().toString();
+        return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .contentType(MediaType.APPLICATION_XML)
+                .body(new S3Error("NoSuchBucket", "The specified bucket does not exist", null, requestId));
     }
 
     /**

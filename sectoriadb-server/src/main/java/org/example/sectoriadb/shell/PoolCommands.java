@@ -3,6 +3,7 @@ package org.example.sectoriadb.shell;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.BlobFileRepository;
+import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.service.BlobService;
 import org.example.sectoriadb.service.HashTableCache;
 import org.example.sectoriadb.service.PoolService;
@@ -21,9 +22,11 @@ public class PoolCommands {
     private final BlobFileRepository blobRepo;
     private final BlobService blobService;
     private final HashTableCache cache;
+    private final ManifestRepository manifestRepo;
 
     public PoolCommands(PoolService poolService, BlobFileRepository blobRepo,
-                        BlobService blobService, HashTableCache cache) {
+                        BlobService blobService, HashTableCache cache, ManifestRepository manifestRepo) {
+        this.manifestRepo = manifestRepo;
         this.poolService = poolService;
         this.blobRepo    = blobRepo;
         this.blobService = blobService;
@@ -65,6 +68,8 @@ public class PoolCommands {
         sb.append(String.format("  Path:    %s%n", p.getBasePath()));
         sb.append(String.format("  Created: %s%n", p.getCreatedAt()));
         sb.append(String.format("  Blobs:   %d%n", blobs.size()));
+        ManifestRepository.BucketStats stats = manifestRepo.countAndSize(p.getName());   // scans the bucket's key range
+        sb.append(String.format("  Objects: %d  (%s)%n", stats.objects(), ShellTable.humanSize(stats.bytes())));
 
         if (!blobs.isEmpty()) {
             sb.append(ShellTable.blobTableHeader());

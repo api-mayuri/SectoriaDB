@@ -55,11 +55,13 @@ public class S3MultipartController {
     private final PoolService poolService;
     private final FileStorageService fileService;
     private final ManifestRepository manifestRepo;
+    private final S3Lookup lookup;
     private final StorageProperties storageProps;
     private Path mpuDir;
 
     public S3MultipartController(PoolService poolService, FileStorageService fileService,
-                                  ManifestRepository manifestRepo, StorageProperties storageProps) {
+                                  ManifestRepository manifestRepo, S3Lookup lookup, StorageProperties storageProps) {
+        this.lookup = lookup;
         this.poolService = poolService;
         this.fileService = fileService;
         this.manifestRepo = manifestRepo;
@@ -90,6 +92,7 @@ public class S3MultipartController {
         }
 
         String objectKey = S3Support.extractKey(request, bucket);
+        lookup.validateObjectKey(objectKey);
         String uploadId = UUID.randomUUID().toString();
 
         Path uploadDir = getMpuDir().resolve(uploadId);
@@ -256,7 +259,7 @@ public class S3MultipartController {
                 .split("\\?")[0]); // Remove ?versionId if present
 
         // Load source object
-        ManifestEntity srcManifest = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(srcBucket, srcKey)
+        ManifestEntity srcManifest = manifestRepo.findCurrent(srcBucket, srcKey)
                 .orElseThrow(() -> S3Exception.noSuchKey(srcBucket, srcKey));
 
         // Write part (with optional range)
@@ -438,15 +441,11 @@ public class S3MultipartController {
             wholeObject = UploadChecksums.compute(uploadAlg);
         }
 
-        // Delete previous version
-        ManifestEntity oldManifest = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, objectKey)
-                .orElse(null);
-
         // Combine streams with lazy opening
         PoolEntity pool = poolService.getByName(bucket);
         ManifestEntity entity;
         try (InputStream combined = new LazySequenceInputStream(streams)) {
-            entity = fileService.storeStream(combined, pool, objectKey, contentType, wholeObject);
+            entity = fileService.stageStream(combined, pool, objectKey, contentType, wholeObject);
         }
 
         // Compute S3 multipart ETag: md5(concat of binary md5s)-{partCount}
@@ -457,12 +456,9 @@ public class S3MultipartController {
             entity.setChecksumValue(composite);
             entity.setChecksumType(ChecksumType.COMPOSITE);
         }
-        manifestRepo.save(entity);
-
-        // Delete old version AFTER successful save
-        if (oldManifest != null) {
-            fileService.delete(oldManifest.getId());
-        }
+        // One transaction: the manifest with its final multipart ETag / checksum, the (bucket, key) index entry, and
+        // retirement of the version it replaces.
+        entity = fileService.commitObject(entity);
 
         // Delete upload directory
         try {

@@ -8,7 +8,6 @@ import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.s3.access.AccessControlService;
 import org.example.sectoriadb.service.FileStorageService;
 import org.example.sectoriadb.service.impl.ChunkCorruptedException;
@@ -57,16 +56,13 @@ public class S3ObjectController {
 
     private final PoolService poolService;
     private final FileStorageService fileService;
-    private final ManifestRepository manifestRepo;
     private final S3Lookup lookup;
     private final AccessControlService accessControl;
 
-    public S3ObjectController(PoolService poolService, FileStorageService fileService,
-                               ManifestRepository manifestRepo, S3Lookup lookup,
+    public S3ObjectController(PoolService poolService, FileStorageService fileService, S3Lookup lookup,
                                AccessControlService accessControl) {
         this.poolService   = poolService;
         this.fileService   = fileService;
-        this.manifestRepo  = manifestRepo;
         this.lookup        = lookup;
         this.accessControl = accessControl;
     }
@@ -90,15 +86,13 @@ public class S3ObjectController {
         // Verify bucket exists; throws NoSuchBucket if not
         PoolEntity pool = lookup.requireBucket(bucket);
 
-        // Find old version (to delete after successful write)
-        var oldManifest = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, objectKey);
-
         // Content-MD5 / x-amz-checksum-* / trailing checksum: verified inside storeStream before anything is committed
         S3Checksums.Declared declared = S3Checksums.parse(request);
 
-        // Store the new object
+        // Step 1: blob data (not visible yet). Step 2: ONE transaction that saves the complete manifest, points the
+        // (bucket, key) index at it and retires the previous version, so concurrent PUTs of a key cannot both win.
         try (InputStream rawIn = S3Support.openBody(request, declared)) {
-            ManifestEntity entity = fileService.storeStream(rawIn, pool, objectKey, contentType, declared.checksums());
+            ManifestEntity entity = fileService.stageStream(rawIn, pool, objectKey, contentType, declared.checksums());
 
             // Set additional metadata
             if (cacheControl != null) entity.setCacheControl(cacheControl);
@@ -109,12 +103,7 @@ public class S3ObjectController {
             entity.setUserMetadata(extractUserMetadata(request));
 
             accessControl.applyObjectAcl(request, new byte[0], entity);
-            manifestRepo.save(entity);
-
-            // Now delete old version if it existed
-            if (oldManifest.isPresent()) {
-                fileService.delete(oldManifest.get().getId());
-            }
+            entity = fileService.commitObject(entity);
 
             var ok = ResponseEntity.ok()
                     .header("ETag", entity.getEtag() != null ? entity.getEtag() : "\"\"")
@@ -334,8 +323,7 @@ public class S3ObjectController {
             HttpServletRequest request) {
 
         String objectKey = S3Support.extractKey(request, bucket);
-        manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, objectKey)
-                .ifPresent(e -> fileService.delete(e.getId()));
+        fileService.deleteObject(bucket, objectKey);   // idempotent: deleting a missing key is a 204 as in S3
 
         return ResponseEntity.noContent()
                 .header("x-amz-request-id", S3Support.requestId())
@@ -392,9 +380,6 @@ public class S3ObjectController {
         // Get source object
         ManifestEntity srcEntity = lookup.requireObject(sourceBucket, sourceKey);
 
-        // Find old destination version
-        var oldDest = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, destKey);
-
         boolean replace = "REPLACE".equalsIgnoreCase(metadataDirective);
         String newContentType = replace
                 ? (contentType != null ? contentType : "application/octet-stream")
@@ -409,7 +394,7 @@ public class S3ObjectController {
                     : (srcEntity.getChecksumType() == ChecksumType.FULL_OBJECT ? srcEntity.getChecksumAlgorithm() : null);
             ManifestEntity entity;
             try (InputStream in = Files.newInputStream(tmp)) {
-                entity = fileService.storeStream(in, destPool, destKey, newContentType,
+                entity = fileService.stageStream(in, destPool, destKey, newContentType,
                         destAlg != null ? UploadChecksums.compute(destAlg) : UploadChecksums.none());
             }
 
@@ -427,9 +412,7 @@ public class S3ObjectController {
                 entity.setUserMetadata(srcEntity.getUserMetadata());
             }
             accessControl.applyObjectAcl(request, new byte[0], entity);
-            manifestRepo.save(entity);
-
-            oldDest.ifPresent(old -> fileService.delete(old.getId()));
+            entity = fileService.commitObject(entity);   // one transaction, replaces the previous destination version
 
             String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
                     + "<CopyObjectResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
