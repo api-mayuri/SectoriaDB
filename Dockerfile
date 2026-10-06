@@ -3,13 +3,16 @@ FROM maven:3.9-eclipse-temurin-21 AS builder
 
 WORKDIR /build
 
-# Download dependencies first (cacheable layer)
+# Download dependencies first (cacheable layer); sibling modules are not built yet, so skip org.example
 COPY pom.xml .
-RUN mvn dependency:go-offline -q
+COPY sectoriadb-core/pom.xml sectoriadb-core/
+COPY sectoriadb-server/pom.xml sectoriadb-server/
+RUN mvn -B dependency:go-offline -q -DexcludeGroupIds=org.example
 
 # Build the jar
-COPY src/ src/
-RUN mvn package -DskipTests -q
+COPY sectoriadb-core/src/ sectoriadb-core/src/
+COPY sectoriadb-server/src/ sectoriadb-server/src/
+RUN mvn -B package -DskipTests -q
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM eclipse-temurin:21-jre-alpine
@@ -17,7 +20,7 @@ FROM eclipse-temurin:21-jre-alpine
 RUN apk add --no-cache curl
 
 WORKDIR /app
-COPY --from=builder /build/target/SectoriaDB-1.0-SNAPSHOT.jar sectoriadb.jar
+COPY --from=builder /build/sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar sectoriadb.jar
 
 # Persistent storage directories
 RUN mkdir -p /data/meta /data/storage
