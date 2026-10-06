@@ -16,6 +16,7 @@ public class StorageProperties {
     private boolean fsync = true;
     private AutoResize autoResize = new AutoResize();
     private S3 s3 = new S3();
+    private SmallObject smallObject = new SmallObject();
 
     public String getMetaDir() { return metaDir; }
     public void setMetaDir(String v) { this.metaDir = v; }
@@ -38,8 +39,25 @@ public class StorageProperties {
     public AutoResize getAutoResize() { return autoResize; }
     public void setAutoResize(AutoResize v) { this.autoResize = v; }
 
+    public SmallObject getSmallObject() { return smallObject; }
+    public void setSmallObject(SmallObject v) { this.smallObject = v; }
+
     public S3 getS3() { return s3; }
     public void setS3(S3 v) { this.s3 = v; }
+
+    /** Small-object blobs: objects smaller than {@code default-chunk-size} are stored whole in an append-only log. */
+    public static class SmallObject {
+        private long maxFileBytes = 1L << 30;
+        private long checkpointIntervalBytes = 16L << 20;
+
+        /** A small-object blob that reached this size is closed for appends; the pool gets a new one. */
+        public long getMaxFileBytes() { return maxFileBytes; }
+        public void setMaxFileBytes(long v) { this.maxFileBytes = v; }
+
+        /** The recovery hint in the blob header is advanced after this many appended bytes (and on close). */
+        public long getCheckpointIntervalBytes() { return checkpointIntervalBytes; }
+        public void setCheckpointIntervalBytes(long v) { this.checkpointIntervalBytes = v; }
+    }
 
     public static class S3 {
         private String region = "us-east-1";
