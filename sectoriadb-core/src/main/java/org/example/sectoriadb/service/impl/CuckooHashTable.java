@@ -28,8 +28,8 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  *   [META_SIZE+TA .. end]           — Table B: same size as Table A
  *
  * Each bucket has exactly SLOTS_PER_BUCKET = 4 slots.
- * Hash A: floorMod(key, numBuckets)
- * Hash B: floorMod((key ^ TWIST) * MULT, numBuckets)
+ * Hash A: floorMod(|key|, numBuckets)
+ * Hash B: floorMod(|(key ^ TWIST) * MULT|, numBuckets)
  *
  * <h3>Insert</h3>
  * {@link #insert} is atomic with respect to failures: the eviction path is searched on the in-memory
@@ -452,12 +452,21 @@ public class CuckooHashTable implements AutoCloseable {
     }
 
     private int bucketA(long key) {
-        return (int) Math.floorMod(key, (long) numBuckets);
+        return toBucket(key);
     }
 
     private int bucketB(long key) {
         long mixed = (key ^ HASH_B_TWIST) * HASH_B_MULT;
-        return (int) Math.floorMod(mixed, (long) numBuckets);
+        return toBucket(mixed);
+    }
+
+    /**
+     * |x| mod numBuckets, kept identical to the original formula for every value that formula handled
+     * (existing blobs depend on it), but with floorMod so that Long.MIN_VALUE (where abs() stays negative)
+     * still yields an index in [0, numBuckets).
+     */
+    private int toBucket(long x) {
+        return (int) Math.floorMod(Math.abs(x), (long) numBuckets);
     }
 
     private boolean isFreeSlot(int idx) {

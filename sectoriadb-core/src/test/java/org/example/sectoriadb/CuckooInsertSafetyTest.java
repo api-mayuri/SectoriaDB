@@ -277,6 +277,17 @@ class CuckooInsertSafetyTest {
         assertStored(t, stored);
     }
 
+    @Test
+    void bucketMapping_staysCompatibleWithAbsModForExistingBlobs() throws IOException {
+        int buckets = 13;
+        Path p = newBlob("compat.raw", buckets);
+        CuckooHashTable t = open(p, buckets, 16, new FileChannelStorageIOEngine(false));
+        // old formula: |key| % n  (-5 -> 5, not floorMod's 8)
+        ChunkLocation loc = t.insert(-5L, ByteBuffer.wrap(payload(-5L)));
+        assertEquals(5, loc.bucketIndex());
+        assertEquals(org.example.sectoriadb.model.CuckooTable.A, loc.table());
+    }
+
     // ── C5 ───────────────────────────────────────────────────────────────────
 
     @Test
