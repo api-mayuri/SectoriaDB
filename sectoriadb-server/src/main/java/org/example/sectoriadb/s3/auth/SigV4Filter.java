@@ -1,8 +1,11 @@
 package org.example.sectoriadb.s3.auth;
 
 import jakarta.servlet.FilterChain;
+import jakarta.servlet.ReadListener;
 import jakarta.servlet.ServletException;
+import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import org.example.sectoriadb.model.CredentialEntity;
 import org.example.sectoriadb.s3.access.AccessControlService;
@@ -43,21 +46,31 @@ public class SigV4Filter extends OncePerRequestFilter {
     private static final DateTimeFormatter RFC_1123_DATE_TIME =
             DateTimeFormatter.RFC_1123_DATE_TIME.withZone(ZoneOffset.UTC);
     private static final long SKEW_TOLERANCE_SECONDS = 900; // 15 minutes
+    private static final String STREAMING_SIGNED = SigV4Utils.STREAMING_PAYLOAD;
+    private static final String STREAMING_SIGNED_TRAILER = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
+    private static final String STREAMING_UNSIGNED_TRAILER = "STREAMING-UNSIGNED-PAYLOAD-TRAILER";
+    private static final java.util.regex.Pattern HEX_SHA256 = java.util.regex.Pattern.compile("[0-9a-fA-F]{64}");
 
     private final CredentialService credentialService;
     private final AccessControlService accessControlService;
     private final boolean authEnabled;
     private final String region;
+    private final boolean allowOpenSetup;
+    private final boolean allowUnsignedPayload;
 
     public SigV4Filter(
             CredentialService credentialService,
             AccessControlService accessControlService,
             @Value("${sectoriadb.s3.auth.enabled:true}") boolean authEnabled,
-            @Value("${sectoriadb.s3.region:us-east-1}") String region) {
+            @Value("${sectoriadb.s3.region:us-east-1}") String region,
+            @Value("${sectoriadb.s3.auth.allow-open-setup:false}") boolean allowOpenSetup,
+            @Value("${sectoriadb.s3.auth.allow-unsigned-payload:true}") boolean allowUnsignedPayload) {
         this.credentialService = credentialService;
         this.accessControlService = accessControlService;
         this.authEnabled = authEnabled;
         this.region = region;
+        this.allowOpenSetup = allowOpenSetup;
+        this.allowUnsignedPayload = allowUnsignedPayload;
     }
 
     @Override
@@ -69,9 +82,17 @@ public class SigV4Filter extends OncePerRequestFilter {
             return;
         }
 
-        // If no credentials are configured, let all requests through
+        // No credentials configured: deny by default (S4). Open setup mode is an explicit opt-in.
         if (credentialService.listAll().isEmpty()) {
-            chain.doFilter(request, response);
+            if (allowOpenSetup) {
+                chain.doFilter(request, response);
+                return;
+            }
+            sendError(response, 403, "AccessDenied",
+                    "No S3 access keys are configured, so all requests are denied. "
+                    + "Create a key with the shell command 'mk-key', or set SECTORIADB_S3_ACCESS_KEY and "
+                    + "SECTORIADB_S3_SECRET_KEY (sectoriadb.s3.access-key / sectoriadb.s3.secret-key). "
+                    + "To temporarily allow unauthenticated access set sectoriadb.s3.auth.allow-open-setup=true.");
             return;
         }
 
@@ -99,20 +120,26 @@ public class SigV4Filter extends OncePerRequestFilter {
             return;
         }
 
+        HttpServletRequest verified;
         try {
-            verifyHeaderAuth(request, authHeader, xAmzDate);
+            verified = verifyHeaderAuth(request, authHeader, xAmzDate);
         } catch (AuthException e) {
-            log.warn("SigV4 auth failed: {}", e.getMessage());
+            log.warn("SigV4 auth failed: {}", sanitize(e.getMessage()));
             sendError(response, e.httpStatus, e.errorCode, e.getMessage());
             return;
         }
 
-        chain.doFilter(request, response);
+        chain.doFilter(verified, response);
     }
 
     // ── Header-based auth ─────────────────────────────────────────────────────
 
-    private void verifyHeaderAuth(HttpServletRequest request, String authHeader, String xAmzDate)
+    /**
+     * Verifies the request signature and returns the request to continue with: when the signed payload hash
+     * is a concrete SHA-256 the body is wrapped so it is verified while streaming (S3); for aws-chunked
+     * uploads the chunk-signing context is attached as a request attribute.
+     */
+    private HttpServletRequest verifyHeaderAuth(HttpServletRequest request, String authHeader, String xAmzDate)
             throws AuthException {
 
         // Parse Authorization header:
@@ -130,7 +157,11 @@ public class SigV4Filter extends OncePerRequestFilter {
         String accessKeyId    = credParts[0];
         String dateStr        = credParts[1];
         String regionFromCred = credParts[2];
-        String service        = credParts[3];  // should be "s3"
+        String service        = credParts[3];  // must be "s3"
+        if (!"s3".equals(service) || !"aws4_request".equals(credParts[4])) {
+            throw new AuthException(400, "AuthorizationHeaderMalformed",
+                    "The authorization header is malformed; the credential scope must end with s3/aws4_request.");
+        }
 
         // Find secret key
         CredentialEntity cred = credentialService.findByAccessKeyId(accessKeyId)
@@ -141,6 +172,10 @@ public class SigV4Filter extends OncePerRequestFilter {
         // Validate timestamp
         String timestamp = resolveTimestamp(request, xAmzDate);
         checkTimestamp(timestamp);
+        if (!timestamp.startsWith(dateStr)) {
+            throw new AuthException(403, "SignatureDoesNotMatch",
+                    "The credential date does not match the request date.");
+        }
 
         // Collect signed headers
         List<String> headerNames = Arrays.asList(signedHeadersStr.split(";"));
@@ -156,6 +191,20 @@ public class SigV4Filter extends OncePerRequestFilter {
 
         // Payload hash
         String payloadHash = resolvePayloadHash(request);
+        if (SigV4Utils.UNSIGNED_PAYLOAD.equals(payloadHash) || STREAMING_UNSIGNED_TRAILER.equals(payloadHash)) {
+            if (!allowUnsignedPayload) {
+                throw new AuthException(400, "InvalidRequest",
+                        "Unsigned payloads are not allowed by this server "
+                        + "(sectoriadb.s3.auth.allow-unsigned-payload=false); send a signed payload hash.");
+            }
+        } else if (payloadHash.startsWith("STREAMING-")
+                && !STREAMING_SIGNED.equals(payloadHash) && !STREAMING_SIGNED_TRAILER.equals(payloadHash)) {
+            throw new AuthException(501, "NotImplemented", "Unsupported streaming payload type: " + sanitize(payloadHash));
+        } else if (!payloadHash.startsWith("STREAMING-") && !SigV4Utils.UNSIGNED_PAYLOAD.equals(payloadHash)
+                && !HEX_SHA256.matcher(payloadHash).matches()) {
+            throw new AuthException(400, "InvalidArgument", "x-amz-content-sha256 must be UNSIGNED-PAYLOAD, "
+                    + "STREAMING-*, or a hex SHA-256 digest");
+        }
 
         // Build canonical request
         String canonicalRequest = SigV4Utils.buildCanonicalRequest(
@@ -175,11 +224,23 @@ public class SigV4Filter extends OncePerRequestFilter {
         String expectedSignature = SigV4Utils.computeSignature(signingKey, stringToSign);
 
         if (!constantTimeEquals(signature, expectedSignature)) {
-            log.debug("Signature mismatch for {}: expected={} got={}",
-                    accessKeyId, expectedSignature, signature);
+            // Never log the expected signature, the signing key or the secret: not even at debug level.
+            log.debug("Signature mismatch for access key {}", sanitize(accessKeyId));
             throw new AuthException(403, "SignatureDoesNotMatch",
                     "The request signature we calculated does not match the signature you provided.");
         }
+
+        // The request headers are authentic; now bind the body to what was signed.
+        if (STREAMING_SIGNED.equals(payloadHash) || STREAMING_SIGNED_TRAILER.equals(payloadHash)) {
+            request.setAttribute(ChunkSigningContext.REQUEST_ATTRIBUTE, new ChunkSigningContext(
+                    signingKey, timestamp, credentialScope, expectedSignature,
+                    STREAMING_SIGNED_TRAILER.equals(payloadHash)));
+            return request;
+        }
+        if (HEX_SHA256.matcher(payloadHash).matches()) {
+            return new VerifiedBodyRequest(request, payloadHash);
+        }
+        return request;
     }
 
     // ── Presigned URL auth ────────────────────────────────────────────────────
@@ -190,7 +251,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             verifyPresignedInternal(request);
             return true;
         } catch (AuthException e) {
-            log.warn("Presigned URL auth failed: {}", e.getMessage());
+            log.warn("Presigned URL auth failed: {}", sanitize(e.getMessage()));
             sendError(response, e.httpStatus, e.errorCode, e.getMessage());
             return false;
         }
@@ -219,6 +280,10 @@ public class SigV4Filter extends OncePerRequestFilter {
         String dateStr        = credParts[1];
         String regionFromCred = credParts[2];
         String service        = credParts[3];
+        if (!"s3".equals(service) || !"aws4_request".equals(credParts[4])) {
+            throw new AuthException(400, "AuthorizationQueryParametersError",
+                    "The credential scope must end with s3/aws4_request.");
+        }
 
         CredentialEntity cred = credentialService.findByAccessKeyId(accessKeyId)
                 .filter(CredentialEntity::isEnabled)
@@ -227,6 +292,10 @@ public class SigV4Filter extends OncePerRequestFilter {
 
         // Check expiry
         checkPresignedExpiry(xAmzDate, expires);
+        if (!xAmzDate.startsWith(dateStr)) {
+            throw new AuthException(403, "SignatureDoesNotMatch",
+                    "The credential date does not match X-Amz-Date.");
+        }
 
         // For presigned URLs, the body hash is UNSIGNED-PAYLOAD
         String payloadHash = SigV4Utils.UNSIGNED_PAYLOAD;
@@ -369,10 +438,54 @@ public class SigV4Filter extends OncePerRequestFilter {
     }
 
     private static boolean constantTimeEquals(String a, String b) {
-        try {
-            return MessageDigest.isEqual(a.getBytes(), b.getBytes());
-        } catch (Exception e) {
-            return false;
+        if (a == null || b == null) return false;
+        return MessageDigest.isEqual(a.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                b.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    /** Strips control characters from client-supplied text before it is logged (log injection). */
+    private static String sanitize(String s) {
+        if (s == null) return "";
+        String t = s.replaceAll("\\p{Cntrl}", "?");
+        return t.length() > 200 ? t.substring(0, 200) + "..." : t;
+    }
+
+    /** Request whose body stream verifies the signed x-amz-content-sha256 at end of stream. */
+    private static final class VerifiedBodyRequest extends HttpServletRequestWrapper {
+        private final String expectedHash;
+        private ServletInputStream stream;
+
+        VerifiedBodyRequest(HttpServletRequest request, String expectedHash) {
+            super(request);
+            this.expectedHash = expectedHash;
+        }
+
+        @Override
+        public ServletInputStream getInputStream() throws IOException {
+            if (stream == null) {
+                ServletInputStream raw = super.getInputStream();
+                Sha256VerifyingInputStream verifying = new Sha256VerifyingInputStream(raw, expectedHash);
+                stream = new ServletInputStream() {
+                    @Override public int read() throws IOException { return verifying.read(); }
+                    @Override public int read(byte[] b, int off, int len) throws IOException {
+                        return verifying.read(b, off, len);
+                    }
+                    @Override public long skip(long n) throws IOException { return verifying.skip(n); }
+                    @Override public boolean isFinished() { return raw.isFinished(); }
+                    @Override public boolean isReady() { return raw.isReady(); }
+                    @Override public void setReadListener(ReadListener l) { raw.setReadListener(l); }
+                    @Override public void close() throws IOException { verifying.close(); }
+                };
+            }
+            return stream;
+        }
+
+        @Override
+        public java.io.BufferedReader getReader() throws IOException {
+            String enc = getCharacterEncoding();
+            java.nio.charset.Charset cs = enc != null ? java.nio.charset.Charset.forName(enc)
+                    : java.nio.charset.StandardCharsets.ISO_8859_1;
+            return new java.io.BufferedReader(new java.io.InputStreamReader(getInputStream(), cs));
         }
     }
 

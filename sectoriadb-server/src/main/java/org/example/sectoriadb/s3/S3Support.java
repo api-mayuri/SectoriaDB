@@ -2,6 +2,7 @@ package org.example.sectoriadb.s3;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.s3.auth.AwsChunkedInputStream;
+import org.example.sectoriadb.s3.auth.ChunkSigningContext;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -82,6 +83,8 @@ public final class S3Support {
         String sha = request.getHeader("x-amz-content-sha256");
         boolean chunked = (encoding != null && encoding.toLowerCase(Locale.ROOT).contains("aws-chunked"))
                 || (sha != null && sha.startsWith("STREAMING-"));
-        return chunked ? new AwsChunkedInputStream(raw) : raw;
+        if (!chunked) return raw;
+        Object ctx = request.getAttribute(ChunkSigningContext.REQUEST_ATTRIBUTE);
+        return new AwsChunkedInputStream(raw, ctx instanceof ChunkSigningContext c ? c : null);
     }
 }

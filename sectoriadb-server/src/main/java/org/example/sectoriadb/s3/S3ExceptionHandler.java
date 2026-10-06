@@ -1,5 +1,6 @@
 package org.example.sectoriadb.s3;
 
+import org.example.sectoriadb.s3.auth.PayloadVerificationException;
 import org.example.sectoriadb.s3.xml.S3Error;
 import org.apache.catalina.connector.ClientAbortException;
 import org.slf4j.Logger;
@@ -30,6 +31,19 @@ public class S3ExceptionHandler {
         return ResponseEntity.status(ex.getStatus())
                 .contentType(MediaType.APPLICATION_XML)
                 .body(error);
+    }
+
+    /**
+     * The request body did not match its signed SHA-256 / chunk signatures. Raised while the body is being
+     * read, i.e. before the object is committed.
+     */
+    @ExceptionHandler(PayloadVerificationException.class)
+    public ResponseEntity<S3Error> handlePayloadVerification(PayloadVerificationException ex) {
+        String requestId = UUID.randomUUID().toString();
+        log.warn("Rejected request body [{}]: {}", ex.getS3Code(), ex.getMessage());
+        return ResponseEntity.status(ex.getHttpStatus())
+                .contentType(MediaType.APPLICATION_XML)
+                .body(new S3Error(ex.getS3Code(), ex.getMessage(), null, requestId));
     }
 
     /**
