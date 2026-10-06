@@ -23,7 +23,7 @@
     </appender>
 
     <!-- Application logger: INFO to both -->
-    <logger name="org.example" level="INFO" additivity="false">
+    <logger name="org.example.sectoriadb" level="INFO" additivity="false">
         <appender-ref ref="CONSOLE"/>
         <appender-ref ref="FILE"/>
     </logger>
