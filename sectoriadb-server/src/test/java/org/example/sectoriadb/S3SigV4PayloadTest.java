@@ -179,6 +179,56 @@ class S3SigV4PayloadTest {
         assertFalse(exists("trailer2.txt"));
     }
 
+    private static String trailerLine(org.example.sectoriadb.checksum.ChecksumAlgorithm alg, byte[] data) {
+        return alg.headerName() + ":" + alg.encode(alg.compute(data));
+    }
+
+    @Test
+    void signedTrailerChecksumIsVerified_forEveryAlgorithm() throws Exception {
+        for (var alg : org.example.sectoriadb.checksum.ChecksumAlgorithm.values()) {
+            byte[][] chunks = { bytes("first part of the body,"), bytes(" and the second one") };
+            byte[] all = bytes("first part of the body, and the second one");
+            String type = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
+            var ok = client.putChunked("/sigbkt/tc-ok-" + alg, type, chunks, -1, false, trailerLine(alg, all), true);
+            assertEquals(200, ok.statusCode(), ok.body());
+            assertTrue(exists("tc-ok-" + alg));
+
+            // correctly signed trailer carrying the wrong checksum value: BadDigest, nothing committed
+            var bad = client.putChunked("/sigbkt/tc-bad-" + alg, type, chunks, -1, false, trailerLine(alg, bytes("other")), true);
+            assertEquals(400, bad.statusCode(), bad.body());
+            assertTrue(bad.body().contains("<Code>BadDigest</Code>"), bad.body());
+            assertTrue(bad.body().contains("The " + alg + " you specified did not match the calculated checksum."), bad.body());
+            assertFalse(exists("tc-bad-" + alg));
+        }
+    }
+
+    @Test
+    void trailerChecksumOfLargerThanOneChunkBodyIsVerified() throws Exception {
+        byte[] a = new byte[3000], b = new byte[3000], c = new byte[1500];
+        new java.util.Random(1).nextBytes(a);
+        new java.util.Random(2).nextBytes(b);
+        new java.util.Random(3).nextBytes(c);
+        byte[] all = java.nio.ByteBuffer.allocate(7500).put(a).put(b).put(c).array();
+        var alg = org.example.sectoriadb.checksum.ChecksumAlgorithm.CRC32C;
+        String type = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
+        assertEquals(200, client.putChunked("/sigbkt/tbig.bin", type, new byte[][]{a, b, c}, -1, false, trailerLine(alg, all), true).statusCode());
+        var bad = client.putChunked("/sigbkt/tbig2.bin", type, new byte[][]{a, b, c}, -1, false, trailerLine(alg, a), true);
+        assertEquals(400, bad.statusCode());
+        assertFalse(exists("tbig2.bin"));
+        var get = client.request("GET", "/sigbkt/tbig.bin", null, SigV4TestClient.sha256(new byte[0]), null);
+        assertEquals(200, get.statusCode());
+    }
+
+    @Test
+    void trailerChecksumNotAnnouncedInXAmzTrailerIsRejected() throws Exception {
+        byte[] data = bytes("announce me");
+        var r = client.putChunked("/sigbkt/tr-undeclared.txt", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER",
+                new byte[][]{data}, -1, false,
+                trailerLine(org.example.sectoriadb.checksum.ChecksumAlgorithm.CRC32C, data), true, false);
+        assertEquals(400, r.statusCode(), r.body());
+        assertFalse(exists("tr-undeclared.txt"));
+    }
+
     @Test
     void unsignedTrailerStreamingIsAccepted() throws Exception {
         // STREAMING-UNSIGNED-PAYLOAD-TRAILER: chunk framing without signatures, checksum in the trailer
