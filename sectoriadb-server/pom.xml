@@ -33,6 +33,15 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
+        <!-- Observability: health + Prometheus endpoints on a separate management port (versions from the Boot BOM) -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
         <!-- Jackson XML for S3 XML responses -->
         <dependency>
             <groupId>com.fasterxml.jackson.dataformat</groupId>

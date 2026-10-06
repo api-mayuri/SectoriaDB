@@ -1,6 +1,7 @@
 package org.example.sectoriadb.scheduler;
 
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.repository.BlobFileRepository;
@@ -31,9 +32,11 @@ public class AutoResizeScheduler {
     private final HashTableCache cache;
     private final ResizeService resizeService;
     private final StorageProperties props;
+    private final StorageMetrics metrics;
 
     public AutoResizeScheduler(BlobFileRepository blobRepo, HashTableCache cache,
-                                ResizeService resizeService, StorageProperties props) {
+                                ResizeService resizeService, StorageProperties props, StorageMetrics metrics) {
+        this.metrics       = metrics;
         this.blobRepo      = blobRepo;
         this.cache         = cache;
         this.resizeService = resizeService;
@@ -44,6 +47,7 @@ public class AutoResizeScheduler {
     public void checkFillRatios() {
         StorageProperties.AutoResize ar = props.getAutoResize();
         if (!ar.isEnabled()) return;
+        metrics.autoResizeRun();
 
         List<BlobFileEntity> blobs = blobRepo.findAll();
         if (blobs.isEmpty()) return;

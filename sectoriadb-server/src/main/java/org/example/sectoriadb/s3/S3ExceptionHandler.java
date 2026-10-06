@@ -2,6 +2,8 @@ package org.example.sectoriadb.s3;
 
 import org.example.sectoriadb.checksum.ChecksumMismatchException;
 import org.example.sectoriadb.repository.ManifestRepository;
+import org.example.sectoriadb.observability.ObservabilityAttributes;
+import org.example.sectoriadb.s3.auth.AuthFailure;
 import org.example.sectoriadb.s3.auth.PayloadVerificationException;
 import org.example.sectoriadb.s3.xml.S3Error;
 import org.apache.catalina.connector.ClientAbortException;
@@ -14,7 +16,6 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 
-import java.util.UUID;
 
 @RestControllerAdvice(basePackages = "org.example.sectoriadb.s3")
 public class S3ExceptionHandler {
@@ -26,9 +27,10 @@ public class S3ExceptionHandler {
      */
     @ExceptionHandler(S3Exception.class)
     public ResponseEntity<S3Error> handleS3Exception(S3Exception ex) {
-        String requestId = UUID.randomUUID().toString();
+        String requestId = S3Support.requestId();
         log.debug("S3 error [{}]: {} - {}", ex.getStatus().value(), ex.getCode(), ex.getMessage());
 
+        ObservabilityAttributes.noteErrorCode(ex.getCode());
         S3Error error = new S3Error(ex.getCode(), ex.getMessage(), ex.getResource(), requestId);
         return ResponseEntity.status(ex.getStatus())
                 .contentType(MediaType.APPLICATION_XML)
@@ -41,8 +43,12 @@ public class S3ExceptionHandler {
      */
     @ExceptionHandler(PayloadVerificationException.class)
     public ResponseEntity<S3Error> handlePayloadVerification(PayloadVerificationException ex) {
-        String requestId = UUID.randomUUID().toString();
+        String requestId = S3Support.requestId();
         log.warn("Rejected request body [{}]: {}", ex.getS3Code(), ex.getMessage());
+        ObservabilityAttributes.noteErrorCode(ex.getS3Code());
+        ObservabilityAttributes.noteAuthFailure(ex.getS3Code().equals("XAmzContentSHA256Mismatch")
+                ? AuthFailure.PAYLOAD_HASH_MISMATCH
+                : ex.getS3Code().equals("SignatureDoesNotMatch") ? AuthFailure.CHUNK_SIGNATURE_MISMATCH : null);
         return ResponseEntity.status(ex.getHttpStatus())
                 .contentType(MediaType.APPLICATION_XML)
                 .body(new S3Error(ex.getS3Code(), ex.getMessage(), null, requestId));
@@ -51,8 +57,9 @@ public class S3ExceptionHandler {
     /** A declared Content-MD5 / x-amz-checksum-* did not match the received bytes; nothing was committed. */
     @ExceptionHandler(ChecksumMismatchException.class)
     public ResponseEntity<S3Error> handleChecksumMismatch(ChecksumMismatchException ex) {
-        String requestId = UUID.randomUUID().toString();
+        String requestId = S3Support.requestId();
         log.warn("Rejected upload [BadDigest]: {}", ex.getMessage());
+        ObservabilityAttributes.noteErrorCode("BadDigest");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .contentType(MediaType.APPLICATION_XML)
                 .body(new S3Error("BadDigest", ex.getMessage(), null, requestId));
@@ -74,7 +81,7 @@ public class S3ExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<S3Error> handleIllegalArgument(IllegalArgumentException ex) {
         String msg = ex.getMessage() != null ? ex.getMessage() : "";
-        String requestId = UUID.randomUUID().toString();
+        String requestId = S3Support.requestId();
         log.debug("S3 error (IllegalArgumentException): {}", msg);
 
         // Classify based on message content
@@ -92,6 +99,7 @@ public class S3ExceptionHandler {
             status = HttpStatus.NOT_FOUND;
         }
 
+        ObservabilityAttributes.noteErrorCode(code);
         return ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_XML)
                 .body(new S3Error(code, msg, null, requestId));
@@ -100,7 +108,8 @@ public class S3ExceptionHandler {
     /** The bucket was deleted between the start of a PUT and its commit; nothing was committed. */
     @ExceptionHandler(ManifestRepository.PoolNotFoundException.class)
     public ResponseEntity<S3Error> handlePoolGone(ManifestRepository.PoolNotFoundException ex) {
-        String requestId = UUID.randomUUID().toString();
+        String requestId = S3Support.requestId();
+        ObservabilityAttributes.noteErrorCode("NoSuchBucket");
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .contentType(MediaType.APPLICATION_XML)
                 .body(new S3Error("NoSuchBucket", "The specified bucket does not exist", null, requestId));
@@ -112,10 +121,11 @@ public class S3ExceptionHandler {
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<S3Error> handleIllegalState(IllegalStateException ex) {
         String msg = ex.getMessage() != null ? ex.getMessage() : "";
-        String requestId = UUID.randomUUID().toString();
+        String requestId = S3Support.requestId();
         log.debug("S3 conflict (IllegalStateException): {}", msg);
 
         String code = "BucketNotEmpty";
+        ObservabilityAttributes.noteErrorCode(code);
         return ResponseEntity.status(HttpStatus.CONFLICT)
                 .contentType(MediaType.APPLICATION_XML)
                 .body(new S3Error(code, msg, null, requestId));
@@ -132,8 +142,9 @@ public class S3ExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<S3Error> handleGeneral(Exception ex) {
-        String requestId = UUID.randomUUID().toString();
+        String requestId = S3Support.requestId();
         log.error("S3 internal error [{}]: {}", requestId, ex.getMessage(), ex);
+        ObservabilityAttributes.noteErrorCode("InternalError");
 
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .contentType(MediaType.APPLICATION_XML)

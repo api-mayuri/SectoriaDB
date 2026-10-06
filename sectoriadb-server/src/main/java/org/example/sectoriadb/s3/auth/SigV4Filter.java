@@ -8,6 +8,8 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import org.example.sectoriadb.model.CredentialEntity;
+import org.example.sectoriadb.observability.ObservabilityAttributes;
+import org.example.sectoriadb.s3.S3Support;
 import org.example.sectoriadb.s3.access.AccessControlService;
 import org.example.sectoriadb.service.CredentialService;
 import org.slf4j.Logger;
@@ -88,7 +90,8 @@ public class SigV4Filter extends OncePerRequestFilter {
                 chain.doFilter(request, response);
                 return;
             }
-            sendError(response, 403, "AccessDenied",
+            request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, AuthFailure.OPEN_SETUP_DENIED);
+            sendError(request, response, 403, "AccessDenied",
                     "No S3 access keys are configured, so all requests are denied. "
                     + "Create a key with the shell command 'mk-key', or set SECTORIADB_S3_ACCESS_KEY and "
                     + "SECTORIADB_S3_SECRET_KEY (sectoriadb.s3.access-key / sectoriadb.s3.secret-key). "
@@ -115,7 +118,8 @@ public class SigV4Filter extends OncePerRequestFilter {
                 return;
             }
             // Anonymous access denied
-            sendError(response, 403, "AccessDenied",
+            request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, AuthFailure.ANONYMOUS_DENIED);
+            sendError(request, response, 403, "AccessDenied",
                     "Access Denied");
             return;
         }
@@ -125,7 +129,8 @@ public class SigV4Filter extends OncePerRequestFilter {
             verified = verifyHeaderAuth(request, authHeader, xAmzDate);
         } catch (AuthException e) {
             log.warn("SigV4 auth failed: {}", sanitize(e.getMessage()));
-            sendError(response, e.httpStatus, e.errorCode, e.getMessage());
+            request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, e.reason);
+            sendError(request, response, e.httpStatus, e.errorCode, e.getMessage());
             return;
         }
 
@@ -151,7 +156,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         String signature      = authParts.getOrDefault("Signature", "");
 
         String[] credParts = credential.split("/", 5);
-        if (credParts.length < 5) throw new AuthException(400, "InvalidArgument",
+        if (credParts.length < 5) throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument",
                 "Malformed credential in Authorization header");
 
         String accessKeyId    = credParts[0];
@@ -159,21 +164,18 @@ public class SigV4Filter extends OncePerRequestFilter {
         String regionFromCred = credParts[2];
         String service        = credParts[3];  // must be "s3"
         if (!"s3".equals(service) || !"aws4_request".equals(credParts[4])) {
-            throw new AuthException(400, "AuthorizationHeaderMalformed",
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "AuthorizationHeaderMalformed",
                     "The authorization header is malformed; the credential scope must end with s3/aws4_request.");
         }
 
         // Find secret key
-        CredentialEntity cred = credentialService.findByAccessKeyId(accessKeyId)
-                .filter(CredentialEntity::isEnabled)
-                .orElseThrow(() -> new AuthException(403, "InvalidAccessKeyId",
-                        "The access key ID does not exist: " + accessKeyId));
+        CredentialEntity cred = requireEnabledKey(accessKeyId);
 
         // Validate timestamp
         String timestamp = resolveTimestamp(request, xAmzDate);
         checkTimestamp(timestamp);
         if (!timestamp.startsWith(dateStr)) {
-            throw new AuthException(403, "SignatureDoesNotMatch",
+            throw new AuthException(AuthFailure.SIGNATURE_MISMATCH, 403, "SignatureDoesNotMatch",
                     "The credential date does not match the request date.");
         }
 
@@ -193,16 +195,16 @@ public class SigV4Filter extends OncePerRequestFilter {
         String payloadHash = resolvePayloadHash(request);
         if (SigV4Utils.UNSIGNED_PAYLOAD.equals(payloadHash) || STREAMING_UNSIGNED_TRAILER.equals(payloadHash)) {
             if (!allowUnsignedPayload) {
-                throw new AuthException(400, "InvalidRequest",
+                throw new AuthException(AuthFailure.UNSIGNED_PAYLOAD_DENIED, 400, "InvalidRequest",
                         "Unsigned payloads are not allowed by this server "
                         + "(sectoriadb.s3.auth.allow-unsigned-payload=false); send a signed payload hash.");
             }
         } else if (payloadHash.startsWith("STREAMING-")
                 && !STREAMING_SIGNED.equals(payloadHash) && !STREAMING_SIGNED_TRAILER.equals(payloadHash)) {
-            throw new AuthException(501, "NotImplemented", "Unsupported streaming payload type: " + sanitize(payloadHash));
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 501, "NotImplemented", "Unsupported streaming payload type: " + sanitize(payloadHash));
         } else if (!payloadHash.startsWith("STREAMING-") && !SigV4Utils.UNSIGNED_PAYLOAD.equals(payloadHash)
                 && !HEX_SHA256.matcher(payloadHash).matches()) {
-            throw new AuthException(400, "InvalidArgument", "x-amz-content-sha256 must be UNSIGNED-PAYLOAD, "
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "x-amz-content-sha256 must be UNSIGNED-PAYLOAD, "
                     + "STREAMING-*, or a hex SHA-256 digest");
         }
 
@@ -226,7 +228,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         if (!constantTimeEquals(signature, expectedSignature)) {
             // Never log the expected signature, the signing key or the secret: not even at debug level.
             log.debug("Signature mismatch for access key {}", sanitize(accessKeyId));
-            throw new AuthException(403, "SignatureDoesNotMatch",
+            throw new AuthException(AuthFailure.SIGNATURE_MISMATCH, 403, "SignatureDoesNotMatch",
                     "The request signature we calculated does not match the signature you provided.");
         }
 
@@ -252,7 +254,8 @@ public class SigV4Filter extends OncePerRequestFilter {
             return true;
         } catch (AuthException e) {
             log.warn("Presigned URL auth failed: {}", sanitize(e.getMessage()));
-            sendError(response, e.httpStatus, e.errorCode, e.getMessage());
+            request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, e.reason);
+            sendError(request, response, e.httpStatus, e.errorCode, e.getMessage());
             return false;
         }
     }
@@ -268,12 +271,12 @@ public class SigV4Filter extends OncePerRequestFilter {
         String signature  = params.getOrDefault("X-Amz-Signature", "");
 
         if (!SigV4Utils.ALGORITHM.equals(algorithm)) {
-            throw new AuthException(400, "InvalidArgument", "Unsupported algorithm: " + algorithm);
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Unsupported algorithm: " + algorithm);
         }
 
         String[] credParts = credential.split("/", 5);
         if (credParts.length < 5) {
-            throw new AuthException(400, "InvalidArgument", "Malformed X-Amz-Credential");
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Malformed X-Amz-Credential");
         }
 
         String accessKeyId    = credParts[0];
@@ -281,19 +284,16 @@ public class SigV4Filter extends OncePerRequestFilter {
         String regionFromCred = credParts[2];
         String service        = credParts[3];
         if (!"s3".equals(service) || !"aws4_request".equals(credParts[4])) {
-            throw new AuthException(400, "AuthorizationQueryParametersError",
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "AuthorizationQueryParametersError",
                     "The credential scope must end with s3/aws4_request.");
         }
 
-        CredentialEntity cred = credentialService.findByAccessKeyId(accessKeyId)
-                .filter(CredentialEntity::isEnabled)
-                .orElseThrow(() -> new AuthException(403, "InvalidAccessKeyId",
-                        "The access key ID does not exist: " + accessKeyId));
+        CredentialEntity cred = requireEnabledKey(accessKeyId);
 
         // Check expiry
         checkPresignedExpiry(xAmzDate, expires);
         if (!xAmzDate.startsWith(dateStr)) {
-            throw new AuthException(403, "SignatureDoesNotMatch",
+            throw new AuthException(AuthFailure.SIGNATURE_MISMATCH, 403, "SignatureDoesNotMatch",
                     "The credential date does not match X-Amz-Date.");
         }
 
@@ -328,12 +328,23 @@ public class SigV4Filter extends OncePerRequestFilter {
         String expectedSig = SigV4Utils.computeSignature(signingKey, stringToSign);
 
         if (!constantTimeEquals(signature, expectedSig)) {
-            throw new AuthException(403, "SignatureDoesNotMatch",
+            throw new AuthException(AuthFailure.SIGNATURE_MISMATCH, 403, "SignatureDoesNotMatch",
                     "Presigned URL signature does not match.");
         }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    private CredentialEntity requireEnabledKey(String accessKeyId) throws AuthException {
+        CredentialEntity cred = credentialService.findByAccessKeyId(accessKeyId).orElseThrow(() ->
+                new AuthException(AuthFailure.UNKNOWN_KEY, 403, "InvalidAccessKeyId",
+                        "The access key ID does not exist: " + sanitize(accessKeyId)));
+        if (!cred.isEnabled()) {
+            throw new AuthException(AuthFailure.DISABLED_KEY, 403, "InvalidAccessKeyId",
+                    "The access key ID does not exist: " + sanitize(accessKeyId));
+        }
+        return cred;
+    }
 
     private Map<String, String> parseAuthHeader(String authHeader) throws AuthException {
         // Strip "AWS4-HMAC-SHA256 " prefix
@@ -347,7 +358,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             }
         }
         if (!result.containsKey("Credential") || !result.containsKey("Signature")) {
-            throw new AuthException(400, "InvalidArgument", "Malformed Authorization header");
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Malformed Authorization header");
         }
         return result;
     }
@@ -377,12 +388,12 @@ public class SigV4Filter extends OncePerRequestFilter {
                 return DATE_FMT.format(instant);
             } catch (java.time.format.DateTimeParseException e) {
                 log.debug("Failed to parse Date header: {}", date);
-                throw new AuthException(400, "MissingSecurityHeader",
+                throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "MissingSecurityHeader",
                         "Request must include x-amz-date or Date header");
             }
         }
 
-        throw new AuthException(400, "MissingSecurityHeader",
+        throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "MissingSecurityHeader",
                 "Request must include x-amz-date or Date header");
     }
 
@@ -391,11 +402,11 @@ public class SigV4Filter extends OncePerRequestFilter {
             Instant requestTime = Instant.from(DATE_FMT.parse(timestamp));
             long diffSeconds = Math.abs(Instant.now().getEpochSecond() - requestTime.getEpochSecond());
             if (diffSeconds > SKEW_TOLERANCE_SECONDS) {
-                throw new AuthException(403, "RequestTimeTooSkewed",
+                throw new AuthException(AuthFailure.CLOCK_SKEW, 403, "RequestTimeTooSkewed",
                         "The difference between the request time and the current time is too large.");
             }
         } catch (java.time.format.DateTimeParseException e) {
-            throw new AuthException(400, "InvalidArgument", "Cannot parse timestamp: " + timestamp);
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Cannot parse timestamp: " + timestamp);
         }
     }
 
@@ -406,7 +417,7 @@ public class SigV4Filter extends OncePerRequestFilter {
 
             // Check X-Amz-Expires is within valid range (1..604800 seconds = 1 second to 7 days)
             if (expiresSeconds < 1 || expiresSeconds > 604800) {
-                throw new AuthException(400, "InvalidArgument",
+                throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument",
                         "X-Amz-Expires must be between 1 and 604800 seconds");
             }
 
@@ -414,17 +425,17 @@ public class SigV4Filter extends OncePerRequestFilter {
             long nowEpoch = Instant.now().getEpochSecond();
             long requestEpoch = requestTime.getEpochSecond();
             if (requestEpoch > nowEpoch + 900) {  // 15 minutes = 900 seconds
-                throw new AuthException(403, "RequestTimeTooSkewed",
+                throw new AuthException(AuthFailure.CLOCK_SKEW, 403, "RequestTimeTooSkewed",
                         "The request time is too far in the future");
             }
 
             // Check if token has expired
             Instant expiry = requestTime.plusSeconds(expiresSeconds);
             if (Instant.now().isAfter(expiry)) {
-                throw new AuthException(403, "ExpiredToken", "The provided token has expired.");
+                throw new AuthException(AuthFailure.EXPIRED_PRESIGN, 403, "ExpiredToken", "The provided token has expired.");
             }
         } catch (NumberFormatException | java.time.format.DateTimeParseException e) {
-            throw new AuthException(400, "InvalidArgument", "Cannot parse presigned URL parameters");
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Cannot parse presigned URL parameters");
         }
     }
 
@@ -489,11 +500,12 @@ public class SigV4Filter extends OncePerRequestFilter {
         }
     }
 
-    private void sendError(HttpServletResponse response, int status,
+    private void sendError(HttpServletRequest request, HttpServletResponse response, int status,
                            String code, String message) throws IOException {
         response.setStatus(status);
         response.setContentType("application/xml;charset=UTF-8");
-        String requestId = UUID.randomUUID().toString();
+        String requestId = S3Support.requestId();
+        ObservabilityAttributes.noteErrorCode(request, code);
         try (PrintWriter w = response.getWriter()) {
             w.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
             w.write("<Error><Code>" + code + "</Code>");
@@ -511,11 +523,13 @@ public class SigV4Filter extends OncePerRequestFilter {
     // ── Inner exception ───────────────────────────────────────────────────────
 
     static class AuthException extends Exception {
+        final AuthFailure reason;
         final int httpStatus;
         final String errorCode;
 
-        AuthException(int httpStatus, String errorCode, String message) {
+        AuthException(AuthFailure reason, int httpStatus, String errorCode, String message) {
             super(message);
+            this.reason = reason;
             this.httpStatus = httpStatus;
             this.errorCode  = errorCode;
         }

@@ -25,7 +25,11 @@ public final class S3Support {
 
     private S3Support() {}
 
-    public static String requestId() { return UUID.randomUUID().toString(); }
+    /** The id of the request being served (MDC {@code requestId}, set by the observability filter); a fresh id outside a request. */
+    public static String requestId() {
+        String id = org.slf4j.MDC.get("requestId");
+        return id != null ? id : org.example.sectoriadb.observability.RequestIds.newRequestId();
+    }
 
     /** RFC 1123 date for Last-Modified headers. */
     public static String httpDate(Instant t) { return HTTP_DATE.format(t); }
