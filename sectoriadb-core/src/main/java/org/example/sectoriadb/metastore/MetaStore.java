@@ -61,6 +61,7 @@ public final class MetaStore implements AutoCloseable {
     // free-page state; only touched while holding the writer permit
     final LongList available = new LongList();                  // reusable right now
     final TreeMap<Long, long[]> pending = new TreeMap<>();      // freeing txId -> pages, waiting for readers
+    private final TreeMap<Long, LongList> restartPending = new TreeMap<>();
     long[] chainPages = new long[0];                            // pages of the persisted freelist chain
 
     volatile CommitHook commitHook;
@@ -196,13 +197,28 @@ public final class MetaStore implements AutoCloseable {
             chain.add(id);
             for (int i = 0; i < n; i++) {
                 long page = b.getLong(16 + i * 16);
+                long group = b.getLong(24 + i * 16);
                 if (page < 2 || page >= s.pageCount()) throw new CorruptedPageException(id, "free page out of range");
-                available.push(page);   // nobody is reading after a restart: every pending page is reusable
+                if (group != 0 && group >= s.txId()) {
+                    // freed by the newest txn: the previous meta page (the fallback snapshot) still references it
+                    restartPending.computeIfAbsent(group, k -> new LongList()).push(page);
+                } else {
+                    available.push(page);   // no readers after a restart and no meta references it any more
+                }
             }
             id = b.getLong(8);
         }
         chainPages = chain.stream().mapToLong(Long::longValue).toArray();
-        freeCountApprox = available.size();
+        long kept = 0;
+        for (Map.Entry<Long, LongList> e : restartPending.entrySet()) {
+            LongList l = e.getValue();
+            long[] arr = new long[l.size()];
+            for (int i = 0; i < arr.length; i++) arr[i] = l.get(i);
+            pending.put(e.getKey(), arr);
+            kept += arr.length;
+        }
+        restartPending.clear();
+        freeCountApprox = available.size() + kept;
     }
 
     // ---------------------------------------------------------------- transactions
@@ -237,8 +253,10 @@ public final class MetaStore implements AutoCloseable {
                 s = committed;
                 minReader = readers.isEmpty() ? s.txId() : Math.min(readers.firstKey(), s.txId());
             }
-            // pages freed by txn U are unreferenced for every snapshot >= U
-            while (!pending.isEmpty() && pending.firstKey() <= minReader) {
+            // Pages freed by txn U are unreferenced by every snapshot >= U. They are reused only once U is
+            // strictly older than the oldest snapshot still needed: the committed one and also the one in the
+            // other meta slot, which open() falls back to if the newest meta page turns out to be damaged.
+            while (!pending.isEmpty() && pending.firstKey() < minReader) {
                 for (long p : pending.pollFirstEntry().getValue()) available.push(p);
             }
             return new WriteTxn(this, s);

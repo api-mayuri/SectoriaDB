@@ -198,4 +198,47 @@ class CrashSafetyTest {
         }
         assertTrue(crashes > 5, "test must actually crash: " + crashes);
     }
+
+    /** Rewrites many keys per commit so that freed pages are reused aggressively. */
+    private static void churn(MetaStore s, int round) {
+        s.writeVoid(tx -> {
+            BTree t = tx.tree("churn");
+            for (int i = 0; i < 200; i++) {
+                t.put(("key-" + i).getBytes(), ("r" + round + "-" + i + "-" + "x".repeat(40)).getBytes());
+            }
+        });
+    }
+
+    private static void assertChurnRound(MetaStore s, int round) {
+        s.read(tx -> {
+            BTree t = tx.tree("churn");
+            for (int i = 0; i < 200; i++) {
+                assertEquals("r" + round + "-" + i + "-" + "x".repeat(40),
+                        new String(t.get(("key-" + i).getBytes()).orElseThrow()));
+            }
+            return null;
+        });
+    }
+
+    @Test
+    void fallbackSnapshotSurvivesPageReuseByTheNextCommit() throws IOException {
+        Path f = dir.resolve("reuse.db");
+        long lastTx;
+        try (MetaStore s = MetaStore.open(f, OPTS)) {
+            for (int r = 1; r <= 30; r++) churn(s, r);
+            lastTx = s.stats().lastTxId();
+        }
+        // reopen and commit once more: pages freed by the newest txn must still not be reused after a restart
+        try (MetaStore s = MetaStore.open(f, OPTS)) {
+            churn(s, 31);
+            lastTx = s.stats().lastTxId();
+        }
+        // destroy the newest meta page; the store must fall back to round 30 with every page intact
+        scribble(f, (lastTx % 2) * 1024L, 1024, 0);
+        try (MetaStore s = MetaStore.open(f, OPTS)) {
+            assertEquals(lastTx - 1, s.stats().lastTxId());
+            assertChurnRound(s, 30);
+            s.verify();
+        }
+    }
 }
