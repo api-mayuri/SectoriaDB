@@ -55,10 +55,7 @@ public class S3BucketController {
     public ResponseEntity<Void> createBucket(@PathVariable String bucket,
                                              HttpServletRequest request) throws IOException {
         // PUT /bucket?<subresource> that no other handler claimed must not silently become CreateBucket
-        if (request.getQueryString() != null && !request.getQueryString().isBlank()) {
-            throw new S3Exception(HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
-                    "A header or query parameter you provided implies functionality that is not implemented");
-        }
+        S3Support.requireOnlyQueryParams(request, "x-id");
         // Validate bucket name before attempting to create
         lookup.validateBucketName(bucket);
 
@@ -88,7 +85,9 @@ public class S3BucketController {
     // ── DeleteBucket ──────────────────────────────────────────────────────────
 
     @DeleteMapping({"/{bucket}", "/{bucket}/"})
-    public ResponseEntity<Void> deleteBucket(@PathVariable String bucket) throws java.io.IOException {
+    public ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) throws java.io.IOException {
+        // DELETE /bucket?tagging|lifecycle|cors|... that no sub-resource handler claimed must NOT delete the bucket
+        S3Support.requireOnlyQueryParams(request, "x-id");
         try {
             poolService.deleteBucket(bucket);
         } catch (IllegalStateException e) {

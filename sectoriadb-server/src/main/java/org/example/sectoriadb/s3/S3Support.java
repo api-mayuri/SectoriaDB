@@ -56,6 +56,28 @@ public final class S3Support {
         rejectIfPresent(request, UNSUPPORTED_OBJECT_SUBRESOURCES);
     }
 
+    /**
+     * Writes and deletes must not carry query parameters that nobody handles. A request such as
+     * {@code DELETE /bucket?tagging} or {@code PUT /bucket/key?retention} that no sub-resource handler claims would
+     * otherwise be executed as the plain DeleteBucket / DeleteObject / PutObject and destroy data. Only the names in
+     * {@code allowed} (for example {@code x-id}, which the AWS SDKs for JavaScript and Go add to every request) pass.
+     */
+    public static void requireOnlyQueryParams(jakarta.servlet.http.HttpServletRequest request, String... allowed) {
+        String q = request.getQueryString();
+        if (q == null || q.isBlank()) return;
+        for (String pair : q.split("&")) {
+            if (pair.isEmpty()) continue;
+            int eq = pair.indexOf('=');
+            String name = java.net.URLDecoder.decode(eq < 0 ? pair : pair.substring(0, eq), java.nio.charset.StandardCharsets.UTF_8);
+            boolean ok = false;
+            for (String a : allowed) if (a.equals(name)) { ok = true; break; }
+            if (!ok) {
+                throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
+                        "A header or query parameter you provided implies functionality that is not implemented");
+            }
+        }
+    }
+
     private static void rejectIfPresent(jakarta.servlet.http.HttpServletRequest request, java.util.Set<String> names) {
         String q = request.getQueryString();
         if (q == null || q.isEmpty()) return;

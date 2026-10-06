@@ -22,7 +22,7 @@ for s in $SUITES; do
   echo "== mint $s (timeout ${TIMEOUT}s)"
   timeout "$TIMEOUT" docker run --rm --name "mint-$s" --network "$WARP_NETWORK" \
     -e SERVER_ENDPOINT="$MINT_ENDPOINT" -e ACCESS_KEY="$WARP_ACCESS_KEY" -e SECRET_KEY="$WARP_SECRET_KEY" \
-    -e ENABLE_HTTPS=0 -e SERVER_REGION=us-east-1 -e MINT_MODE=core \
+    -e ENABLE_HTTPS=0 -e SERVER_REGION=us-east-1 -e MINT_MODE=core -e RUN_ON_FAIL=1 \
     -v "$OUT/$s:/mint/log" "$MINT_IMAGE" "$s" > "$OUT/$s/stdout.txt" 2>&1
   rc=$?
   [ "$rc" -eq 124 ] && { echo "   timed out"; docker rm -f "mint-$s" >/dev/null 2>&1; }

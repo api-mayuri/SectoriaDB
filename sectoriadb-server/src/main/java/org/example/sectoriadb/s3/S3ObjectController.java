@@ -82,11 +82,9 @@ public class S3ObjectController {
 
         String objectKey = S3Support.extractKey(request, bucket);
         lookup.validateObjectKey(objectKey);
-        // UploadPart needs both parameters (the multipart controller maps that pair); one of them alone must not
-        // silently overwrite the object with the part body
-        if (request.getParameter("uploadId") != null || request.getParameter("partNumber") != null) {
-            throw S3Exception.invalidArgument("UploadPart requires both partNumber and uploadId");
-        }
+        // UploadPart (partNumber + uploadId) and the sub-resource writes (?retention, ?legal-hold, ...) have their own
+        // handlers; a request that reaches PutObject with any of those parameters must not overwrite the object
+        S3Support.requireOnlyQueryParams(request, "x-id");
 
         // Verify bucket exists; throws NoSuchBucket if not
         PoolEntity pool = lookup.requireBucket(bucket);
@@ -359,6 +357,7 @@ public class S3ObjectController {
             @PathVariable String bucket,
             HttpServletRequest request) {
 
+        S3Support.requireOnlyQueryParams(request, "x-id", "versionId");
         String objectKey = S3Support.extractKey(request, bucket);
         fileService.deleteObject(bucket, objectKey);   // idempotent: deleting a missing key is a 204 as in S3
 

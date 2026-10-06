@@ -453,7 +453,7 @@ class S3ApiRegressionTest {
         mkBucket("put-uid");
         put("put-uid", "k", "original".getBytes());
         var r = send(HttpRequest.newBuilder(uri("/put-uid/k?uploadId=nope")).PUT(BodyPublishers.ofString("clobber")));
-        assertEquals(400, r.statusCode());
+        assertEquals(501, r.statusCode());
         assertEquals("original", new String(get("put-uid", "k").body()));
     }
 
@@ -488,5 +488,28 @@ class S3ApiRegressionTest {
         assertEquals("MalformedXML", code(r));
         var junk = send(HttpRequest.newBuilder(uri("/mp-empty/k?uploadId=" + m.group(1))).POST(BodyPublishers.ofString("not xml")));
         assertEquals(400, junk.statusCode());
+    }
+
+    /**
+     * minio/mint (minio-java deleteBucketTags): DELETE /bucket?tagging fell through to DeleteBucket and removed the
+     * (empty) bucket; DELETE /bucket/key?retention would have removed the object.
+     */
+    @Test
+    void deleteWithUnclaimedSubresourceDoesNotDestroyTheBucketOrTheObject() throws Exception {
+        mkBucket("del-sub");
+        for (String q : new String[]{"tagging", "lifecycle", "cors", "encryption", "website"}) {
+            var r = send(HttpRequest.newBuilder(uri("/del-sub?" + q)).DELETE());
+            assertEquals(501, r.statusCode(), q);
+            assertEquals(200, send(HttpRequest.newBuilder(uri("/del-sub")).GET()).statusCode(), "bucket must survive DELETE ?" + q);
+        }
+        put("del-sub", "k", "data".getBytes());
+        assertEquals(501, send(HttpRequest.newBuilder(uri("/del-sub/k?retention")).DELETE()).statusCode());
+        assertEquals(501, send(HttpRequest.newBuilder(uri("/del-sub/k?retention")).PUT(BodyPublishers.ofString("<x/>"))).statusCode());
+        assertEquals("data", new String(get("del-sub", "k").body()));
+        // the AWS SDKs for JavaScript / Go add x-id=<Operation> to every request: that must keep working
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/del-xid?x-id=CreateBucket")).PUT(BodyPublishers.noBody())).statusCode());
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/del-xid/o?x-id=PutObject")).PUT(BodyPublishers.ofString("v"))).statusCode());
+        assertEquals(204, send(HttpRequest.newBuilder(uri("/del-xid/o?x-id=DeleteObject")).DELETE()).statusCode());
+        assertEquals(204, send(HttpRequest.newBuilder(uri("/del-xid?x-id=DeleteBucket")).DELETE()).statusCode());
     }
 }
