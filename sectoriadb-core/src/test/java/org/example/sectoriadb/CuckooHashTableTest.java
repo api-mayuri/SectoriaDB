@@ -43,7 +43,7 @@ class CuckooHashTableTest {
         }
         BlobFile blobFile = new BlobFile("test", blobPath, blobSize);
         hasher = new MurmurBytesHasher();
-        table  = new CuckooHashTable(blobFile, new FileChannelStorageIOEngine(), hasher, NUM_BUCKETS, CHUNK_SIZE);
+        table  = new CuckooHashTable(blobFile, new FileChannelStorageIOEngine(false), hasher, NUM_BUCKETS, CHUNK_SIZE);
     }
 
     @Test
@@ -110,7 +110,7 @@ class CuckooHashTableTest {
         // Create a brand-new table instance on the same file
         BlobFile blobFile = table.getBlobFile();
         CuckooHashTable table2 = new CuckooHashTable(
-                blobFile, new FileChannelStorageIOEngine(), hasher, NUM_BUCKETS, CHUNK_SIZE);
+                blobFile, new FileChannelStorageIOEngine(false), hasher, NUM_BUCKETS, CHUNK_SIZE);
         table2.loadMetadataFromDisk();
 
         assertTrue(table2.lookup(key).isPresent(),

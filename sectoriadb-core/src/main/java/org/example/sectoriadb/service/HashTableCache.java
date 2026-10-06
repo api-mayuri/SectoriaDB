@@ -6,6 +6,7 @@ import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 import org.example.sectoriadb.service.impl.FileChannelStorageIOEngine;
 import org.example.sectoriadb.tools.MurmurBytesHasher;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -13,6 +14,7 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -51,8 +53,26 @@ public class HashTableCache {
 
     /** Removes a blob file from the cache (call before deleting or replacing it). */
     public void evict(String blobId) {
-        if (cache.remove(blobId) != null) {
+        CuckooHashTable table = cache.remove(blobId);
+        if (table != null) {
             log.info("Evicted table from cache: blobId={}", blobId);
+            closeQuietly(table, blobId);
+        }
+    }
+
+    /** Closes all cached tables (and their file channels) on shutdown. */
+    @PreDestroy
+    public void closeAll() {
+        for (String id : List.copyOf(cache.keySet())) {
+            evict(id);
+        }
+    }
+
+    private void closeQuietly(CuckooHashTable table, String blobId) {
+        try {
+            table.close();
+        } catch (IOException e) {
+            log.warn("Could not close table: blobId={}: {}", blobId, e.getMessage());
         }
     }
 
@@ -60,9 +80,14 @@ public class HashTableCache {
         log.info("Loading CuckooHashTable: blobId={} path={}", e.getId(), e.getFilePath());
         BlobFile bf = new BlobFile(e.getId(), Path.of(e.getFilePath()), e.getTotalBytes());
         CuckooHashTable table = new CuckooHashTable(
-                bf, new FileChannelStorageIOEngine(), new MurmurBytesHasher(),
+                bf, new FileChannelStorageIOEngine(props.isFsync()), new MurmurBytesHasher(),
                 e.getNumBuckets(), e.getChunkSize(), props.getMaxEvictions());
-        table.loadMetadataFromDisk();
+        try {
+            table.loadMetadataFromDisk();
+        } catch (IOException | RuntimeException ex) {
+            closeQuietly(table, e.getId());
+            throw ex;
+        }
         log.debug("Loaded: blobId={} fill={}%", e.getId(), String.format("%.1f", table.getFillStats().fillPercent()));
         return table;
     }

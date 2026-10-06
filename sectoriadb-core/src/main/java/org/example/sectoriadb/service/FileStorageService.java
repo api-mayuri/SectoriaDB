@@ -3,7 +3,6 @@ package org.example.sectoriadb.service;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.model.ChunkLocation;
 import org.example.sectoriadb.model.FileManifest;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.service.impl.BlobFileWriteService;
@@ -29,7 +28,6 @@ import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 @Service
@@ -127,19 +125,16 @@ public class FileStorageService {
             int lastDecile = -1;
             for (int i = 0; i < total; i++) {
                 long key = keys.get(i);
-                Optional<ChunkLocation> loc = table.lookup(key);
-                if (loc.isEmpty()) {
-                    throw new IOException("Chunk not found: key=0x" + Long.toHexString(key) + " index=" + i);
-                }
                 boolean isLast = (i == total - 1);
                 int readSize = isLast ? entity.getLastChunkSize() : entity.getChunkSize();
-                out.write(table.readChunk(loc.get(), readSize));
+                out.write(table.readChunkByKey(key, readSize).orElseThrow(() ->
+                        new IOException("Chunk not found: key=0x" + Long.toHexString(key))));
 
                 if (total >= 10) {
                     int decile = (int)(10.0 * (i + 1) / total);
                     if (decile > lastDecile) {
                         lastDecile = decile;
-                        System.out.printf("  %3d%% (%d/%d chunks)%n", decile * 10, i + 1, total);
+                        log.debug("Restoring {}: {}% ({}/{} chunks)", manifestId, decile * 10, i + 1, total);
                     }
                 }
             }
@@ -187,14 +182,11 @@ public class FileStorageService {
             long written = 0;
             for (int idx = firstIdx; idx <= lastIdx; idx++) {
                 long key = keys.get(idx);
-                Optional<ChunkLocation> loc = table.lookup(key);
-                if (loc.isEmpty()) {
-                    throw new IOException("Chunk not found: key=0x" + Long.toHexString(key) + " index=" + idx);
-                }
                 boolean isFileLast = (idx == totalChunks - 1);
                 int actualSize = isFileLast ? entity.getLastChunkSize() : chunkSize;
 
-                ByteBuffer chunk = table.readChunk(loc.get(), actualSize);
+                ByteBuffer chunk = table.readChunkByKey(key, actualSize).orElseThrow(() ->
+                        new IOException("Chunk not found: key=0x" + Long.toHexString(key)));
                 int trimStart = (idx == firstIdx) ? (int)(startByte % chunkSize) : 0;
                 long remaining = lengthBytes - written;
                 int trimLen    = (int) Math.min(actualSize - trimStart, remaining);
@@ -259,13 +251,10 @@ public class FileStorageService {
         int total = keys.size();
         for (int i = 0; i < total; i++) {
             long key = keys.get(i);
-            Optional<ChunkLocation> loc = table.lookup(key);
-            if (loc.isEmpty()) {
-                throw new IOException("Chunk not found: key=0x" + Long.toHexString(key));
-            }
             boolean isLast = (i == total - 1);
             int readSize = isLast ? entity.getLastChunkSize() : entity.getChunkSize();
-            ByteBuffer chunk = table.readChunk(loc.get(), readSize);
+            ByteBuffer chunk = table.readChunkByKey(key, readSize).orElseThrow(() ->
+                    new IOException("Chunk not found: key=0x" + Long.toHexString(key)));
             out.write(chunk.array(), chunk.arrayOffset() + chunk.position(), chunk.remaining());
         }
     }
@@ -288,14 +277,11 @@ public class FileStorageService {
         long written = 0;
         for (int idx = firstIdx; idx <= lastIdx; idx++) {
             long key = keys.get(idx);
-            Optional<ChunkLocation> loc = table.lookup(key);
-            if (loc.isEmpty()) {
-                throw new IOException("Chunk not found: key=0x" + Long.toHexString(key));
-            }
             boolean isFileLast = (idx == totalChunks - 1);
             int actualSize = isFileLast ? entity.getLastChunkSize() : chunkSize;
 
-            ByteBuffer chunk = table.readChunk(loc.get(), actualSize);
+            ByteBuffer chunk = table.readChunkByKey(key, actualSize).orElseThrow(() ->
+                    new IOException("Chunk not found: key=0x" + Long.toHexString(key)));
             int trimStart = (idx == firstIdx) ? (int)(startByte % chunkSize) : 0;
             long remaining = lengthBytes - written;
             int trimLen    = (int) Math.min(actualSize - trimStart, remaining);

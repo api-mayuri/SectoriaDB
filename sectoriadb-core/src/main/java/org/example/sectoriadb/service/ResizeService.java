@@ -96,7 +96,7 @@ public class ResizeService {
 
         BlobFile newBlobFile = new BlobFile(newId, newPath, newSize);
         CuckooHashTable newTable = new CuckooHashTable(
-                newBlobFile, new FileChannelStorageIOEngine(), new MurmurBytesHasher(),
+                newBlobFile, new FileChannelStorageIOEngine(props.isFsync()), new MurmurBytesHasher(),
                 newNumBuckets, chunkSize, props.getMaxEvictions());
 
         // Migrate every active chunk from old → new
@@ -114,16 +114,20 @@ public class ResizeService {
                     int pct = (int)(100.0 * done / activeSlots);
                     if (pct / 10 > lastPct[0] / 10) {
                         lastPct[0] = pct;
-                        System.out.printf("  Migration: %d%% (%d/%d chunks)%n", pct, done, activeSlots);
+                        log.debug("Migration: {}% ({}/{} chunks)", pct, done, activeSlots);
                     }
                 }
             });
         } catch (UncheckedIOException e) {
+            try { newTable.close(); } catch (IOException ignored) {}
             try { Files.deleteIfExists(newPath); } catch (IOException ignored) {}
             opLog.failure("RESIZE", blobId, oldEntity.getFileName(), e.getCause(),
                     System.currentTimeMillis() - t0);
             throw e.getCause();
         }
+
+        // The cache opens its own table for the new blob on first use; release our channel.
+        newTable.close();
 
         // Persist new entity and rewire manifests
         BlobFileEntity newEntity = commitResize(oldEntity, newId, newName, newPath.toString(),
