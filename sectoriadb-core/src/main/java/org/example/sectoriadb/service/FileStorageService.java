@@ -1,5 +1,10 @@
 package org.example.sectoriadb.service;
 
+import org.example.sectoriadb.checksum.ChecksumAlgorithm;
+import org.example.sectoriadb.checksum.ChecksumType;
+import org.example.sectoriadb.checksum.MultiDigest;
+import org.example.sectoriadb.checksum.MultiDigestInputStream;
+import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.StorageKind;
@@ -10,7 +15,9 @@ import org.example.sectoriadb.model.FileManifest;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.service.impl.BlobFileWriteService;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
+import org.example.sectoriadb.service.impl.ChunkNotFoundException;
 import org.example.sectoriadb.service.impl.DefaultChunkingService;
+import org.example.sectoriadb.service.impl.ObjectCorruptedException;
 import org.example.sectoriadb.tools.XxHash64BytesHasher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,14 +31,13 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import java.security.DigestInputStream;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.EnumSet;
 import java.util.UUID;
+import java.util.zip.CRC32C;
 
 @Service
 public class FileStorageService {
@@ -59,26 +65,34 @@ public class FileStorageService {
     // ── Store ─────────────────────────────────────────────────────────────────
 
     public ManifestEntity store(Path filePath, PoolEntity pool) throws IOException {
-        long t0 = System.currentTimeMillis();
-        log.info("Storing file: {} → pool '{}'", filePath.toAbsolutePath(), pool.getName());
-
         if (!Files.exists(filePath)) {
             throw new IllegalArgumentException("File not found: " + filePath.toAbsolutePath());
         }
+        MultiDigest digest = new MultiDigest(false, EnumSet.of(ChecksumAlgorithm.CRC32C));
+        try (InputStream in = new MultiDigestInputStream(Files.newInputStream(filePath), digest)) {
+            in.transferTo(java.io.OutputStream.nullOutputStream());
+        }
+        return store(filePath, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
+    }
+
+    /** Stores a file whose whole-object CRC32C (base64) is already known. */
+    private ManifestEntity store(Path filePath, PoolEntity pool, String crc32c) throws IOException {
+        long t0 = System.currentTimeMillis();
+        log.info("Storing file: {} → pool '{}'", filePath.toAbsolutePath(), pool.getName());
 
         long size = Files.size(filePath);
         if (size == 0) {
-            return storeEmpty(filePath, pool, t0);
+            return storeEmpty(filePath, pool, crc32c, t0);
         }
         if (size < props.getDefaultChunkSize() && size <= SmallObjectBlob.MAX_RECORD_DATA) {
-            return storeSmall(filePath, (int) size, pool, t0);
+            return storeSmall(filePath, (int) size, pool, crc32c, t0);
         }
-        return storeChunked(filePath, pool, t0);
+        return storeChunked(filePath, pool, crc32c, t0);
     }
 
     /** Zero-byte object: no blob, no chunks — the manifest alone describes it. */
-    private ManifestEntity storeEmpty(Path filePath, PoolEntity pool, long t0) {
-        ManifestEntity entity = newManifest(filePath, pool, StorageKind.EMPTY);
+    private ManifestEntity storeEmpty(Path filePath, PoolEntity pool, String crc32c, long t0) {
+        ManifestEntity entity = newManifest(filePath, pool, StorageKind.EMPTY, crc32c);
         manifestRepo.save(entity);
         opLog.success("STORE", entity.getId(), entity.getSourceFileName(),
                 Map.of("poolId", pool.getId(), "totalBytes", 0L, "storageKind", "EMPTY"),
@@ -92,12 +106,12 @@ public class FileStorageService {
      * Order: record appended and forced first, manifest saved after. A crash in between leaves an ACTIVE record no
      * manifest points to (a leak that the GC stage can reclaim), never a manifest without data.
      */
-    private ManifestEntity storeSmall(Path filePath, int size, PoolEntity pool, long t0) throws IOException {
+    private ManifestEntity storeSmall(Path filePath, int size, PoolEntity pool, String crc32c, long t0) throws IOException {
         byte[] data = Files.readAllBytes(filePath);
         if (data.length != size) {
             throw new IOException("File changed while being stored: expected " + size + " bytes, read " + data.length);
         }
-        ManifestEntity entity = newManifest(filePath, pool, StorageKind.SMALL);
+        ManifestEntity entity = newManifest(filePath, pool, StorageKind.SMALL, crc32c);
         int ownerTag = entity.getId().hashCode();
         SmallObjectBlob.Location loc = null;
         BlobFileEntity blobEntity = null;
@@ -126,10 +140,11 @@ public class FileStorageService {
         return entity;
     }
 
-    private ManifestEntity newManifest(Path filePath, PoolEntity pool, StorageKind kind) {
+    private ManifestEntity newManifest(Path filePath, PoolEntity pool, StorageKind kind, String crc32c) {
         ManifestEntity entity = new ManifestEntity();
         entity.setId(UUID.randomUUID().toString());
         entity.setStorageKind(kind);
+        entity.setCrc32c(crc32c);
         entity.setPoolId(pool.getId());
         entity.setSourceFileName(filePath.getFileName().toString());
         entity.setCreatedAt(Instant.now());
@@ -137,7 +152,7 @@ public class FileStorageService {
         return entity;
     }
 
-    private ManifestEntity storeChunked(Path filePath, PoolEntity pool, long t0) throws IOException {
+    private ManifestEntity storeChunked(Path filePath, PoolEntity pool, String crc32c, long t0) throws IOException {
         BlobFileEntity blobEntity = blobService.chooseBlobFileForWrite(pool);
         CuckooHashTable table = cache.get(blobEntity);
         BlobFileWriteService writer = new BlobFileWriteService(
@@ -161,7 +176,7 @@ public class FileStorageService {
                     + manifest.lastChunkActualSize();
         }
 
-        ManifestEntity entity = newManifest(filePath, pool, StorageKind.CHUNKED);
+        ManifestEntity entity = newManifest(filePath, pool, StorageKind.CHUNKED, crc32c);
         entity.setBlobFile(blobEntity);       // also sets blobFileId
         entity.setSourceFileName(manifest.sourceFileName());
         entity.setChunkSize(manifest.chunkSize());
@@ -193,8 +208,12 @@ public class FileStorageService {
 
         log.info("Restoring file: id={} → {}", manifestId, outputPath);
         if (entity.getStorageKind() != StorageKind.CHUNKED) {
+            boolean done = false;
             try (OutputStream out = Files.newOutputStream(outputPath)) {
                 streamToOutput(entity, out);
+                done = true;
+            } finally {
+                if (!done) Files.deleteIfExists(outputPath);
             }
             opLog.success("RESTORE", manifestId, entity.getSourceFileName(),
                     Map.of("outputPath", outputPath.toString()), System.currentTimeMillis() - t0);
@@ -204,17 +223,21 @@ public class FileStorageService {
         CuckooHashTable table = cache.get(entity.getBlobFile());
         List<Long> keys = entity.parseChunkKeys();
 
+        boolean ok = false;
         try (FileChannel out = FileChannel.open(outputPath,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
+            CRC32C crc = new CRC32C();
             int total = keys.size();
             int lastDecile = -1;
             for (int i = 0; i < total; i++) {
                 long key = keys.get(i);
                 boolean isLast = (i == total - 1);
                 int readSize = isLast ? entity.getLastChunkSize() : entity.getChunkSize();
-                out.write(table.readChunkByKey(key, readSize).orElseThrow(() ->
-                        new IOException("Chunk not found: key=0x" + Long.toHexString(key))));
+                ByteBuffer chunk = table.readChunkByKey(key, readSize).orElseThrow(() -> new ChunkNotFoundException(key));
+                crc.update(chunk.duplicate());
+                if (isLast) checkWholeObjectCrc(entity, crc);
+                out.write(chunk);
 
                 if (total >= 10) {
                     int decile = (int)(10.0 * (i + 1) / total);
@@ -224,6 +247,10 @@ public class FileStorageService {
                     }
                 }
             }
+            if (total == 0) checkWholeObjectCrc(entity, crc);
+            ok = true;
+        } finally {
+            if (!ok) Files.deleteIfExists(outputPath);   // never leave a partial / corrupt restore behind
         }
 
         opLog.success("RESTORE", manifestId, entity.getSourceFileName(),
@@ -282,7 +309,7 @@ public class FileStorageService {
                 int actualSize = isFileLast ? entity.getLastChunkSize() : chunkSize;
 
                 ByteBuffer chunk = table.readChunkByKey(key, actualSize).orElseThrow(() ->
-                        new IOException("Chunk not found: key=0x" + Long.toHexString(key)));
+                        new ChunkNotFoundException(key));
                 int trimStart = (idx == firstIdx) ? (int)(startByte % chunkSize) : 0;
                 long remaining = lengthBytes - written;
                 int trimLen    = (int) Math.min(actualSize - trimStart, remaining);
@@ -303,29 +330,40 @@ public class FileStorageService {
 
     /**
      * Stores an object uploaded via the S3 REST API.
-     * Writes the stream to a temp file, computes MD5 ETag, then delegates to the
-     * existing chunked-storage engine.
+     * Writes the stream to a temp file while computing MD5 (the ETag), the always-on CRC32C and the client's
+     * additional checksum in a single pass. The client-declared Content-MD5 / checksum is verified BEFORE
+     * anything is committed: on a mismatch the temp file is removed and neither a blob record, nor chunks,
+     * nor a manifest exist. Only then is the temp file handed to the storage engine.
      */
     public ManifestEntity storeStream(InputStream in, PoolEntity pool,
                                       String objectKey, String contentType) throws IOException {
+        return storeStream(in, pool, objectKey, contentType, UploadChecksums.none());
+    }
+
+    public ManifestEntity storeStream(InputStream in, PoolEntity pool, String objectKey, String contentType,
+                                      UploadChecksums declared) throws IOException {
         Path tmp = Files.createTempFile("sectoriadb-upload-", ".tmp");
         try {
-            MessageDigest md5;
-            try {
-                md5 = MessageDigest.getInstance("MD5");
-            } catch (NoSuchAlgorithmException e) {
-                throw new RuntimeException(e);
-            }
-            try (DigestInputStream dis = new DigestInputStream(in, md5)) {
+            EnumSet<ChecksumAlgorithm> algorithms = EnumSet.of(ChecksumAlgorithm.CRC32C);
+            if (declared.algorithm() != null) algorithms.add(declared.algorithm());
+            MultiDigest digest = new MultiDigest(true, algorithms);
+            try (MultiDigestInputStream dis = new MultiDigestInputStream(in, digest)) {
                 Files.copy(dis, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
-            String etag = "\"" + HexFormat.of().formatHex(md5.digest()) + "\"";
+            digest.finish();
+            declared.verify(digest);   // throws ChecksumMismatchException: nothing has been written anywhere yet
 
-            ManifestEntity entity = store(tmp, pool);
+            String etag = "\"" + HexFormat.of().formatHex(digest.md5()) + "\"";
+            ManifestEntity entity = store(tmp, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
             entity.setObjectKey(objectKey);
             entity.setBucketName(pool.getName());
             entity.setContentType(contentType != null ? contentType : "application/octet-stream");
             entity.setEtag(etag);
+            if (declared.algorithm() != null) {
+                entity.setChecksumAlgorithm(declared.algorithm());
+                entity.setChecksumValue(digest.encoded(declared.algorithm()));
+                entity.setChecksumType(ChecksumType.FULL_OBJECT);
+            }
             manifestRepo.save(entity);
             return entity;
         } finally {
@@ -335,13 +373,32 @@ public class FileStorageService {
 
     // ── S3 Stream output ──────────────────────────────────────────────────────
 
-    /** Streams the full object content to an OutputStream (for GET requests). */
+    /**
+     * Streams the full object content to an OutputStream (for GET requests, CopyObject sources, ...), recomputing
+     * the whole-object CRC32C on the way and comparing it with the stored one at the end.
+     * <p>
+     * The last chunk is written only after the comparison, so on a mismatch the consumer has never received the
+     * complete content: an HTTP response with a Content-Length stays short and the client sees a failed transfer
+     * instead of a "complete" corrupt body. Throws {@link ObjectCorruptedException} (logged at ERROR).
+     */
     public void streamToOutput(ManifestEntity entity, OutputStream out) throws IOException {
+        streamToOutput(entity, out, true);
+    }
+
+    /** As {@link #streamToOutput(ManifestEntity, OutputStream)}; {@code verifyWholeObject=false} skips the CRC32C comparison. */
+    public void streamToOutput(ManifestEntity entity, OutputStream out, boolean verifyWholeObject) throws IOException {
         if (entity.getStorageKind() == StorageKind.EMPTY) {
+            if (verifyWholeObject) checkWholeObjectCrc(entity, new CRC32C());
             return;
         }
         if (entity.getStorageKind() == StorageKind.SMALL) {
-            out.write(readSmall(entity));
+            byte[] data = readSmall(entity);
+            if (verifyWholeObject) {
+                CRC32C crc = new CRC32C();
+                crc.update(data, 0, data.length);
+                checkWholeObjectCrc(entity, crc);
+            }
+            out.write(data);
             return;
         }
         List<Long> keys = entity.parseChunkKeys();
@@ -351,14 +408,33 @@ public class FileStorageService {
         }
 
         CuckooHashTable table = cache.get(entity.getBlobFile());
+        CRC32C crc = new CRC32C();
         int total = keys.size();
         for (int i = 0; i < total; i++) {
             long key = keys.get(i);
             boolean isLast = (i == total - 1);
             int readSize = isLast ? entity.getLastChunkSize() : entity.getChunkSize();
-            ByteBuffer chunk = table.readChunkByKey(key, readSize).orElseThrow(() ->
-                    new IOException("Chunk not found: key=0x" + Long.toHexString(key)));
-            out.write(chunk.array(), chunk.arrayOffset() + chunk.position(), chunk.remaining());
+            ByteBuffer chunk = table.readChunkByKey(key, readSize).orElseThrow(() -> new ChunkNotFoundException(key));
+            byte[] arr = chunk.array();
+            int off = chunk.arrayOffset() + chunk.position();
+            int len = chunk.remaining();
+            if (verifyWholeObject) {
+                crc.update(arr, off, len);
+                if (isLast) checkWholeObjectCrc(entity, crc);   // before the final bytes leave
+            }
+            out.write(arr, off, len);
+        }
+    }
+
+    private void checkWholeObjectCrc(ManifestEntity entity, CRC32C crc) throws ObjectCorruptedException {
+        String stored = entity.getCrc32c();
+        if (stored == null) return;   // manifest written before whole-object checksums
+        String actual = ChecksumAlgorithm.CRC32C.encode(ChecksumAlgorithm.crc32Bytes((int) crc.getValue()));
+        if (!stored.equals(actual)) {
+            log.error("Whole-object CRC32C mismatch: bucket={} key={} manifest={} stored={} actual={}",
+                    entity.getBucketName(), entity.getObjectKey(), entity.getId(), stored, actual);
+            throw new ObjectCorruptedException(entity.getId(), entity.getBucketName(), entity.getObjectKey(),
+                    stored, actual);
         }
     }
 
@@ -395,7 +471,7 @@ public class FileStorageService {
             int actualSize = isFileLast ? entity.getLastChunkSize() : chunkSize;
 
             ByteBuffer chunk = table.readChunkByKey(key, actualSize).orElseThrow(() ->
-                    new IOException("Chunk not found: key=0x" + Long.toHexString(key)));
+                    new ChunkNotFoundException(key));
             int trimStart = (idx == firstIdx) ? (int)(startByte % chunkSize) : 0;
             long remaining = lengthBytes - written;
             int trimLen    = (int) Math.min(actualSize - trimStart, remaining);

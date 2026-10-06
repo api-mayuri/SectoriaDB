@@ -2,6 +2,8 @@ package org.example.sectoriadb.model;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonInclude;
+import org.example.sectoriadb.checksum.ChecksumAlgorithm;
+import org.example.sectoriadb.checksum.ChecksumType;
 
 import java.time.Instant;
 import java.util.Arrays;
@@ -40,6 +42,21 @@ public class ManifestEntity {
     private String bucketName;    // S3 bucket name = pool name
     private String contentType;   // MIME type, e.g. "image/jpeg"
     private String etag;          // MD5 hex in quotes, e.g. "\"abc123...\""
+
+    /**
+     * CRC32C of the whole object, base64 of the big-endian value (the S3 wire format). Always computed on write;
+     * absent in manifests written before whole-object checksums existed (such objects skip that check).
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String crc32c;
+    /** Additional checksum the client asked for (null when none). */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private ChecksumAlgorithm checksumAlgorithm;
+    /** Base64 value of {@link #checksumAlgorithm}; for COMPOSITE it carries the "-N" part-count suffix. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String checksumValue;
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private ChecksumType checksumType;
 
     // S3 ACL and metadata fields
     @JsonInclude(JsonInclude.Include.NON_NULL)
@@ -124,6 +141,18 @@ public class ManifestEntity {
 
     public int getSmallCrc32c() { return smallCrc32c; }
     public void setSmallCrc32c(int smallCrc32c) { this.smallCrc32c = smallCrc32c; }
+
+    public String getCrc32c() { return crc32c; }
+    public void setCrc32c(String crc32c) { this.crc32c = crc32c; }
+
+    public ChecksumAlgorithm getChecksumAlgorithm() { return checksumAlgorithm; }
+    public void setChecksumAlgorithm(ChecksumAlgorithm checksumAlgorithm) { this.checksumAlgorithm = checksumAlgorithm; }
+
+    public String getChecksumValue() { return checksumValue; }
+    public void setChecksumValue(String checksumValue) { this.checksumValue = checksumValue; }
+
+    public ChecksumType getChecksumType() { return checksumType; }
+    public void setChecksumType(ChecksumType checksumType) { this.checksumType = checksumType; }
 
     public String getSourceFileName() { return sourceFileName; }
     public void setSourceFileName(String s) { this.sourceFileName = s; }
