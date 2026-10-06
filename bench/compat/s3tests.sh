@@ -41,7 +41,7 @@ MARKERS='not fails_on_aws and not fails_strict_rfc2616 and not sse_s3 and not en
 # shellcheck disable=SC2086
 (
   cd "$SRC"
-  S3TEST_CONF="$CONF" timeout "$TIMEOUT" "$WORK/venv/bin/pytest" s3tests_boto3/functional/test_s3.py \
+  S3TEST_CONF="$CONF" timeout "$TIMEOUT" "$WORK/venv/bin/pytest" s3tests/functional/test_s3.py s3tests/functional/test_headers.py \
     -m "$MARKERS" -p no:cacheprovider --timeout=60 -q -rfE --junitxml="$OUT/junit.xml" ${S3TESTS_FILTER:-} \
     > "$OUT/log.txt" 2>&1
 ) || echo "pytest exited with $? (timeout=$TIMEOUT s; failures are expected)"
