@@ -144,6 +144,7 @@ public class S3ObjectController {
             HttpServletRequest request,
             HttpServletResponse response) throws IOException {
 
+        S3Support.rejectUnsupportedObjectSubresource(request);
         String objectKey = S3Support.extractKey(request, bucket);
         ManifestEntity entity = lookup.requireObject(bucket, objectKey);
 

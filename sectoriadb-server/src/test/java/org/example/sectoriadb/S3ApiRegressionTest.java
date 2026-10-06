@@ -456,4 +456,37 @@ class S3ApiRegressionTest {
         assertEquals(400, r.statusCode());
         assertEquals("original", new String(get("put-uid", "k").body()));
     }
+
+    /** GET ?object-lock returned the bucket listing, GET ?retention / ?attributes the object bytes, both with 200. */
+    @Test
+    void unsupportedSubresourcesAreNotImplementedNotAListingOrTheObject() throws Exception {
+        mkBucket("subres");
+        put("subres", "k", "bytes".getBytes());
+        for (String q : new String[]{"object-lock", "ownershipControls", "website", "logging", "notification", "policyStatus"}) {
+            var r = send(HttpRequest.newBuilder(uri("/subres?" + q)).GET());
+            assertEquals(501, r.statusCode(), q);
+            assertEquals("NotImplemented", code(r), q);
+        }
+        for (String q : new String[]{"attributes", "retention", "legal-hold", "torrent"}) {
+            var r = send(HttpRequest.newBuilder(uri("/subres/k?" + q)).GET());
+            assertEquals(501, r.statusCode(), q);
+        }
+        // a plain read and a versionId=null read (what SDKs send for unversioned buckets) keep working
+        assertEquals("bytes", new String(get("subres", "k").body()));
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/subres/k?versionId=null")).GET()).statusCode());
+    }
+
+    @Test
+    void completeMultipartWithoutPartsIsMalformedXmlNot500() throws Exception {
+        mkBucket("mp-empty");
+        var init = send(HttpRequest.newBuilder(uri("/mp-empty/k?uploads")).POST(BodyPublishers.noBody()));
+        Matcher m = Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(new String(init.body()));
+        assertTrue(m.find());
+        var r = send(HttpRequest.newBuilder(uri("/mp-empty/k?uploadId=" + m.group(1)))
+                .POST(BodyPublishers.ofString("<CompleteMultipartUpload></CompleteMultipartUpload>")));
+        assertEquals(400, r.statusCode());
+        assertEquals("MalformedXML", code(r));
+        var junk = send(HttpRequest.newBuilder(uri("/mp-empty/k?uploadId=" + m.group(1))).POST(BodyPublishers.ofString("not xml")));
+        assertEquals(400, junk.statusCode());
+    }
 }

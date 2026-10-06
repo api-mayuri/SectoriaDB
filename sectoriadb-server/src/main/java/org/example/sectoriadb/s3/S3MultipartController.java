@@ -825,7 +825,8 @@ public class S3MultipartController {
             result.sort(Integer::compareTo);
             return new ParsedParts(result, etags, checksums);
         } catch (Exception e) {
-            throw new IOException("Failed to parse CompleteMultipartUpload XML", e);
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedXML",
+                    "The XML you provided was not well-formed or did not validate against our published schema");
         }
     }
 

@@ -37,6 +37,36 @@ public final class S3Support {
     /** ISO-8601 with millis, as used inside S3 XML bodies. */
     public static String isoDate(Instant t) { return ISO_MILLIS.format(t); }
 
+    /**
+     * Bucket and object sub-resources that S3 has but SectoriaDB does not implement. A GET carrying one of them must
+     * not fall through to ListObjects / GetObject (the client would get a listing or the object's bytes as the answer
+     * to, say, {@code ?object-lock} or {@code ?retention}).
+     */
+    private static final java.util.Set<String> UNSUPPORTED_BUCKET_SUBRESOURCES = java.util.Set.of(
+            "object-lock", "ownershipControls", "website", "logging", "notification", "policyStatus", "accelerate",
+            "analytics", "inventory", "metrics", "requestPayment", "replication", "intelligent-tiering", "metadataConfiguration");
+    private static final java.util.Set<String> UNSUPPORTED_OBJECT_SUBRESOURCES = java.util.Set.of(
+            "attributes", "retention", "legal-hold", "torrent", "select", "restore");
+
+    public static void rejectUnsupportedBucketSubresource(jakarta.servlet.http.HttpServletRequest request) {
+        rejectIfPresent(request, UNSUPPORTED_BUCKET_SUBRESOURCES);
+    }
+
+    public static void rejectUnsupportedObjectSubresource(jakarta.servlet.http.HttpServletRequest request) {
+        rejectIfPresent(request, UNSUPPORTED_OBJECT_SUBRESOURCES);
+    }
+
+    private static void rejectIfPresent(jakarta.servlet.http.HttpServletRequest request, java.util.Set<String> names) {
+        String q = request.getQueryString();
+        if (q == null || q.isEmpty()) return;
+        for (String name : request.getParameterMap().keySet()) {
+            if (names.contains(name)) {
+                throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
+                        "A header or query parameter you provided implies functionality that is not implemented");
+            }
+        }
+    }
+
     /** encoding-type=url: percent-encode everything except unreserved characters and '/'. */
     public static String urlEncodeKey(String s) {
         if (s == null) return null;

@@ -235,7 +235,10 @@ public class S3BucketController {
             @RequestParam(value = "start-after",        required = false) String startAfter,
             @RequestParam(value = "list-type",          defaultValue = "1") int listType,
             @RequestParam(value = "encoding-type",      required = false) String encodingType,
-            @RequestParam(value = "fetch-owner",        defaultValue = "false") boolean fetchOwner) {
+            @RequestParam(value = "fetch-owner",        defaultValue = "false") boolean fetchOwner,
+            HttpServletRequest request) {
+
+        S3Support.rejectUnsupportedBucketSubresource(request);
 
         // Ensure bucket exists; throws NoSuchBucket if not
         lookup.requireBucket(bucket);
