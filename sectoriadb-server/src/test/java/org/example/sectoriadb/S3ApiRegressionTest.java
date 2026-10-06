@@ -305,4 +305,69 @@ class S3ApiRegressionTest {
         var bad = send(HttpRequest.newBuilder(uri("/..")).PUT(BodyPublishers.noBody()));
         assertTrue(bad.statusCode() >= 400, "path-like bucket names must be rejected");
     }
+
+    // ── incident: Spring MVC errors were reported as 500 InternalError (or Spring's JSON page) ──
+
+    private static String code(HttpResponse<byte[]> r) {
+        Matcher m = Pattern.compile("<Code>([^<]+)</Code>").matcher(new String(r.body(), StandardCharsets.UTF_8));
+        return m.find() ? m.group(1) : "?" + new String(r.body(), StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void unsupportedMethodOnKnownPathIsS3MethodNotAllowed() throws Exception {
+        mkBucket("mvc-405");
+        var r = send(HttpRequest.newBuilder(uri("/mvc-405/k")).method("PATCH", BodyPublishers.noBody()));
+        assertEquals(405, r.statusCode());
+        assertEquals("MethodNotAllowed", code(r));
+        assertTrue(r.headers().firstValue("Content-Type").orElse("").contains("xml"), "S3 XML, not Spring JSON");
+        // service root accepts GET only
+        var root = send(HttpRequest.newBuilder(uri("/")).DELETE());
+        assertEquals(405, root.statusCode());
+        assertEquals("MethodNotAllowed", code(root));
+    }
+
+    @Test
+    void malformedQueryParameterIsInvalidArgumentNot500() throws Exception {
+        mkBucket("mvc-400");
+        var r = send(HttpRequest.newBuilder(uri("/mvc-400?max-keys=abc")).GET());
+        assertEquals(400, r.statusCode());
+        assertEquals("InvalidArgument", code(r));
+        var v2 = send(HttpRequest.newBuilder(uri("/mvc-400?list-type=x")).GET());
+        assertEquals(400, v2.statusCode());
+        assertEquals("InvalidArgument", code(v2));
+    }
+
+    // ── ListObjectVersions on an unversioned bucket: objects as version "null" (SDK bucket cleanup relies on it) ──
+
+    @Test
+    void listObjectVersionsListsObjectsAsNullVersion() throws Exception {
+        mkBucket("ver-list");
+        put("ver-list", "a/1.txt", "one".getBytes());
+        put("ver-list", "b.txt", "two".getBytes());
+        var r = send(HttpRequest.newBuilder(uri("/ver-list?versions")).GET());
+        assertEquals(200, r.statusCode());
+        String xml = new String(r.body(), StandardCharsets.UTF_8);
+        assertTrue(xml.contains("<ListVersionsResult"), xml);
+        assertEquals(2, xml.split("<Version>", -1).length - 1, xml);
+        assertTrue(xml.contains("<Key>a/1.txt</Key><VersionId>null</VersionId><IsLatest>true</IsLatest>"), xml);
+        // paging: one key per page, then the marker
+        var p1 = new String(send(HttpRequest.newBuilder(uri("/ver-list?versions&max-keys=1")).GET()).body(), StandardCharsets.UTF_8);
+        assertTrue(p1.contains("<IsTruncated>true</IsTruncated>") && p1.contains("<NextKeyMarker>a/1.txt</NextKeyMarker>"), p1);
+        var p2 = new String(send(HttpRequest.newBuilder(uri("/ver-list?versions&max-keys=1&key-marker=a%2F1.txt")).GET()).body(), StandardCharsets.UTF_8);
+        assertTrue(p2.contains("<Key>b.txt</Key>") && !p2.contains("a/1.txt</Key>"), p2);
+    }
+
+    @Test
+    void multiObjectDeleteQuietSuppressesDeletedEntriesAndAcceptsVersionId() throws Exception {
+        mkBucket("del-quiet");
+        put("del-quiet", "x", "1".getBytes());
+        put("del-quiet", "y", "2".getBytes());
+        String body = "<Delete><Quiet>true</Quiet><Object><Key>x</Key><VersionId>null</VersionId></Object>"
+                + "<Object><Key>y</Key></Object></Delete>";
+        var r = send(HttpRequest.newBuilder(uri("/del-quiet?delete")).POST(BodyPublishers.ofString(body)));
+        assertEquals(200, r.statusCode());
+        assertFalse(new String(r.body()).contains("<Deleted>"), new String(r.body()));
+        assertEquals(404, get("del-quiet", "x").statusCode());
+        assertEquals(404, get("del-quiet", "y").statusCode());
+    }
 }

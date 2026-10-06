@@ -114,14 +114,17 @@ public class S3BucketController {
         // Verify bucket exists
         lookup.requireBucket(bucket);
 
-        List<String> keys = parseDeleteXml(request.getInputStream());
+        DeleteRequest del = parseDeleteXml(request.getInputStream());
+        List<String> keys = del.keys();
         StringBuilder result = new StringBuilder(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                 "<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
 
         for (String key : keys) {
             fileService.deleteObject(bucket, key);   // one transaction per key
-            result.append("<Deleted><Key>").append(S3Support.xmlEscape(key)).append("</Key></Deleted>");
+            if (!del.quiet()) {
+                result.append("<Deleted><Key>").append(S3Support.xmlEscape(key)).append("</Key></Deleted>");
+            }
         }
         result.append("</DeleteResult>");
 
@@ -130,7 +133,10 @@ public class S3BucketController {
                 .body(result.toString());
     }
 
-    private List<String> parseDeleteXml(InputStream body) throws IOException {
+    /** Keys of a multi-object delete and its {@code <Quiet>true</Quiet>} flag (successes are then not listed). */
+    private record DeleteRequest(List<String> keys, boolean quiet) {}
+
+    private DeleteRequest parseDeleteXml(InputStream body) throws IOException {
         try {
             DocumentBuilder db = XmlSupport.newSecureDocumentBuilder(true);
             Document doc = db.parse(body);
@@ -144,10 +150,72 @@ public class S3BucketController {
                     }
                 }
             }
-            return keys;
+            NodeList quiet = doc.getElementsByTagName("Quiet");
+            boolean isQuiet = quiet.getLength() > 0 && "true".equalsIgnoreCase(quiet.item(0).getTextContent().trim());
+            return new DeleteRequest(keys, isQuiet);
         } catch (Exception e) {
             throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedXML", "Failed to parse Delete XML");
         }
+    }
+
+    // ── ListObjectVersions (unversioned bucket) ───────────────────────────────
+
+    /**
+     * GET /{bucket}?versions. SectoriaDB has no versioning, so, like S3 for a bucket that never had versioning
+     * enabled, every object is listed once as the latest version with VersionId "null". Clients (SDK "empty the
+     * bucket" helpers, ceph/s3-tests cleanup) rely on this listing to find the objects they must delete.
+     */
+    @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "versions", produces = MediaType.APPLICATION_XML_VALUE)
+    public ResponseEntity<String> listObjectVersions(
+            @PathVariable String bucket,
+            @RequestParam(value = "prefix",         defaultValue = "") String prefix,
+            @RequestParam(value = "delimiter",      required = false) String delimiter,
+            @RequestParam(value = "max-keys",       defaultValue = "1000") Integer maxKeysParam,
+            @RequestParam(value = "key-marker",     defaultValue = "") String keyMarker,
+            @RequestParam(value = "version-id-marker", defaultValue = "") String versionIdMarker) {
+
+        lookup.requireBucket(bucket);
+        int maxKeys = maxKeysParam != null ? maxKeysParam : 1000;
+        if (maxKeys < 0) {
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidArgument", "Argument maxKeys must be an integer between 0 and 2147483647");
+        }
+        if (maxKeys > 1000) maxKeys = 1000;
+
+        ManifestRepository.ObjectListing page = maxKeys == 0
+                ? new ManifestRepository.ObjectListing(List.of(), List.of(), false, null)
+                : manifestRepo.listObjects(bucket, prefix, delimiter, keyMarker.isEmpty() ? null : keyMarker, maxKeys);
+
+        StringBuilder xml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
+                .append("<ListVersionsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">")
+                .append("<Name>").append(S3Support.xmlEscape(bucket)).append("</Name>")
+                .append("<Prefix>").append(S3Support.xmlEscape(prefix)).append("</Prefix>")
+                .append("<KeyMarker>").append(S3Support.xmlEscape(keyMarker)).append("</KeyMarker>")
+                .append("<VersionIdMarker>").append(S3Support.xmlEscape(versionIdMarker)).append("</VersionIdMarker>");
+        if (page.truncated() && page.nextMarker() != null) {
+            xml.append("<NextKeyMarker>").append(S3Support.xmlEscape(page.nextMarker())).append("</NextKeyMarker>")
+               .append("<NextVersionIdMarker>null</NextVersionIdMarker>");
+        }
+        xml.append("<MaxKeys>").append(maxKeys).append("</MaxKeys>");
+        if (delimiter != null && !delimiter.isEmpty()) {
+            xml.append("<Delimiter>").append(S3Support.xmlEscape(delimiter)).append("</Delimiter>");
+        }
+        xml.append("<IsTruncated>").append(page.truncated()).append("</IsTruncated>");
+        for (ManifestRepository.ObjectSummary o : page.objects()) {
+            xml.append("<Version><Key>").append(S3Support.xmlEscape(o.key())).append("</Key>")
+               .append("<VersionId>null</VersionId><IsLatest>true</IsLatest>")
+               .append("<LastModified>").append(S3Support.isoDate(o.lastModified())).append("</LastModified>")
+               .append("<ETag>").append(S3Support.xmlEscape(o.etag() != null ? o.etag() : "\"\"")).append("</ETag>")
+               .append("<Size>").append(o.size()).append("</Size>")
+               .append("<StorageClass>STANDARD</StorageClass></Version>");
+        }
+        for (String cp : page.commonPrefixes()) {
+            xml.append("<CommonPrefixes><Prefix>").append(S3Support.xmlEscape(cp)).append("</Prefix></CommonPrefixes>");
+        }
+        xml.append("</ListVersionsResult>");
+        return ResponseEntity.ok()
+                .header("x-amz-request-id", S3Support.requestId())
+                .header("Server", "SectoriaDB")
+                .body(xml.toString());
     }
 
     // ── ListObjects / ListObjectsV2 ───────────────────────────────────────────

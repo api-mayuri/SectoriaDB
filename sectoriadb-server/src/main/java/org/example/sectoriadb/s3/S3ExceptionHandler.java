@@ -9,7 +9,18 @@ import org.example.sectoriadb.s3.xml.S3Error;
 import org.apache.catalina.connector.ClientAbortException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.TypeMismatchException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.web.ErrorResponse;
+import org.springframework.web.HttpMediaTypeNotAcceptableException;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.ServletRequestBindingException;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -138,6 +149,38 @@ public class S3ExceptionHandler {
     @ExceptionHandler({AsyncRequestNotUsableException.class, ClientAbortException.class})
     public void handleClientAbort(Exception ex) {
         log.debug("Client disconnected: {}", ex.getMessage());
+    }
+
+    /**
+     * Spring MVC's own request errors are client errors, not server faults: wrong method on a known path (405),
+     * unsupported or unacceptable media type (415/406), a missing or malformed query parameter (400
+     * InvalidArgument), an unreadable body, an unmapped path (404). Without this they fell into the catch-all
+     * below and were reported as 500 InternalError.
+     */
+    @ExceptionHandler({HttpRequestMethodNotSupportedException.class, HttpMediaTypeNotSupportedException.class,
+            HttpMediaTypeNotAcceptableException.class, ServletRequestBindingException.class,
+            TypeMismatchException.class, HttpMessageNotReadableException.class,
+            NoHandlerFoundException.class, NoResourceFoundException.class})
+    public ResponseEntity<S3Error> handleSpringMvc(Exception ex) {
+        HttpStatusCode status = ex instanceof ErrorResponse er ? er.getStatusCode() : HttpStatus.BAD_REQUEST;
+        HttpHeaders headers = ex instanceof ErrorResponse er ? er.getHeaders() : HttpHeaders.EMPTY;
+        String code;
+        String message;
+        if (status.value() == 400) {
+            // bad or missing parameter values are InvalidArgument in S3; an unreadable body is InvalidRequest
+            boolean body = ex instanceof HttpMessageNotReadableException;
+            code = body ? "InvalidRequest" : "InvalidArgument";
+            message = body ? "The request body could not be read." : "Invalid or missing request parameter: " + ex.getMessage();
+        } else {
+            code = S3MvcErrors.codeFor(status);
+            message = S3MvcErrors.messageFor(status);
+        }
+        log.debug("S3 client error [{}]: {} - {}", status.value(), code, ex.getMessage());
+        ObservabilityAttributes.noteErrorCode(code);
+        return ResponseEntity.status(status)
+                .headers(headers)
+                .contentType(MediaType.APPLICATION_XML)
+                .body(new S3Error(code, message, null, S3Support.requestId()));
     }
 
     @ExceptionHandler(Exception.class)
