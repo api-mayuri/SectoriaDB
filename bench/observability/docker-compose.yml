@@ -1,0 +1,107 @@
+# Observability + benchmark stand for SectoriaDB (docs/architecture/08-observability-bench.md).
+#
+#   cp .env.example .env && docker compose up -d      # prometheus, grafana, influxdb, node_exporter, sectoriadb
+#
+# Only these stores are used: Prometheus (server metrics), InfluxDB v2 (warp live client results), Grafana
+# (dashboards), node_exporter (host). No Loki / GitLab / other databases.
+#
+# The SectoriaDB service is in the profile "server" so that you can also point the stand at a server running
+# elsewhere: COMPOSE_PROFILES= docker compose up -d, then edit prometheus/prometheus.yml targets.
+name: sectoria-bench
+
+services:
+  sectoriadb:
+    profiles: ["server"]
+    build:
+      context: ../..
+    image: sectoriadb:bench
+    container_name: sectoriadb-bench
+    environment:
+      SECTORIADB_S3_AUTH_ENABLED: "true"
+      SECTORIADB_S3_CREDENTIALS: "${SECTORIADB_ACCESS_KEY:-benchaccesskey}:${SECTORIADB_SECRET_KEY:-benchsecretkey0123456789abcdef}:bench,${SECTORIADB_ALT_ACCESS_KEY:-altaccesskey}:${SECTORIADB_ALT_SECRET_KEY:-altsecretkey0123456789abcdef}:bench-alt"
+      JAVA_OPTS: "${SECTORIADB_JAVA_OPTS:--Xmx1g -XX:+UseG1GC} -Dsectoriadb.fsync=${SECTORIADB_FSYNC:-true} -Dlogging.level.org.example.sectoriadb=INFO -Dlogging.level.org.springframework.web=WARN -Dlogging.level.org.springframework.web.servlet.mvc.method.annotation=WARN"
+      SPRING_SHELL_INTERACTIVE_ENABLED: "false"
+    ports:
+      - "8080:8080"
+      - "127.0.0.1:9464:9464"
+    volumes:
+      - sectoriadb-bench-meta:/data/meta
+      - sectoriadb-bench-data:/data/storage
+    networks: [bench]
+
+  prometheus:
+    image: prom/prometheus:v3.15.0@sha256:efd719c99d83b060d9daefdcf00360461adf279f45ef5391f8d111892118753e
+    container_name: prometheus-bench
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=30d
+      - --storage.tsdb.retention.size=5GB
+      - --web.enable-lifecycle
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+    networks: [bench]
+
+  node-exporter:
+    image: prom/node-exporter:v1.12.1@sha256:1b4e4438faca4dd7e001dd445d161a4a2091b0fededa84093b3a8dfeae1f1be0
+    container_name: node-exporter-bench
+    command:
+      - --path.rootfs=/host
+      - --collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)
+    pid: host   # with "/:/host:ro,rslave" nested mounts are also visible (needs a shared root mount)
+    volumes:
+      - /:/host:ro
+    networks: [bench]
+
+  influxdb:
+    image: influxdb:2.9.1@sha256:cdd3dbdea45c2f43513abd06ee9644b6e05d2354a2b93ca829c9f07d716eaaac
+    container_name: influxdb-bench
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: ${INFLUX_ADMIN_USER:-admin}
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUX_ADMIN_PASSWORD:?set INFLUX_ADMIN_PASSWORD in .env}
+      DOCKER_INFLUXDB_INIT_ORG: ${INFLUX_ORG:-sectoria}
+      DOCKER_INFLUXDB_INIT_BUCKET: ${INFLUX_BUCKET:-warp}
+      DOCKER_INFLUXDB_INIT_RETENTION: 90d
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:?set INFLUX_TOKEN in .env}
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    ports:
+      - "127.0.0.1:${INFLUX_PORT:-8086}:8086"
+    networks: [bench]
+
+  grafana:
+    image: grafana/grafana:13.2.3@sha256:b28bae15e219c998fb0e0424ed724930cc61b1f61fb404d47c862f9a23f9e572
+    container_name: grafana-bench
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD in .env}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      INFLUX_ORG: ${INFLUX_ORG:-sectoria}
+      INFLUX_BUCKET: ${INFLUX_BUCKET:-warp}
+      INFLUX_TOKEN: ${INFLUX_TOKEN}
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    depends_on: [prometheus, influxdb]
+    networks: [bench]
+
+networks:
+  bench:
+    name: sectoria-bench
+
+volumes:
+  sectoriadb-bench-meta:
+  sectoriadb-bench-data:
+  prometheus-data:
+  influxdb-data:
+  grafana-data:
