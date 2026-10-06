@@ -109,6 +109,32 @@ public class FileCommands {
         }
     }
 
+    @ShellMethod(key = "verify",
+            value = "Re-read an object and compare its MD5 with the stored ETag  |  verify --id FILE_ID")
+    public String verify(@ShellOption(help = "File ID") String id) throws IOException {
+        ManifestEntity m = fileService.getActiveManifest(id);
+        String etag = m.getEtag() == null ? "" : m.getEtag().replace("\"", "");
+        if (etag.isEmpty() || etag.contains("-")) {
+            return "Not applicable: object has no plain MD5 ETag (multipart or stored via the shell). "
+                    + "Chunk CRCs are still checked on read; use 'scrub --id BLOB_ID' for the whole blob.";
+        }
+        java.security.MessageDigest md5;
+        try {
+            md5 = java.security.MessageDigest.getInstance("MD5");
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
+        try (java.io.OutputStream out = new java.security.DigestOutputStream(java.io.OutputStream.nullOutputStream(), md5)) {
+            fileService.streamToOutput(m, out);
+        } catch (org.example.sectoriadb.service.impl.ChunkCorruptedException e) {
+            return "CORRUPT: " + e.getMessage();
+        }
+        String actual = java.util.HexFormat.of().formatHex(md5.digest());
+        return actual.equalsIgnoreCase(etag)
+                ? "OK: MD5 " + actual + " matches the stored ETag"
+                : "MISMATCH: computed MD5 " + actual + " but stored ETag is " + etag;
+    }
+
     @ShellMethod(key = "rm", value = "Soft-delete a stored file  |  rm --id FILE_ID [--yes]")
     public String rm(
             @ShellOption(help = "File ID") String id,

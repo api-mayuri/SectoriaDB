@@ -76,7 +76,7 @@ public class BlobCommands {
                 "  Buckets:     %d per table  |  Total slots: %d%n" +
                 "  Chunk size:  %s%n" +
                 "  Physical:    %s%n" +
-                "  Fill:        %d / %d slots  (%.1f%%)%n" +
+                "  Fill:        %d / %d slots  (%.1f%%)  quarantined: %d%n" +
                 "  Used:        %s%n" +
                 "  Free:        %s",
                 b.getId(),
@@ -86,7 +86,7 @@ public class BlobCommands {
                 b.getNumBuckets(), stats.totalSlots(),
                 ShellTable.humanSize(b.getChunkSize()),
                 ShellTable.humanSize(b.getTotalBytes()),
-                stats.activeSlots(), stats.totalSlots(), stats.fillPercent(),
+                stats.activeSlots(), stats.totalSlots(), stats.fillPercent(), stats.quarantinedSlots(),
                 ShellTable.humanSize(stats.usedBytes(b.getChunkSize())),
                 ShellTable.humanSize(stats.freeBytes(b.getChunkSize())));
     }
@@ -106,6 +106,19 @@ public class BlobCommands {
         CuckooHashTable.FillStats newStats = cache.get(newBlob).getFillStats();
         return String.format("Done.  new id=%s  fill=%.1f%% (%d/%d slots)",
                 newBlob.getId(), newStats.fillPercent(), newStats.activeSlots(), newStats.totalSlots());
+    }
+
+    @ShellMethod(key = "scrub",
+            value = "Verify the CRC32C of every stored chunk in a blob  |  scrub --id BLOB_ID")
+    public String scrub(@ShellOption(help = "Blob file ID") String id) throws IOException {
+        BlobFileEntity b = blobService.getById(id);
+        CuckooHashTable.ScrubReport r = cache.get(b).scrub();
+        StringBuilder sb = new StringBuilder(String.format(
+                "Scrub of blob %s: active=%d  ok=%d  corrupt=%d  quarantined=%d",
+                id, r.activeSlots(), r.ok(), r.corrupt(), r.quarantined()));
+        for (String p : r.problems()) sb.append(System.lineSeparator()).append("  ").append(p);
+        sb.append(System.lineSeparator()).append(r.corrupt() == 0 && r.quarantined() == 0 ? "RESULT: clean" : "RESULT: DAMAGED");
+        return sb.toString();
     }
 
     @ShellMethod(key = "rmblob", value = "Delete a blob file (only if no files reference it)  |  rmblob --id BLOB_ID [--yes]")
