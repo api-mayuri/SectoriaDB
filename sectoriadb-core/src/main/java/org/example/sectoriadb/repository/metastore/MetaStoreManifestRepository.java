@@ -152,6 +152,8 @@ public class MetaStoreManifestRepository implements ManifestRepository {
     public ObjectListing listObjects(String bucketName, String prefix, String delimiter, String startAfter, int maxKeys) {
         if (prefix == null) prefix = "";
         boolean grouped = delimiter != null && !delimiter.isEmpty();
+        // S3: MaxKeys=0 is an empty, non-truncated answer
+        if (maxKeys <= 0) return new ObjectListing(List.of(), List.of(), false, null);
         try (ReadTxn tx = store().beginRead()) {
             BTree objects = tx.tree(Trees.OBJECTS);
             BTree manifests = tx.tree(Trees.MANIFESTS);
