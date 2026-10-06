@@ -160,8 +160,8 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 |---|---|---|
 | `sectoriadb.meta-dir` | `./sectoriadb-meta` | каталог с JSON-метаданными и ключами |
 | `sectoriadb.data-dir` | `./sectoriadb-data` | каталог с блоб-файлами |
-| `sectoriadb.default-chunk-size` | `1048576` | размер чанка, байт |
-| `sectoriadb.default-num-buckets` | `1280` | число корзин хэш-таблицы нового блоба |
+| `sectoriadb.default-chunk-size` | `16384` | размер чанка, байт (16 КиБ; корзина из 4 слотов = 64 КиБ) |
+| `sectoriadb.default-num-buckets` | `65536` | число корзин в каждой из двух таблиц нового блоба (по умолчанию 2·65536·4·16 КиБ = 8 ГиБ данных) |
 | `sectoriadb.max-evictions` | `32` | максимум вытеснений при вставке в таблицу |
 | `sectoriadb.auto-resize.enabled` | `true` | автоматическое расширение блоба |
 | `sectoriadb.auto-resize.threshold-percent` | `80` | заполненность, при которой блоб расширяется |
@@ -181,7 +181,7 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 | Объект | манифест (JSON) со списком ключей чанков, типом содержимого и ETag |
 | Данные | блоб — большой разрежённый файл с хэш-таблицей чанков |
 
-Загруженный файл режется на чанки фиксированного размера. Каждый чанк хэшируется (Murmur) и кладётся в кукушкину
+Загруженный файл режется на чанки фиксированного размера. Каждый чанк хэшируется (XXH64) и кладётся в кукушкину
 хэш-таблицу блоба. Манифест хранит только упорядоченный список ключей чанков. Благодаря этому `Range`-запросы
 читают лишь нужные чанки, а видео можно перематывать.
 

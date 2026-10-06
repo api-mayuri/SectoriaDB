@@ -9,8 +9,8 @@ public class StorageProperties {
 
     private String metaDir = "./sectoriadb-meta";
     private String dataDir = "./sectoriadb-data";
-    private int defaultChunkSize = 1_048_576;
-    private int defaultNumBuckets = 1_280;
+    private int defaultChunkSize = 16_384;
+    private int defaultNumBuckets = 65_536;
     private int maxEvictions = 32;
     /** fsync data and metadata writes (data → force → meta → force). Disable only for tests/benchmarks. */
     private boolean fsync = true;
