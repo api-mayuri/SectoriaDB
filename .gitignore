@@ -45,3 +45,9 @@ output/
 
 ### Docker secrets ###
 .env
+
+### Benchmark results (local files only; see bench/results/README.md) ###
+bench/results/*
+!bench/results/README.md
+bench/compat/work/
+bench/faults/work/

@@ -53,7 +53,8 @@ def hardware():
         "docker_data_fs": data_mount,
         "disk_device": dev,
         "disk_rotational": None if rota is None else rota.strip() == "1",
-        "disk_type": None if rota is None else ("HDD" if rota.strip() == "1" else "SSD/NVMe/virtual"),
+        "disk_type": ("virtual disk (virtio): the rotational flag is not reliable, ask the provider" if base.startswith("vd")
+                      else None if rota is None else ("HDD" if rota.strip() == "1" else "SSD/NVMe")),
         "lsblk": sh("lsblk -d -o NAME,ROTA,SIZE,MODEL,TRAN 2>/dev/null"),
         "virtualization": sh("systemd-detect-virt 2>/dev/null"),
     }
