@@ -41,8 +41,9 @@ public class FileCommands {
         if (pool != null) {
             PoolEntity poolEntity = poolService.getByName(pool);
             manifests = fileService.listAll().stream()
-                    .filter(m -> m.getBlobFile() != null
-                            && poolEntity.getId().equals(m.getBlobFile().getPoolId()))
+                    .filter(m -> poolEntity.getId().equals(m.getPoolId())
+                            || (m.getPhysicalBlob() != null
+                                && poolEntity.getId().equals(m.getPhysicalBlob().getPoolId())))
                     .toList();
         } else {
             manifests = fileService.listAll();
@@ -58,21 +59,30 @@ public class FileCommands {
     @ShellMethod(key = "info", value = "Show detailed info about a stored file  |  info --id FILE_ID")
     public String info(@ShellOption(help = "File ID") String id) {
         ManifestEntity m = fileService.getActiveManifest(id);
-        String poolName = (m.getBlobFile() != null && m.getBlobFile().getPool() != null)
-                ? m.getBlobFile().getPool().getName()
-                : m.getBlobFile() != null ? m.getBlobFile().getPoolId() : "?";
+        var phys = m.getPhysicalBlob();
+        String poolName = (phys != null && phys.getPool() != null)
+                ? phys.getPool().getName()
+                : phys != null ? phys.getPoolId() : m.getPoolId() != null ? m.getPoolId() : "?";
+        String stored = switch (m.getStorageKind()) {
+            case EMPTY -> "empty object (no blob)";
+            case SMALL -> String.format("1 record in small blob at offset %d (%d B)",
+                    m.getSmallOffset(), m.getSmallLength());
+            case CHUNKED -> String.format("%d × %s  (last chunk: %s)", m.getTotalChunks(),
+                    ShellTable.humanSize(m.getChunkSize()), ShellTable.humanSize(m.getLastChunkSize()));
+        };
         return String.format(
                 "File: %s%n" +
                 "  ID:          %s%n" +
+                "  Kind:        %s%n" +
                 "  Blob:        %s%n" +
                 "  Pool:        %s%n" +
                 "  Size:        %s%n" +
-                "  Chunks:      %d × %s  (last chunk: %s)%n" +
+                "  Stored as:   %s%n" +
                 "  Stored at:   %s",
-                m.getSourceFileName(), m.getId(), m.getBlobFileId(), poolName,
+                m.getSourceFileName(), m.getId(), m.getStorageKind(),
+                phys != null ? phys.getId() : "-", poolName,
                 ShellTable.humanSize(m.getTotalBytes()),
-                m.getTotalChunks(), ShellTable.humanSize(m.getChunkSize()),
-                ShellTable.humanSize(m.getLastChunkSize()),
+                stored,
                 m.getCreatedAt());
     }
 

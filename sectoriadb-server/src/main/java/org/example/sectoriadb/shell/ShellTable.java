@@ -1,6 +1,11 @@
 package org.example.sectoriadb.shell;
 
 import org.example.sectoriadb.model.BlobFileEntity;
+import org.example.sectoriadb.model.BlobKind;
+import org.example.sectoriadb.service.BlobService;
+import org.example.sectoriadb.service.impl.SmallObjectBlob;
+
+import java.io.IOException;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 
@@ -8,14 +13,26 @@ import org.example.sectoriadb.service.impl.CuckooHashTable;
 class ShellTable {
 
     static String blobTableHeader() {
-        return String.format("  %-36s  %-24s  %8s  %8s  %6s%n",
-                "Blob ID", "File", "Buckets", "Fill %", "Size") +
-               "  " + "─".repeat(90) + "\n";
+        return String.format("  %-36s  %-6s  %-24s  %8s  %8s  %s%n",
+                "Blob ID", "Kind", "File", "Buckets", "Fill %", "Size") +
+               "  " + "─".repeat(100) + "\n";
+    }
+
+    /** One table row for a blob of either kind. */
+    static String blobRow(BlobService blobService, BlobFileEntity b) throws IOException {
+        if (b.getKind() == BlobKind.SMALL) {
+            SmallObjectBlob.Stats s = blobService.getSmallStats(b);
+            return String.format("  %-36s  %-6s  %-24s  %8s  %8s  %s  (live %s, dead %s%s)%n",
+                    b.getId(), "SMALL", truncate(b.getFileName(), 24), "-", "-",
+                    humanSize(s.fileBytes()), humanSize(s.liveBytes()), humanSize(s.deadBytes()),
+                    s.writable() ? "" : ", READ-ONLY");
+        }
+        return blobTableRow(b, blobService.getFillStats(b));
     }
 
     static String blobTableRow(BlobFileEntity b, CuckooHashTable.FillStats stats) {
-        return String.format("  %-36s  %-24s  %8d  %6.1f%%  %s%n",
-                b.getId(), truncate(b.getFileName(), 24),
+        return String.format("  %-36s  %-6s  %-24s  %8d  %6.1f%%  %s%n",
+                b.getId(), "CUCKOO", truncate(b.getFileName(), 24),
                 b.getNumBuckets(), stats.fillPercent(),
                 humanSize(b.getTotalBytes()));
     }
@@ -23,6 +40,10 @@ class ShellTable {
     static String fileTableHeader() {
         return String.format("%-36s  %-40s  %8s  %12s%n", "ID", "File", "Chunks", "Size") +
                "─".repeat(100) + "\n";
+    }
+
+    static String kindLabel(ManifestEntity m) {
+        return m.getStorageKind() == null ? "CHUNKED" : m.getStorageKind().name();
     }
 
     static String fileTableRow(ManifestEntity m) {

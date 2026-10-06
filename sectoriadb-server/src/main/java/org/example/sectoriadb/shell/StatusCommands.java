@@ -2,6 +2,7 @@ package org.example.sectoriadb.shell;
 
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.model.BlobFileEntity;
+import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.model.OperationLogEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.OperationLogRepository;
@@ -54,8 +55,9 @@ public class StatusCommands {
             if (!blobs.isEmpty()) {
                 sb.append(ShellTable.blobTableHeader());
                 for (BlobFileEntity b : blobs) {
+                    sb.append(ShellTable.blobRow(blobService, b));
+                    if (b.getKind() != BlobKind.CUCKOO) continue;
                     CuckooHashTable.FillStats s = cache.get(b).getFillStats();
-                    sb.append(ShellTable.blobTableRow(b, s));
                     if (s.fillPercent() >= props.getAutoResize().getThresholdPercent()) {
                         sb.append(String.format(
                                 "    ⚠ Fill >= threshold (%d%%) — auto-resize will trigger%n",
@@ -76,6 +78,7 @@ public class StatusCommands {
                 "  default-chunk-size:             %s%n" +
                 "  default-num-buckets:            %d%n" +
                 "  max-evictions:                  %d%n" +
+                "  small-object.max-file-bytes:    %s%n" +
                 "  auto-resize.enabled:            %s%n" +
                 "  auto-resize.threshold-percent:  %d%%%n" +
                 "  auto-resize.expand-percent:     %d%%%n" +
@@ -85,6 +88,7 @@ public class StatusCommands {
                 ShellTable.humanSize(props.getDefaultChunkSize()),
                 props.getDefaultNumBuckets(),
                 props.getMaxEvictions(),
+                ShellTable.humanSize(props.getSmallObject().getMaxFileBytes()),
                 ar.isEnabled(),
                 ar.getThresholdPercent(),
                 ar.getExpandPercent(),

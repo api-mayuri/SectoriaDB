@@ -2,6 +2,7 @@ package org.example.sectoriadb.scheduler;
 
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.model.BlobFileEntity;
+import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.repository.BlobFileRepository;
 import org.example.sectoriadb.service.HashTableCache;
 import org.example.sectoriadb.service.ResizeService;
@@ -50,6 +51,7 @@ public class AutoResizeScheduler {
         log.debug("Auto-resize check: {} blob file(s), threshold={}%", blobs.size(), ar.getThresholdPercent());
 
         for (BlobFileEntity blob : blobs) {
+            if (blob.getKind() != BlobKind.CUCKOO) continue;   // small-object blobs have no slots to run out of
             try {
                 CuckooHashTable.FillStats stats = cache.get(blob).getFillStats();
                 double fill = stats.fillPercent();

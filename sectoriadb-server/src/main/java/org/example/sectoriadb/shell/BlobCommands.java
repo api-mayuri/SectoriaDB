@@ -2,6 +2,8 @@ package org.example.sectoriadb.shell;
 
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.model.BlobFileEntity;
+import org.example.sectoriadb.model.BlobKind;
+import org.example.sectoriadb.service.impl.SmallObjectBlob;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.service.BlobService;
 import org.example.sectoriadb.service.HashTableCache;
@@ -33,13 +35,18 @@ public class BlobCommands {
         this.props         = props;
     }
 
-    @ShellMethod(key = "mkblob", value = "Create a blob file in a pool  |  mkblob --pool NAME [--buckets N] [--chunk N]")
+    @ShellMethod(key = "mkblob", value = "Create a blob file in a pool  |  mkblob --pool NAME [--buckets N] [--chunk N] | mkblob --pool NAME --small")
     public String mkblob(
             @ShellOption(help = "Pool name") String pool,
             @ShellOption(defaultValue = ShellOption.NULL, help = "Number of hash buckets (default from config)") Integer buckets,
-            @ShellOption(defaultValue = ShellOption.NULL, help = "Chunk size in bytes (default from config)") Integer chunk)
+            @ShellOption(defaultValue = ShellOption.NULL, help = "Chunk size in bytes (default from config)") Integer chunk,
+            @ShellOption(defaultValue = "false", help = "Create a small-object blob (append-only log) instead of a cuckoo table") boolean small)
             throws IOException {
         PoolEntity poolEntity = poolService.getByName(pool);
+        if (small) {
+            BlobFileEntity sb = blobService.createSmall(poolEntity);
+            return String.format("Created small-object blob  id=%s  file=%s", sb.getId(), sb.getFileName());
+        }
         int b  = buckets != null ? buckets : props.getDefaultNumBuckets();
         int cs = chunk   != null ? chunk   : props.getDefaultChunkSize();
 
@@ -57,8 +64,7 @@ public class BlobCommands {
         StringBuilder sb = new StringBuilder();
         sb.append(ShellTable.blobTableHeader());
         for (BlobFileEntity b : list) {
-            CuckooHashTable.FillStats stats = cache.get(b).getFillStats();
-            sb.append(ShellTable.blobTableRow(b, stats));
+            sb.append(ShellTable.blobRow(blobService, b));
         }
         return sb.toString().stripTrailing();
     }
@@ -66,6 +72,25 @@ public class BlobCommands {
     @ShellMethod(key = "blob", value = "Show detailed blob info and fill statistics  |  blob --id BLOB_ID")
     public String blob(@ShellOption(help = "Blob file ID") String id) throws IOException {
         BlobFileEntity b = blobService.getById(id);
+        if (b.getKind() == BlobKind.SMALL) {
+            SmallObjectBlob.Stats s = blobService.getSmallStats(b);
+            return String.format(
+                    "Blob: %s  (small-object blob)%n" +
+                    "  Pool:        %s%n" +
+                    "  Path:        %s%n" +
+                    "  Created:     %s%n" +
+                    "  File size:   %s  (valid log, header included)%n" +
+                    "  Live:        %d record(s), %s%n" +
+                    "  Dead:        %d record(s), %s  (reclaimable by a future compaction)%n" +
+                    "  Writable:    %s",
+                    b.getId(),
+                    b.getPool() != null ? b.getPool().getName() : b.getPoolId(),
+                    b.getFilePath(), b.getCreatedAt(),
+                    ShellTable.humanSize(s.fileBytes()),
+                    s.liveRecords(), ShellTable.humanSize(s.liveBytes()),
+                    s.deadRecords(), ShellTable.humanSize(s.deadBytes()),
+                    s.writable() ? "yes" : "NO (damage found in the middle of the log; see 'scrub')");
+        }
         CuckooHashTable.FillStats stats = cache.get(b).getFillStats();
 
         return String.format(
@@ -98,6 +123,9 @@ public class BlobCommands {
             @ShellOption(help = "New number of buckets (must leave ≤70% fill after migration)") int buckets)
             throws IOException {
         BlobFileEntity old = blobService.getById(id);
+        if (old.getKind() == BlobKind.SMALL) {
+            return "Small-object blobs cannot be resized (they grow by rollover to a new blob).";
+        }
         CuckooHashTable.FillStats stats = cache.get(old).getFillStats();
         System.out.printf("Resizing blob %s: %d → %d buckets  (current fill: %.1f%%)%n",
                 id, old.getNumBuckets(), buckets, stats.fillPercent());
@@ -112,6 +140,15 @@ public class BlobCommands {
             value = "Verify the CRC32C of every stored chunk in a blob  |  scrub --id BLOB_ID")
     public String scrub(@ShellOption(help = "Blob file ID") String id) throws IOException {
         BlobFileEntity b = blobService.getById(id);
+        if (b.getKind() == BlobKind.SMALL) {
+            SmallObjectBlob.ScrubReport r = blobService.scrubSmall(b);
+            StringBuilder sb = new StringBuilder(String.format(
+                    "Scrub of small-object blob %s: records=%d  active=%d  deleted=%d  ok=%d  corrupt=%d",
+                    id, r.records(), r.active(), r.deleted(), r.ok(), r.corrupt()));
+            for (String p : r.problems()) sb.append(System.lineSeparator()).append("  ").append(p);
+            sb.append(System.lineSeparator()).append(r.corrupt() == 0 ? "RESULT: clean" : "RESULT: DAMAGED");
+            return sb.toString();
+        }
         CuckooHashTable.ScrubReport r = cache.get(b).scrub();
         StringBuilder sb = new StringBuilder(String.format(
                 "Scrub of blob %s: active=%d  ok=%d  corrupt=%d  quarantined=%d",

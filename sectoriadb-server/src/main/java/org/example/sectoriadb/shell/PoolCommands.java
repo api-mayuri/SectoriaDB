@@ -69,8 +69,7 @@ public class PoolCommands {
         if (!blobs.isEmpty()) {
             sb.append(ShellTable.blobTableHeader());
             for (BlobFileEntity b : blobs) {
-                CuckooHashTable.FillStats stats = cache.get(b).getFillStats();
-                sb.append(ShellTable.blobTableRow(b, stats));
+                sb.append(ShellTable.blobRow(blobService, b));
             }
         }
         return sb.toString().stripTrailing();
