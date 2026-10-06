@@ -116,6 +116,10 @@ public class S3BucketController {
 
         DeleteRequest del = parseDeleteXml(request.getInputStream());
         List<String> keys = del.keys();
+        if (keys.size() > 1000) {
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedXML",
+                    "The request must not contain more than 1000 keys");
+        }
         StringBuilder result = new StringBuilder(
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                 "<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
@@ -146,7 +150,7 @@ public class S3BucketController {
                 NodeList children = objects.item(i).getChildNodes();
                 for (int j = 0; j < children.getLength(); j++) {
                     if ("Key".equals(children.item(j).getNodeName())) {
-                        keys.add(children.item(j).getTextContent().trim());
+                        keys.add(children.item(j).getTextContent());
                     }
                 }
             }
@@ -229,14 +233,28 @@ public class S3BucketController {
             @RequestParam(value = "marker",             defaultValue = "") String marker,
             @RequestParam(value = "continuation-token", required = false) String continuationToken,
             @RequestParam(value = "start-after",        required = false) String startAfter,
-            @RequestParam(value = "list-type",          defaultValue = "1") int listType) {
+            @RequestParam(value = "list-type",          defaultValue = "1") int listType,
+            @RequestParam(value = "encoding-type",      required = false) String encodingType,
+            @RequestParam(value = "fetch-owner",        defaultValue = "false") boolean fetchOwner) {
 
         // Ensure bucket exists; throws NoSuchBucket if not
         lookup.requireBucket(bucket);
 
-        // Normalize max-keys: 0 means 1000, cap at 1000
+        if (listType != 1 && listType != 2) {
+            throw S3Exception.invalidArgument("Invalid list-type: " + listType);
+        }
+        boolean urlEncode = false;
+        if (encodingType != null && !encodingType.isEmpty()) {
+            if (!"url".equals(encodingType)) {
+                throw S3Exception.invalidArgument("Invalid Encoding Method specified in Request");
+            }
+            urlEncode = true;
+        }
+        // max-keys: 0 is a valid request for an empty page (not "unlimited"); S3 caps larger values at 1000
         int maxKeys = maxKeysParam != null ? maxKeysParam : 1000;
-        if (maxKeys <= 0) maxKeys = 1000;
+        if (maxKeys < 0) {
+            throw S3Exception.invalidArgument("Argument maxKeys must be an integer between 0 and 2147483647");
+        }
         if (maxKeys > 1000) maxKeys = 1000;
 
         // ListObjectsV2: continuation-token wins over start-after; V1: marker
@@ -249,7 +267,9 @@ public class S3BucketController {
 
         // Range scan of the (bucket, key) index from max(prefix, after), maxKeys entries (keys and common prefixes
         // together); delimiter groups are skipped as whole ranges. See MetaStoreManifestRepository.listObjects.
-        ManifestRepository.ObjectListing page = manifestRepo.listObjects(bucket, prefix, delimiter, after, maxKeys);
+        ManifestRepository.ObjectListing page = maxKeys == 0
+                ? new ManifestRepository.ObjectListing(List.of(), List.of(), false, null)
+                : manifestRepo.listObjects(bucket, prefix, delimiter, after, maxKeys);
         List<ManifestRepository.ObjectSummary> pageObjects = page.objects();
         List<String> pageCommonPrefixes = page.commonPrefixes();
         boolean isTruncated = page.truncated();
@@ -257,20 +277,28 @@ public class S3BucketController {
 
         // Build response
         ListBucketResult result = new ListBucketResult();
+        final boolean enc = urlEncode;
+        java.util.function.UnaryOperator<String> e = v -> enc ? S3Support.urlEncodeKey(v) : v;
         result.setName(bucket);
-        result.setPrefix(prefix);
+        result.setPrefix(e.apply(prefix));
+        if (enc) result.setEncodingType("url");
         if (delimiter != null && !delimiter.isEmpty()) {
-            result.setDelimiter(delimiter);
+            result.setDelimiter(e.apply(delimiter));
         }
         result.setMaxKeys(maxKeys);
         result.setTruncated(isTruncated);
 
         List<S3ObjectEntry> contents = pageObjects.stream()
-                .map(o -> new S3ObjectEntry(
-                        o.key(),
-                        S3Support.isoDate(o.lastModified()),
-                        o.etag() != null ? o.etag() : "\"\"",
-                        o.size()))
+                .map(o -> {
+                    S3ObjectEntry entry = new S3ObjectEntry(
+                            e.apply(o.key()),
+                            S3Support.isoDate(o.lastModified()),
+                            o.etag() != null ? o.etag() : "\"\"",
+                            o.size());
+                    // V1 always lists the owner, V2 only with fetch-owner=true
+                    if (listType == 1 || fetchOwner) entry.setOwner(new org.example.sectoriadb.s3.xml.Owner("sectoriadb", "sectoriadb"));
+                    return entry;
+                })
                 .toList();
 
         result.setContents(contents);
@@ -280,24 +308,25 @@ public class S3BucketController {
             if (continuationToken != null) {
                 result.setContinuationToken(continuationToken);
             }
+            if (startAfter != null && !startAfter.isEmpty()) {
+                result.setStartAfter(e.apply(startAfter));
+            }
             result.setKeyCount(contents.size() + pageCommonPrefixes.size());   // keys and common prefixes, as in S3
             if (isTruncated) {
                 result.setNextContinuationToken(nextMarker);
             }
         } else {
-            // ListObjectsV1 response
-            if (!marker.isEmpty()) {
-                result.setMarker(marker);
-            }
+            // ListObjectsV1 response: Marker is always present (empty when none was given)
+            result.setMarker(e.apply(marker));
             if (isTruncated) {
-                result.setNextMarker(nextMarker);
+                result.setNextMarker(e.apply(nextMarker));
             }
         }
 
         // Add CommonPrefixes to result
         if (!pageCommonPrefixes.isEmpty()) {
             result.setCommonPrefixes(pageCommonPrefixes.stream()
-                    .map(ListBucketResult.CommonPrefix::new)
+                    .map(cp -> new ListBucketResult.CommonPrefix(e.apply(cp)))
                     .toList());
         }
 

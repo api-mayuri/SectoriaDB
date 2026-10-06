@@ -370,4 +370,57 @@ class S3ApiRegressionTest {
         assertEquals(404, get("del-quiet", "x").statusCode());
         assertEquals(404, get("del-quiet", "y").statusCode());
     }
+
+    /** s3-tests test_bucket_create_special_key_names: keys that are only spaces were trimmed to "" and never deleted. */
+    @Test
+    void multiObjectDeleteKeepsWhitespaceInKeys() throws Exception {
+        mkBucket("del-space");
+        for (String k : new String[]{" ", "_ ", " lead", "trail ", "a  b"}) {
+            assertEquals(200, put("del-space", k, "v".getBytes()).statusCode(), k);
+        }
+        String body = "<Delete><Object><Key> </Key></Object><Object><Key>_ </Key></Object><Object><Key> lead</Key></Object>"
+                + "<Object><Key>trail </Key></Object><Object><Key>a  b</Key></Object></Delete>";
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/del-space?delete")).POST(BodyPublishers.ofString(body))).statusCode());
+        var list = new String(send(HttpRequest.newBuilder(uri("/del-space")).GET()).body(), StandardCharsets.UTF_8);
+        assertFalse(list.contains("<Key>"), "bucket must be empty after the multi-delete: " + list);
+    }
+
+    // ── s3-tests listing details ─────────────────────────────────────────────
+
+    @Test
+    void listObjectsHonoursMaxKeysZeroEncodingTypeAndEchoesMarkers() throws Exception {
+        mkBucket("list-det");
+        put("list-det", "asdf+b", "1".getBytes());
+        put("list-det", "foo/bar", "2".getBytes());
+        put("list-det", "quux ab/c", "3".getBytes());
+        // max-keys=0 is an empty page, not "everything"
+        String zero = new String(send(HttpRequest.newBuilder(uri("/list-det?max-keys=0")).GET()).body(), StandardCharsets.UTF_8);
+        assertFalse(zero.contains("<Key>"), zero);
+        assertTrue(zero.contains("<IsTruncated>false</IsTruncated>"), zero);
+        // V1 always has <Marker/> and <Owner>, V2 echoes StartAfter
+        String v1 = new String(send(HttpRequest.newBuilder(uri("/list-det")).GET()).body(), StandardCharsets.UTF_8);
+        assertTrue(v1.contains("<Marker/>") || v1.contains("<Marker></Marker>"), v1);
+        assertTrue(v1.contains("<Owner>"), v1);
+        String v2 = new String(send(HttpRequest.newBuilder(uri("/list-det?list-type=2&start-after=asdf%2Bb")).GET()).body(), StandardCharsets.UTF_8);
+        assertTrue(v2.contains("<StartAfter>asdf+b</StartAfter>"), v2);
+        assertFalse(v2.contains("<Owner>"), v2);
+        // encoding-type=url
+        String enc = new String(send(HttpRequest.newBuilder(uri("/list-det?delimiter=/&encoding-type=url")).GET()).body(), StandardCharsets.UTF_8);
+        assertTrue(enc.contains("<Key>asdf%2Bb</Key>"), enc);
+        assertTrue(enc.contains("<Prefix>quux%20ab/</Prefix>") && enc.contains("<EncodingType>url</EncodingType>"), enc);
+        assertEquals(400, send(HttpRequest.newBuilder(uri("/list-det?encoding-type=bogus")).GET()).statusCode());
+    }
+
+    @Test
+    void multiObjectDeleteOfMoreThanThousandKeysIsRejectedAndBadBucketNamesAreInvalidBucketName() throws Exception {
+        mkBucket("del-limit");
+        StringBuilder sb = new StringBuilder("<Delete>");
+        for (int i = 0; i < 1001; i++) sb.append("<Object><Key>k").append(i).append("</Key></Object>");
+        var r = send(HttpRequest.newBuilder(uri("/del-limit?delete")).POST(BodyPublishers.ofString(sb.append("</Delete>").toString())));
+        assertEquals(400, r.statusCode());
+        assertEquals("MalformedXML", code(r));
+        var bad = send(HttpRequest.newBuilder(uri("/ab")).PUT(BodyPublishers.noBody()));
+        assertEquals(400, bad.statusCode());
+        assertEquals("InvalidBucketName", code(bad));
+    }
 }

@@ -46,18 +46,18 @@ public class S3Lookup {
      */
     public void validateBucketName(String name) {
         if (name == null || name.isEmpty()) {
-            throw S3Exception.invalidArgument("Bucket name cannot be empty");
+            throw invalidBucketName("Bucket name cannot be empty");
         }
 
         // Length: 3-63 characters
         if (name.length() < 3 || name.length() > 63) {
-            throw S3Exception.invalidArgument("Bucket name must be between 3 and 63 characters");
+            throw invalidBucketName("Bucket name must be between 3 and 63 characters");
         }
 
         // Character set: [a-z0-9.-]
         for (char c : name.toCharArray()) {
             if (!((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '-')) {
-                throw S3Exception.invalidArgument("Bucket name contains invalid character: " + c);
+                throw invalidBucketName("Bucket name contains invalid character: " + c);
             }
         }
 
@@ -65,18 +65,22 @@ public class S3Lookup {
         char first = name.charAt(0);
         char last = name.charAt(name.length() - 1);
         if (!Character.isLetterOrDigit(first) || !Character.isLetterOrDigit(last)) {
-            throw S3Exception.invalidArgument("Bucket name must start and end with a letter or digit");
+            throw invalidBucketName("Bucket name must start and end with a letter or digit");
         }
 
         // Must not contain ".."
         if (name.contains("..")) {
-            throw S3Exception.invalidArgument("Bucket name must not contain consecutive dots");
+            throw invalidBucketName("Bucket name must not contain consecutive dots");
         }
 
         // Must not be a valid IP address (very basic check)
         if (isIpAddress(name)) {
-            throw S3Exception.invalidArgument("Bucket name must not be a valid IP address");
+            throw invalidBucketName("Bucket name must not be a valid IP address");
         }
+    }
+
+    private static S3Exception invalidBucketName(String message) {
+        return new S3Exception(org.springframework.http.HttpStatus.BAD_REQUEST, "InvalidBucketName", message);
     }
 
     /**

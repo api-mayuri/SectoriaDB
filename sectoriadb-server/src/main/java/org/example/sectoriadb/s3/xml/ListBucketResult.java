@@ -31,6 +31,12 @@ public class ListBucketResult {
     @JacksonXmlProperty(localName = "KeyCount")
     private int keyCount;
 
+    @JacksonXmlProperty(localName = "EncodingType")
+    private String encodingType;
+
+    @JacksonXmlProperty(localName = "StartAfter")
+    private String startAfter;
+
     @JacksonXmlProperty(localName = "ContinuationToken")
     private String continuationToken;
 
@@ -76,6 +82,12 @@ public class ListBucketResult {
 
     public String getNextContinuationToken() { return nextContinuationToken; }
     public void setNextContinuationToken(String nextContinuationToken) { this.nextContinuationToken = nextContinuationToken; }
+
+    public String getEncodingType() { return encodingType; }
+    public void setEncodingType(String encodingType) { this.encodingType = encodingType; }
+
+    public String getStartAfter() { return startAfter; }
+    public void setStartAfter(String startAfter) { this.startAfter = startAfter; }
 
     public String getMarker() { return marker; }
     public void setMarker(String marker) { this.marker = marker; }

@@ -37,6 +37,23 @@ public final class S3Support {
     /** ISO-8601 with millis, as used inside S3 XML bodies. */
     public static String isoDate(Instant t) { return ISO_MILLIS.format(t); }
 
+    /** encoding-type=url: percent-encode everything except unreserved characters and '/'. */
+    public static String urlEncodeKey(String s) {
+        if (s == null) return null;
+        StringBuilder sb = new StringBuilder(s.length() + 8);
+        for (byte b : s.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+            int c = b & 0xFF;
+            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+                    || c == '-' || c == '_' || c == '.' || c == '~' || c == '/') {
+                sb.append((char) c);
+            } else {
+                sb.append('%').append(Character.toUpperCase(Character.forDigit(c >> 4, 16)))
+                  .append(Character.toUpperCase(Character.forDigit(c & 15, 16)));
+            }
+        }
+        return sb.toString();
+    }
+
     public static String xmlEscape(String s) {
         if (s == null) return "";
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
