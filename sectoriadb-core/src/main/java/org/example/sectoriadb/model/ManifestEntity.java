@@ -23,6 +23,18 @@ public class ManifestEntity {
     private Instant createdAt;
     private boolean deleted = false;
 
+    /** Absent in old manifests: CHUNKED. */
+    private StorageKind storageKind = StorageKind.CHUNKED;
+    /** Pool the object lives in (needed for EMPTY objects, which reference no blob). */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String poolId;
+    // SMALL objects: one record of a small-object blob
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String smallBlobId;
+    private long smallOffset;
+    private int smallLength;
+    private int smallCrc32c;
+
     // S3 API fields (nullable for backward compat with existing manifests)
     private String objectKey;     // S3 object key, e.g. "folder/image.jpg"
     private String bucketName;    // S3 bucket name = pool name
@@ -47,7 +59,15 @@ public class ManifestEntity {
     @JsonIgnore
     private BlobFileEntity blobFile;
 
+    /** Resolved small-object blob (SMALL manifests only) — not stored in JSON. */
+    @JsonIgnore
+    private BlobFileEntity smallBlob;
+
     public ManifestEntity() {}
+
+    /** The blob file physically holding the bytes (cuckoo or small-object), or null for EMPTY objects. */
+    @JsonIgnore
+    public BlobFileEntity getPhysicalBlob() { return blobFile != null ? blobFile : smallBlob; }
 
     // ── Chunk-key helpers ────────────────────────────────────────────────────
 
@@ -80,6 +100,30 @@ public class ManifestEntity {
         this.blobFile = blobFile;
         if (blobFile != null) this.blobFileId = blobFile.getId();
     }
+
+    public StorageKind getStorageKind() { return storageKind; }
+    public void setStorageKind(StorageKind k) { this.storageKind = k != null ? k : StorageKind.CHUNKED; }
+
+    public String getPoolId() { return poolId; }
+    public void setPoolId(String poolId) { this.poolId = poolId; }
+
+    public String getSmallBlobId() { return smallBlobId; }
+    public void setSmallBlobId(String smallBlobId) { this.smallBlobId = smallBlobId; }
+
+    public BlobFileEntity getSmallBlob() { return smallBlob; }
+    public void setSmallBlob(BlobFileEntity smallBlob) {
+        this.smallBlob = smallBlob;
+        if (smallBlob != null) this.smallBlobId = smallBlob.getId();
+    }
+
+    public long getSmallOffset() { return smallOffset; }
+    public void setSmallOffset(long smallOffset) { this.smallOffset = smallOffset; }
+
+    public int getSmallLength() { return smallLength; }
+    public void setSmallLength(int smallLength) { this.smallLength = smallLength; }
+
+    public int getSmallCrc32c() { return smallCrc32c; }
+    public void setSmallCrc32c(int smallCrc32c) { this.smallCrc32c = smallCrc32c; }
 
     public String getSourceFileName() { return sourceFileName; }
     public void setSourceFileName(String s) { this.sourceFileName = s; }

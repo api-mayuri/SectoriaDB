@@ -15,6 +15,8 @@ public class BlobFileEntity {
     private int chunkSize;
     private long totalBytes;
     private Instant createdAt;
+    /** Absent in old registry files: defaults to CUCKOO. For SMALL, numBuckets/chunkSize are 0. */
+    private BlobKind kind = BlobKind.CUCKOO;
 
     /** Resolved reference — not stored in JSON, populated by the repository. */
     @JsonIgnore
@@ -48,6 +50,9 @@ public class BlobFileEntity {
 
     public long getTotalBytes() { return totalBytes; }
     public void setTotalBytes(long totalBytes) { this.totalBytes = totalBytes; }
+
+    public BlobKind getKind() { return kind; }
+    public void setKind(BlobKind kind) { this.kind = kind != null ? kind : BlobKind.CUCKOO; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

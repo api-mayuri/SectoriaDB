@@ -123,21 +123,21 @@ public class JsonManifestRepository implements ManifestRepository {
     @Override
     public List<ManifestEntity> findByBlobFileIdAndDeletedFalse(String blobFileId) {
         return findAll().stream()
-                .filter(e -> blobFileId.equals(e.getBlobFileId()) && !e.isDeleted())
+                .filter(e -> refersTo(e, blobFileId) && !e.isDeleted())
                 .toList();
     }
 
     @Override
     public List<ManifestEntity> findByBlobFileId(String blobFileId) {
         return findAll().stream()
-                .filter(e -> blobFileId.equals(e.getBlobFileId()))
+                .filter(e -> refersTo(e, blobFileId))
                 .toList();
     }
 
     @Override
     public long countByBlobFileIdAndDeletedFalse(String blobFileId) {
         return findAll().stream()
-                .filter(e -> blobFileId.equals(e.getBlobFileId()) && !e.isDeleted())
+                .filter(e -> refersTo(e, blobFileId) && !e.isDeleted())
                 .count();
     }
 
@@ -201,9 +201,17 @@ public class JsonManifestRepository implements ManifestRepository {
         }
     }
 
+    /** True if the manifest keeps bytes in this blob (as chunks of a cuckoo blob or as a small-object record). */
+    private static boolean refersTo(ManifestEntity e, String blobId) {
+        return blobId.equals(e.getBlobFileId()) || blobId.equals(e.getSmallBlobId());
+    }
+
     private void resolveRef(ManifestEntity e) {
         if (e.getBlobFileId() != null) {
             blobRepo.findById(e.getBlobFileId()).ifPresent(e::setBlobFile);
+        }
+        if (e.getSmallBlobId() != null) {
+            blobRepo.findById(e.getSmallBlobId()).ifPresent(e::setSmallBlob);
         }
     }
 }

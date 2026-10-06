@@ -61,6 +61,10 @@ public class ResizeService {
         BlobFileEntity oldEntity = blobRepo.findById(blobId)
                 .orElseThrow(() -> new IllegalArgumentException("Blob not found: " + blobId));
 
+        if (oldEntity.getKind() != org.example.sectoriadb.model.BlobKind.CUCKOO) {
+            throw new IllegalArgumentException("Blob " + blobId + " is a " + oldEntity.getKind()
+                    + " blob; only cuckoo blobs can be resized");
+        }
         CuckooHashTable oldTable = cache.get(oldEntity);
         CuckooHashTable.FillStats stats = oldTable.getFillStats();
         int activeSlots = stats.activeSlots();

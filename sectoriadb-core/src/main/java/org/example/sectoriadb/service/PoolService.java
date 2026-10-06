@@ -28,16 +28,21 @@ public class PoolService {
     private final BlobFileRepository blobRepo;
     private final ManifestRepository manifestRepo;
     private final OperationLogService opLog;
+    private final HashTableCache cache;
+    private final SmallBlobCache smallCache;
     private final StorageProperties props;
 
     public PoolService(PoolRepository poolRepo, BlobFileRepository blobRepo,
                        ManifestRepository manifestRepo,
-                       OperationLogService opLog, StorageProperties props) {
+                       OperationLogService opLog, StorageProperties props,
+                       HashTableCache cache, SmallBlobCache smallCache) {
         this.poolRepo     = poolRepo;
         this.blobRepo     = blobRepo;
         this.manifestRepo = manifestRepo;
         this.opLog        = opLog;
         this.props        = props;
+        this.cache        = cache;
+        this.smallCache   = smallCache;
     }
 
     public PoolEntity create(String name, String basePath) throws IOException {
@@ -132,16 +137,15 @@ public class PoolService {
                     activeManifests.size() + " object(s).");
         }
 
-        // Purge all manifests for this bucket (including soft-deleted) and their blob files
-        List<ManifestEntity> allManifests = manifestRepo.findByBucketName(bucketName);
-        for (ManifestEntity m : allManifests) {
-            BlobFileEntity blob = blobRepo.findById(m.getBlobFileId()).orElse(null);
-            if (blob != null) {
-                // Delete the physical .raw file
-                Path rawFile = Path.of(blob.getFilePath());
-                Files.deleteIfExists(rawFile);
-                blobRepo.delete(blob);
-            }
+        // Purge all manifests for this bucket (including soft-deleted) and every blob file of the pool
+        // (cuckoo .raw and small-object .sob alike; EMPTY/SMALL manifests reference no cuckoo blob)
+        for (BlobFileEntity blob : blobRepo.findByPoolId(pool.getId())) {
+            cache.evict(blob.getId());
+            smallCache.evict(blob.getId());
+            Files.deleteIfExists(Path.of(blob.getFilePath()));
+            blobRepo.delete(blob);
+        }
+        for (ManifestEntity m : manifestRepo.findByBucketName(bucketName)) {
             manifestRepo.delete(m);
         }
 

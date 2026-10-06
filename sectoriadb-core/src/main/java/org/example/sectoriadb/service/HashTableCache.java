@@ -38,6 +38,10 @@ public class HashTableCache {
 
     /** Returns a cached or freshly-loaded CuckooHashTable. */
     public CuckooHashTable get(BlobFileEntity entity) throws IOException {
+        if (entity.getKind() != org.example.sectoriadb.model.BlobKind.CUCKOO) {
+            throw new IllegalArgumentException("Blob " + entity.getId() + " is a " + entity.getKind()
+                    + " blob, not a cuckoo table");
+        }
         try {
             return cache.computeIfAbsent(entity.getId(), id -> {
                 try {
