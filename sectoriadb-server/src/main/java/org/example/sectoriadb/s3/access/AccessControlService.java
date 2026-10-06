@@ -14,7 +14,7 @@ import org.w3c.dom.Document;
 import org.w3c.dom.NodeList;
 
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
+import org.example.sectoriadb.s3.XmlSupport;
 import java.io.ByteArrayInputStream;
 import java.util.Set;
 
@@ -264,10 +264,8 @@ public class AccessControlService {
 
     private String parseAclFromXml(String xmlBody) {
         try {
-            DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-            dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-            DocumentBuilder db = dbf.newDocumentBuilder();
-            Document doc = db.parse(new ByteArrayInputStream(xmlBody.getBytes()));
+            DocumentBuilder db = XmlSupport.newSecureDocumentBuilder(false);
+            Document doc = db.parse(new ByteArrayInputStream(xmlBody.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
 
             NodeList grants = doc.getElementsByTagName("Grant");
             boolean hasPublicRead = false;

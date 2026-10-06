@@ -585,15 +585,20 @@ public class S3MultipartController {
      * Validates upload ID (UUID format) and bucket ownership.
      * Returns the upload directory path.
      */
+    private static final java.util.regex.Pattern UPLOAD_ID_PATTERN = java.util.regex.Pattern.compile(
+            "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
+
     private Path validateUploadId(String uploadId, String bucket) throws IOException {
-        // Validate UUID format to prevent path traversal
-        try {
-            UUID.fromString(uploadId);
-        } catch (IllegalArgumentException e) {
+        // Strict canonical UUID only (hex digits and hyphens): rules out path separators, "..", and the
+        // lenient forms UUID.fromString accepts, before the id is ever used as a directory name.
+        if (uploadId == null || !UPLOAD_ID_PATTERN.matcher(uploadId).matches()) {
             throw S3Exception.noSuchUpload(uploadId);
         }
 
         Path uploadDir = getMpuDir().resolve(uploadId);
+        if (!uploadDir.normalize().getParent().equals(getMpuDir().normalize())) {
+            throw S3Exception.noSuchUpload(uploadId);
+        }
         if (!Files.isDirectory(uploadDir)) {
             throw S3Exception.noSuchUpload(uploadId);
         }
@@ -626,9 +631,7 @@ public class S3MultipartController {
 
     private ParsedParts parseCompleteXml(InputStream body) throws IOException {
         try {
-            DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-            dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-            DocumentBuilder db = dbf.newDocumentBuilder();
+            DocumentBuilder db = XmlSupport.newSecureDocumentBuilder(false);
             Document doc = db.parse(body);
             NodeList parts = doc.getElementsByTagName("Part");
             List<Integer> result = new ArrayList<>();

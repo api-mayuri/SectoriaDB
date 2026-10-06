@@ -134,10 +134,7 @@ public class S3BucketController {
 
     private List<String> parseDeleteXml(InputStream body) throws IOException {
         try {
-            DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-            dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-            dbf.setNamespaceAware(true);
-            DocumentBuilder db = dbf.newDocumentBuilder();
+            DocumentBuilder db = XmlSupport.newSecureDocumentBuilder(true);
             Document doc = db.parse(body);
             NodeList objects = doc.getElementsByTagName("Object");
             List<String> keys = new ArrayList<>();
