@@ -1,6 +1,5 @@
 package org.example.sectoriadb.s3.access;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.model.ManifestEntity;
@@ -31,12 +30,14 @@ public class AccessControlService {
     private final PoolService poolService;
     private final ObjectMapper objectMapper;
     private final ManifestRepository manifestRepo;
+    private final BucketPolicyEvaluator policyEvaluator;
 
     public AccessControlService(PoolService poolService, ObjectMapper objectMapper,
                                 ManifestRepository manifestRepo) {
         this.poolService = poolService;
         this.objectMapper = objectMapper;
         this.manifestRepo = manifestRepo;
+        this.policyEvaluator = new BucketPolicyEvaluator(objectMapper);
     }
 
     /**
@@ -197,51 +198,40 @@ public class AccessControlService {
                 return false;  // Bucket doesn't exist
             }
 
-            // For GET/HEAD: check if object is accessible
+            String bucketArn = "arn:aws:s3:::" + bucket;
+
+            // For GET/HEAD
             if ("GET".equals(method) || "HEAD".equals(method)) {
-                // If querying bucket directly (no key) - ListObjects
+                // Bucket-level request (ListObjects / HeadBucket) -> s3:ListBucket
                 if (isBucketListRequest(uri, bucket)) {
-                    // ListObjects allowed if bucket is public-read(-write) or policy allows
-                    if (isPublicBucket(poolEntity)) {
-                        return true;
+                    if (policyDecision(poolEntity, "s3:ListBucket", bucketArn) == BucketPolicyEvaluator.Decision.DENY) {
+                        return false;
                     }
-                    return checkBucketPolicy(poolEntity, "s3:ListBucket", bucket, null);
+                    return isPublicBucket(poolEntity)
+                            || policyDecision(poolEntity, "s3:ListBucket", bucketArn) == BucketPolicyEvaluator.Decision.ALLOW;
                 }
 
-                // Object GET: extract key
                 String key = extractKeyFromUri(uri, bucket);
                 if (key == null || key.isEmpty()) {
                     return false;
                 }
-
-                // Check object ACL
-                if (isObjectPublicReadable(request, bucket, key)) {
-                    return true;
-                }
-
-                // Check bucket policy
-                String resource = "arn:aws:s3:::" + bucket + "/" + key;
-                if (checkBucketPolicy(poolEntity, "s3:GetObject", bucket, resource)) {
-                    return true;
-                }
-
-                return false;
+                String resource = bucketArn + "/" + key;
+                var decision = policyDecision(poolEntity, "s3:GetObject", resource);
+                if (decision == BucketPolicyEvaluator.Decision.DENY) return false;   // explicit Deny beats ACLs
+                // Bucket ACL does NOT make objects readable (S1): only the object ACL or a policy Allow does.
+                return isObjectPublicReadable(bucket, key) || decision == BucketPolicyEvaluator.Decision.ALLOW;
             }
 
-            // For PUT/DELETE: only allowed if bucket has public-read-write ACL or policy allows
+            // For PUT/DELETE: public-read-write bucket ACL (WRITE grant) or a policy Allow, unless explicitly denied
             if ("PUT".equals(method) || "DELETE".equals(method)) {
                 String key = extractKeyFromUri(uri, bucket);
                 if (key == null || key.isEmpty()) {
                     return false;
                 }
-
-                if ("public-read-write".equals(poolEntity.getAcl())) {
-                    return true;
-                }
-
                 String action = "PUT".equals(method) ? "s3:PutObject" : "s3:DeleteObject";
-                String resource = "arn:aws:s3:::" + bucket + "/" + key;
-                return checkBucketPolicy(poolEntity, action, bucket, resource);
+                var decision = policyDecision(poolEntity, action, bucketArn + "/" + key);
+                if (decision == BucketPolicyEvaluator.Decision.DENY) return false;
+                return "public-read-write".equals(poolEntity.getAcl()) || decision == BucketPolicyEvaluator.Decision.ALLOW;
             }
 
             return false;
@@ -368,133 +358,17 @@ public class AccessControlService {
         return "public-read".equals(acl) || "public-read-write".equals(acl);
     }
 
-    private boolean isObjectPublicReadable(HttpServletRequest request, String bucket, String key) {
-        try {
-            PoolEntity pool = poolService.getByName(bucket);
-            if (isPublicBucket(pool)) {
-                return true;
-            }
-        } catch (Exception e) {
-            return false;
-        }
+    /**
+     * Object readability comes ONLY from the object's own ACL (AWS semantics). A public-read bucket ACL
+     * grants listing, not reading of objects; a bucket policy is checked separately by the caller.
+     */
+    private boolean isObjectPublicReadable(String bucket, String key) {
         return manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, key)
                 .map(m -> "public-read".equals(m.getAcl()) || "public-read-write".equals(m.getAcl()))
                 .orElse(false);
     }
 
-    private boolean checkBucketPolicy(PoolEntity pool, String action, String bucket, String resource) {
-        if (pool.getPolicy() == null) {
-            return false;
-        }
-
-        try {
-            JsonNode policyNode = objectMapper.readTree(pool.getPolicy());
-
-            // Simple validation: check Statement array for matching policy
-            JsonNode statements = policyNode.get("Statement");
-            if (statements == null || !statements.isArray()) {
-                return false;
-            }
-
-            for (JsonNode stmt : statements) {
-                String effect = stmt.get("Effect") != null ? stmt.get("Effect").asText() : "Deny";
-                if (!"Allow".equals(effect)) continue;
-
-                // Check Principal includes "*" or {"AWS":"*"}
-                JsonNode principal = stmt.get("Principal");
-                if (principal == null) continue;
-                if ("*".equals(principal.asText())) {
-                    // Check Action
-                    if (matchesAction(stmt.get("Action"), action)) {
-                        // Check Resource matches
-                        if (resource == null || matchesResource(stmt.get("Resource"), resource)) {
-                            // Check Condition (must be absent for anonymous access)
-                            if (stmt.get("Condition") == null) {
-                                return true;
-                            }
-                        }
-                    }
-                } else if (principal.isObject() && principal.get("AWS") != null) {
-                    String awsPrincipal = principal.get("AWS").asText();
-                    if ("*".equals(awsPrincipal)) {
-                        if (matchesAction(stmt.get("Action"), action)) {
-                            if (resource == null || matchesResource(stmt.get("Resource"), resource)) {
-                                if (stmt.get("Condition") == null) {
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Failed to parse bucket policy: {}", e.getMessage());
-            return false;
-        }
-
-        return false;
-    }
-
-    private boolean matchesAction(JsonNode actionNode, String requiredAction) {
-        if (actionNode == null) return false;
-
-        if (actionNode.isTextual()) {
-            String action = actionNode.asText();
-            return matchesActionPattern(action, requiredAction);
-        } else if (actionNode.isArray()) {
-            for (JsonNode node : actionNode) {
-                if (node.isTextual() && matchesActionPattern(node.asText(), requiredAction)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean matchesActionPattern(String pattern, String requiredAction) {
-        if ("s3:*".equals(pattern)) return true;
-        if ("*".equals(pattern)) return true;
-
-        // Handle s3:Get*, s3:Put*, etc.
-        if (pattern.contains("*")) {
-            if (pattern.startsWith("s3:")) {
-                String base = pattern.substring(3);
-                if (base.endsWith("*")) {
-                    String prefix = base.substring(0, base.length() - 1);
-                    if (requiredAction.startsWith("s3:" + prefix)) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return pattern.equals(requiredAction);
-    }
-
-    private boolean matchesResource(JsonNode resourceNode, String requiredResource) {
-        if (resourceNode == null) return false;
-
-        if (resourceNode.isTextual()) {
-            return matchesResourcePattern(resourceNode.asText(), requiredResource);
-        } else if (resourceNode.isArray()) {
-            for (JsonNode node : resourceNode) {
-                if (node.isTextual() && matchesResourcePattern(node.asText(), requiredResource)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean matchesResourcePattern(String pattern, String resource) {
-        if ("*".equals(pattern)) return true;
-
-        // Simple glob pattern matching
-        if (pattern.endsWith("*")) {
-            String prefix = pattern.substring(0, pattern.length() - 1);
-            return resource.startsWith(prefix);
-        }
-
-        return pattern.equals(resource);
+    private BucketPolicyEvaluator.Decision policyDecision(PoolEntity pool, String action, String resource) {
+        return policyEvaluator.evaluate(pool.getPolicy(), action, resource);
     }
 }

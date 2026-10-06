@@ -89,11 +89,13 @@ class S3PublicAccessTest {
     }
 
     @Test
-    void publicBucketOpensReadAndListButNeverWritesOrAdminCalls() throws Exception {
+    void publicBucketOpensListButNotObjectsNorWritesNorAdminCalls() throws Exception {
         putObject("pub-bkt", "a.txt");
         poolService.setAcl("pub-bkt", "public-read");
 
-        assertEquals(200, status("GET", "/pub-bkt/a.txt"));
+        // AWS semantics: bucket public-read grants ListBucket only; objects need their own ACL or a policy
+        assertEquals(403, status("GET", "/pub-bkt/a.txt"));
+        assertEquals(403, status("HEAD", "/pub-bkt/a.txt"));
         assertEquals(200, status("GET", "/pub-bkt?list-type=2"));
         // prefixes that merely CONTAIN words like acl/uploads must not be treated as admin sub-resources
         assertEquals(200, status("GET", "/pub-bkt?list-type=2&prefix=uploads/"));
@@ -128,5 +130,60 @@ class S3PublicAccessTest {
                 .header("x-amz-date", "20260101T000000Z").GET().build();
         int code = http.send(req, BodyHandlers.discarding()).statusCode();
         assertTrue(code == 403 || code == 400, "a request that claims credentials must be validated, got " + code);
+    }
+
+    @Test
+    void publicReadWriteBucketStillAllowsWritesButNotReads() throws Exception {
+        putObject("rw-bkt", "a.txt");
+        poolService.setAcl("rw-bkt", "public-read-write");
+        assertEquals(403, status("GET", "/rw-bkt/a.txt"));
+        assertEquals(200, status("GET", "/rw-bkt?list-type=2"));
+        assertEquals(200, status("PUT", "/rw-bkt/new.txt"));
+    }
+
+    @Test
+    void publicBucketPlusPublicObjectAclReadsOnlyThatObject() throws Exception {
+        putObject("mix-bkt", "pub.txt");
+        putObject("mix-bkt", "priv.txt");
+        poolService.setAcl("mix-bkt", "public-read");
+        ManifestEntity m = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse("mix-bkt", "pub.txt").orElseThrow();
+        m.setAcl("public-read");
+        manifestRepo.save(m);
+        assertEquals(200, status("GET", "/mix-bkt/pub.txt"));
+        assertEquals(403, status("GET", "/mix-bkt/priv.txt"));
+    }
+
+    @Test
+    void explicitDenyOverridesAllowAndPublicAcl() throws Exception {
+        putObject("deny-bkt", "docs/a.txt");
+        putObject("deny-bkt", "docs/secret/b.txt");
+        poolService.setPolicy("deny-bkt", "{\"Version\":\"2012-10-17\",\"Statement\":[\n"
+                + "{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::deny-bkt/*\"]},\n"
+                + "{\"Effect\":\"Deny\",\"Principal\":{\"AWS\":\"*\"},\"Action\":\"s3:Get*\",\"Resource\":\"arn:aws:s3:::deny-bkt/docs/secret/*\"}]}");
+        assertEquals(200, status("GET", "/deny-bkt/docs/a.txt"));
+        assertEquals(403, status("GET", "/deny-bkt/docs/secret/b.txt"));
+        // object ACL public-read does not beat an explicit Deny either
+        ManifestEntity m = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse("deny-bkt", "docs/secret/b.txt").orElseThrow();
+        m.setAcl("public-read");
+        manifestRepo.save(m);
+        assertEquals(403, status("GET", "/deny-bkt/docs/secret/b.txt"));
+    }
+
+    @Test
+    void allowWithConditionDoesNotGrantAccess() throws Exception {
+        putObject("cond-bkt", "a.txt");
+        poolService.setPolicy("cond-bkt", "{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\","
+                + "\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::cond-bkt/*\","
+                + "\"Condition\":{\"IpAddress\":{\"aws:SourceIp\":\"10.0.0.0/8\"}}}]}");
+        assertEquals(403, status("GET", "/cond-bkt/a.txt"));
+    }
+
+    @Test
+    void policyAllowListBucketOpensListing() throws Exception {
+        putObject("lst-bkt", "a.txt");
+        poolService.setPolicy("lst-bkt", "{\"Statement\":{\"Effect\":\"Allow\",\"Principal\":\"*\","
+                + "\"Action\":\"s3:ListBucket\",\"Resource\":\"arn:aws:s3:::lst-bkt\"}}");
+        assertEquals(200, status("GET", "/lst-bkt?list-type=2"));
+        assertEquals(403, status("GET", "/lst-bkt/a.txt"));
     }
 }
