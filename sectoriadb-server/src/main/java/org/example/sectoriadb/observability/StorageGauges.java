@@ -74,7 +74,7 @@ public class StorageGauges {
     @PostConstruct
     void register() {
         g("sectoriadb.cuckoo.slots.active", "Active (occupied) slots, summed over all loaded cuckoo blobs", null, s -> s.slotsActive);
-        g("sectoriadb.cuckoo.slots.total", "Total slots, summed over all loaded cuckoo blobs", null, s -> s.slotsTotal);
+        g("sectoriadb.cuckoo.slots.capacity", "Total slots (capacity), summed over all loaded cuckoo blobs", null, s -> s.slotsTotal);
         g("sectoriadb.cuckoo.slots.quarantined", "Slots quarantined because their metadata entry failed its CRC", null, s -> s.slotsQuarantined);
         g("sectoriadb.cuckoo.tables.loaded", "Cuckoo blobs loaded into memory in this process", null, s -> s.cuckooTablesLoaded);
         g("sectoriadb.cuckoo.used.bytes", "Chunk bytes held by active slots (loaded blobs)", "bytes", s -> s.cuckooUsedBytes);
