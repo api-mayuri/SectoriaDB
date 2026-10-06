@@ -1,0 +1,50 @@
+[DEFAULT]
+host = @HOST@
+port = @PORT@
+is_secure = False
+ssl_verify = False
+
+[fixtures]
+bucket prefix = s3t-{random}-
+
+[s3 main]
+display_name = main
+user_id = main-user-id
+email = main@example.com
+access_key = @MAIN_ACCESS@
+secret_key = @MAIN_SECRET@
+api_name = default
+
+[s3 alt]
+display_name = alt
+user_id = alt-user-id
+email = alt@example.com
+access_key = @ALT_ACCESS@
+secret_key = @ALT_SECRET@
+
+[s3 tenant]
+display_name = tenant
+user_id = tenant-user-id
+email = tenant@example.com
+access_key = @ALT_ACCESS@
+secret_key = @ALT_SECRET@
+tenant = tenant
+
+[iam]
+email = s3@example.com
+user_id = iam-user-id
+access_key = @MAIN_ACCESS@
+secret_key = @MAIN_SECRET@
+display_name = iam
+
+[iam root]
+access_key = @MAIN_ACCESS@
+secret_key = @MAIN_SECRET@
+user_id = iam-root-id
+email = root@example.com
+
+[iam alt root]
+access_key = @ALT_ACCESS@
+secret_key = @ALT_SECRET@
+user_id = iam-alt-root-id
+email = altroot@example.com
