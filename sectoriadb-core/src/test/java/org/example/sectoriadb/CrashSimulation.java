@@ -6,8 +6,11 @@ import org.example.sectoriadb.service.impl.FileChannelStorageIOEngine;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -29,6 +32,8 @@ public final class CrashSimulation {
     private boolean dead;
     public final AtomicInteger forces = new AtomicInteger();
     public final AtomicInteger writes = new AtomicInteger();
+    /** How long a force takes; a real fsync is never instant, and group-force tests rely on that overlap. */
+    public volatile long forceDelayMillis;
 
     public StorageIOEngine newEngine() {
         return new Engine();
@@ -45,19 +50,24 @@ public final class CrashSimulation {
     public int crash(long seed, double keep) throws IOException {
         Random r = new Random(seed);
         int lost = 0;
-        FileChannelStorageIOEngine raw = new FileChannelStorageIOEngine(false);
-        synchronized (lock) {
-            dead = true;
-            for (int i = pending.size() - 1; i >= 0; i--) {
-                Undo u = pending.get(i);
-                if (r.nextDouble() >= keep) {
-                    raw.writeChunk(u.file(), u.offset(), ByteBuffer.wrap(u.old()));
-                    lost++;
+        // an engine is bound to one file, and the pool may have grown to several blobs
+        Map<Path, FileChannelStorageIOEngine> raw = new HashMap<>();
+        try {
+            synchronized (lock) {
+                dead = true;
+                for (int i = pending.size() - 1; i >= 0; i--) {
+                    Undo u = pending.get(i);
+                    if (r.nextDouble() >= keep) {
+                        raw.computeIfAbsent(u.file().path(), p -> new FileChannelStorageIOEngine(false))
+                                .writeChunk(u.file(), u.offset(), ByteBuffer.wrap(u.old()));
+                        lost++;
+                    }
                 }
+                pending.clear();
             }
-            pending.clear();
+        } finally {
+            for (FileChannelStorageIOEngine e : raw.values()) e.close();
         }
-        raw.close();
         return lost;
     }
 
@@ -96,6 +106,15 @@ public final class CrashSimulation {
 
         @Override
         public void force(BlobFile f) throws IOException {
+            long delay = forceDelayMillis;
+            if (delay > 0) {
+                try {
+                    Thread.sleep(delay);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("interrupted during simulated fsync", e);
+                }
+            }
             synchronized (lock) {
                 if (dead) throw new IOException("simulated crash: the disk is gone");
                 pending.removeIf(u -> u.file().path().equals(f.path()));   // an fsync of the file makes its writes durable

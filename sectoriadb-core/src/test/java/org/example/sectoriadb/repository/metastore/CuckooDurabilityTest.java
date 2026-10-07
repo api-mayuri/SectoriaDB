@@ -158,6 +158,7 @@ class CuckooDurabilityTest {
         int threads = 16, per = 16;
         ExecutorService ex = Executors.newFixedThreadPool(threads);
         List<Future<?>> fs = new ArrayList<>();
+        disk.forceDelayMillis = 2;   // writers arriving during an fsync must share the next one
         int forcesBefore = disk.forces.get();
         for (int t = 0; t < threads; t++) {
             final int id = t;
@@ -172,6 +173,7 @@ class CuckooDurabilityTest {
         for (Future<?> f : fs) f.get(60, TimeUnit.SECONDS);
         ex.shutdown();
         int forces = disk.forces.get() - forcesBefore;
+        disk.forceDelayMillis = 0;
         assertTrue(forces >= 1 && forces < threads * per, "fsyncs: " + forces + " for " + (threads * per) + " barriers");
         assertEquals(0, disk.unforced());
         assertFalse(table.hasUnforcedWrites());
