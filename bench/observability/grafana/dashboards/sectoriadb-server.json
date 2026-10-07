@@ -1561,6 +1561,174 @@
     },
     {
       "type": "timeseries",
+      "title": "Metastore group commit: batch size p50/p99",
+      "description": "Write bodies per metastore commit. 1 means no grouping (idle or serial load); the more concurrent writers, the larger the batch and the cheaper each write (one pair of fsyncs per batch).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(sectoriadb_metastore_group_batch_size_bucket[$__rate_interval])))",
+          "legendFormat": "batch size p50",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(sectoriadb_metastore_group_batch_size_bucket[$__rate_interval])))",
+          "legendFormat": "batch size p99",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(sectoriadb_metastore_group_batch_size_sum[$__rate_interval])) / sum(rate(sectoriadb_metastore_group_batch_size_count[$__rate_interval]))",
+          "legendFormat": "batch size mean",
+          "refId": "C",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 27,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 55
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Metastore group commit: queue wait p50/p99",
+      "description": "Time from submit to the start of the body (the batch ahead of it is committing). Roughly one commit time at saturation; durability adds that body's own batch commit.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(sectoriadb_metastore_group_queue_wait_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "queue wait p50",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(sectoriadb_metastore_group_queue_wait_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "queue wait p99",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(sectoriadb_metastore_commit_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "commit p99",
+          "refId": "C",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "scaleDistribution": {
+              "type": "log",
+              "log": 10
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 28,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 55
+      }
+    },
+    {
+      "type": "timeseries",
       "title": "Engine lock waits p99",
       "description": "",
       "datasource": {
@@ -1625,11 +1793,11 @@
           "sort": "desc"
         }
       },
-      "id": 27,
+      "id": 29,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
+        "x": 16,
         "y": 55
       }
     },
@@ -1707,12 +1875,12 @@
           "sort": "desc"
         }
       },
-      "id": 28,
+      "id": 30,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
-        "y": 55
+        "x": 0,
+        "y": 63
       }
     },
     {
@@ -1789,12 +1957,12 @@
           "sort": "desc"
         }
       },
-      "id": 29,
+      "id": 31,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 55
+        "x": 8,
+        "y": 63
       }
     },
     {
@@ -1875,11 +2043,11 @@
           "sort": "desc"
         }
       },
-      "id": 30,
+      "id": 32,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
+        "x": 16,
         "y": 63
       }
     },
@@ -1957,12 +2125,12 @@
           "sort": "desc"
         }
       },
-      "id": 31,
+      "id": 33,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
-        "y": 63
+        "x": 0,
+        "y": 71
       }
     },
     {
@@ -2029,12 +2197,12 @@
           "sort": "desc"
         }
       },
-      "id": 32,
+      "id": 34,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 63
+        "x": 8,
+        "y": 71
       }
     },
     {
@@ -2099,11 +2267,11 @@
           "sort": "desc"
         }
       },
-      "id": 33,
+      "id": 35,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
+        "x": 16,
         "y": 71
       }
     },
@@ -2169,16 +2337,16 @@
           "sort": "desc"
         }
       },
-      "id": 34,
+      "id": 36,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
-        "y": 71
+        "x": 0,
+        "y": 79
       }
     },
     {
-      "id": 35,
+      "id": 37,
       "type": "row",
       "title": "Engine internals",
       "collapsed": false,
@@ -2186,7 +2354,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 79
+        "y": 87
       },
       "panels": []
     },
@@ -2252,12 +2420,12 @@
           "sort": "desc"
         }
       },
-      "id": 36,
+      "id": 38,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 80
+        "y": 88
       }
     },
     {
@@ -2312,12 +2480,12 @@
           "sort": "desc"
         }
       },
-      "id": 37,
+      "id": 39,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 80
+        "y": 88
       }
     },
     {
@@ -2394,12 +2562,12 @@
           "sort": "desc"
         }
       },
-      "id": 38,
+      "id": 40,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 80
+        "y": 88
       }
     },
     {
@@ -2453,12 +2621,12 @@
           "sort": "desc"
         }
       },
-      "id": 39,
+      "id": 41,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 88
+        "y": 96
       }
     },
     {
@@ -2512,12 +2680,12 @@
           "sort": "desc"
         }
       },
-      "id": 40,
+      "id": 42,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 88
+        "y": 96
       }
     },
     {
@@ -2571,12 +2739,12 @@
           "sort": "desc"
         }
       },
-      "id": 41,
+      "id": 43,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 88
+        "y": 96
       }
     },
     {
@@ -2653,12 +2821,12 @@
           "sort": "desc"
         }
       },
-      "id": 42,
+      "id": 44,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 96
+        "y": 104
       }
     },
     {
@@ -2723,12 +2891,12 @@
           "sort": "desc"
         }
       },
-      "id": 43,
+      "id": 45,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 96
+        "y": 104
       }
     },
     {
@@ -2805,16 +2973,16 @@
           "sort": "desc"
         }
       },
-      "id": 44,
+      "id": 46,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 96
+        "y": 104
       }
     },
     {
-      "id": 45,
+      "id": 47,
       "type": "row",
       "title": "Capacity",
       "collapsed": false,
@@ -2822,7 +2990,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 104
+        "y": 112
       },
       "panels": []
     },
@@ -2898,12 +3066,12 @@
           "sort": "desc"
         }
       },
-      "id": 46,
+      "id": 48,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 105
+        "y": 113
       }
     },
     {
@@ -2978,12 +3146,12 @@
           "sort": "desc"
         }
       },
-      "id": 47,
+      "id": 49,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 105
+        "y": 113
       }
     },
     {
@@ -3037,12 +3205,12 @@
           "sort": "desc"
         }
       },
-      "id": 48,
+      "id": 50,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 105
+        "y": 113
       }
     },
     {
@@ -3095,12 +3263,12 @@
           "sort": "desc"
         }
       },
-      "id": 49,
+      "id": 51,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 113
+        "y": 121
       }
     },
     {
@@ -3177,12 +3345,12 @@
           "sort": "desc"
         }
       },
-      "id": 50,
+      "id": 52,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 113
+        "y": 121
       }
     },
     {
@@ -3247,12 +3415,12 @@
           "sort": "desc"
         }
       },
-      "id": 51,
+      "id": 53,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 113
+        "y": 121
       }
     },
     {
@@ -3317,12 +3485,12 @@
           "sort": "desc"
         }
       },
-      "id": 52,
+      "id": 54,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 113
+        "y": 121
       }
     },
     {
@@ -3399,16 +3567,16 @@
           "sort": "desc"
         }
       },
-      "id": 53,
+      "id": 55,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 121
+        "y": 129
       }
     },
     {
-      "id": 54,
+      "id": 56,
       "type": "row",
       "title": "Host (node_exporter)",
       "collapsed": false,
@@ -3416,7 +3584,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 129
+        "y": 137
       },
       "panels": []
     },
@@ -3472,12 +3640,12 @@
           "sort": "desc"
         }
       },
-      "id": 55,
+      "id": 57,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 130
+        "y": 138
       }
     },
     {
@@ -3532,12 +3700,12 @@
           "sort": "desc"
         }
       },
-      "id": 56,
+      "id": 58,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 130
+        "y": 138
       }
     },
     {
@@ -3614,12 +3782,12 @@
           "sort": "desc"
         }
       },
-      "id": 57,
+      "id": 59,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 130
+        "y": 138
       }
     },
     {
@@ -3684,12 +3852,12 @@
           "sort": "desc"
         }
       },
-      "id": 58,
+      "id": 60,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 138
+        "y": 146
       }
     },
     {
@@ -3754,12 +3922,12 @@
           "sort": "desc"
         }
       },
-      "id": 59,
+      "id": 61,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 138
+        "y": 146
       }
     },
     {
@@ -3824,12 +3992,12 @@
           "sort": "desc"
         }
       },
-      "id": 60,
+      "id": 62,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 138
+        "y": 146
       }
     },
     {
@@ -3894,12 +4062,12 @@
           "sort": "desc"
         }
       },
-      "id": 61,
+      "id": 63,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 146
+        "y": 154
       }
     },
     {
@@ -3976,12 +4144,12 @@
           "sort": "desc"
         }
       },
-      "id": 62,
+      "id": 64,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 146
+        "y": 154
       }
     }
   ],

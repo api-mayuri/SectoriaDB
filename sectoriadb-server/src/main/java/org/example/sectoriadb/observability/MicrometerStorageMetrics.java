@@ -35,6 +35,10 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     private final Timer smallLockWait;
     private final Timer metaWriterWait;
     private final Timer metaCommit;
+    private final DistributionSummary groupBatchSize;
+    private final DistributionSummary groupBatchPages;
+    private final Timer groupQueueWait;
+    private final Counter groupRollbacks;
     private final Timer resizeOk;
     private final Timer resizeFailed;
     private final Counter autoResizeRuns;
@@ -66,6 +70,15 @@ public class MicrometerStorageMetrics implements StorageMetrics {
         smallLockWait = timer(r, "sectoriadb.small.append.lock.wait", "Wait for the append lock of a small-object blob", Buckets.LOCK_WAIT);
         metaWriterWait = timer(r, "sectoriadb.metastore.writer.lock.wait", "Wait for the metastore's single write-transaction slot", Buckets.LOCK_WAIT);
         metaCommit = timer(r, "sectoriadb.metastore.commit", "Duration of one metastore commit (pages, fsync, meta page, fsync)", Buckets.FSYNC);
+        groupBatchSize = DistributionSummary.builder("sectoriadb.metastore.group.batch.size")
+                .description("Write bodies sharing one metastore commit (group commit)")
+                .serviceLevelObjectives(Buckets.GROUP_BATCH_SIZE).register(r);
+        groupBatchPages = DistributionSummary.builder("sectoriadb.metastore.group.batch.pages")
+                .description("Pages written by one group commit")
+                .serviceLevelObjectives(Buckets.GROUP_BATCH_PAGES).register(r);
+        groupQueueWait = timer(r, "sectoriadb.metastore.group.queue.wait", "Time a write body waited in the group commit queue before it started to run", Buckets.LOCK_WAIT);
+        groupRollbacks = Counter.builder("sectoriadb.metastore.group.body.rollbacks")
+                .description("Grouped write bodies that threw and were rolled back without affecting their batch").register(r);
         resizeOk = timer(r, "sectoriadb.resize", "Blob resize duration", Buckets.RESIZE, "result", "success");
         resizeFailed = timer(r, "sectoriadb.resize", "Blob resize duration", Buckets.RESIZE, "result", "failure");
         autoResizeRuns = Counter.builder("sectoriadb.auto.resize.runs")
@@ -96,6 +109,14 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     @Override public void smallAppendLockWait(long nanos) { smallLockWait.record(nanos, TimeUnit.NANOSECONDS); }
     @Override public void metaWriterLockWait(long nanos) { metaWriterWait.record(nanos, TimeUnit.NANOSECONDS); }
     @Override public void metaCommit(long nanos) { metaCommit.record(nanos, TimeUnit.NANOSECONDS); }
+
+    @Override public void metaGroupBatch(int bodies, int pages) {
+        groupBatchSize.record(bodies);
+        groupBatchPages.record(pages);
+    }
+
+    @Override public void metaGroupQueueWait(long nanos) { groupQueueWait.record(nanos, TimeUnit.NANOSECONDS); }
+    @Override public void metaGroupBodyRollback() { groupRollbacks.increment(); }
 
     @Override public void resize(long nanos, boolean success) {
         (success ? resizeOk : resizeFailed).record(nanos, TimeUnit.NANOSECONDS);

@@ -171,4 +171,25 @@ class EngineMetricsTest {
             store.close();
         }
     }
+
+    @Test
+    void groupCommitReportsBatchQueueWaitAndRollbacks() {
+        MetaStore store = MetaStore.open(tmp.resolve("group.db"), MetaStoreOptions.defaults().fsync(false).metrics(m));
+        try {
+            store.writeGrouped(tx -> {
+                tx.tree("t").put(new byte[]{1}, new byte[]{2});
+                return null;
+            });
+            assertThrows(IllegalStateException.class, () -> store.writeGrouped(tx -> {
+                throw new IllegalStateException("x");
+            }));
+            assertEquals(1, m.metaCommits.get(), "a batch of failures commits nothing");
+            assertEquals(2, m.groupBatches.get());
+            assertEquals(2, m.groupBodies.get());
+            assertEquals(2, m.groupQueueWaits.get());
+            assertEquals(1, m.groupRollbacks.get());
+        } finally {
+            store.close();
+        }
+    }
 }

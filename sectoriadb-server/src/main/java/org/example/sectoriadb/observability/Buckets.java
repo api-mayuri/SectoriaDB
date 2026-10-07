@@ -32,6 +32,12 @@ public final class Buckets {
     /** Cuckoo eviction path length (moved chunks); max-evictions defaults to 32. 14 buckets; le="0.5" means "no move at all" (Micrometer needs boundaries > 0). */
     public static final double[] EVICTION_PATH = {0.5, 1, 2, 3, 4, 5, 6, 8, 10, 12, 16, 20, 24, 32};
 
+    /** Bodies per group commit (max-batch-size defaults to 256): powers of two, 9 buckets; le="1" means "no grouping". */
+    public static final double[] GROUP_BATCH_SIZE = {1, 2, 4, 8, 16, 32, 64, 128, 256};
+
+    /** Pages written per group commit (max-batch-pages defaults to 1024): powers of two, 12 buckets. */
+    public static final double[] GROUP_BATCH_PAGES = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048};
+
     private static Duration[] ms(double... millis) {
         Duration[] d = new Duration[millis.length];
         for (int i = 0; i < millis.length; i++) d[i] = Duration.ofNanos((long) (millis[i] * 1_000_000));

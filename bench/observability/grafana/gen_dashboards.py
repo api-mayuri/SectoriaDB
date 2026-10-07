@@ -206,6 +206,16 @@ def server():
         desc="Wait growing faster than commit time means the single writer is the bottleneck (queue of writers)."), 8, 8)
     d.add(ts("Metastore commits/s", [pq(f"sum(rate(sectoriadb_metastore_commit_seconds_count[{R}]))", "commits/s")], "ops",
              desc="Rate of the commit histogram count. The last_txid gauge is cached for 15 s and therefore steps; do not rate() it."), 8, 8)
+    d.add(ts("Metastore group commit: batch size p50/p99", [
+        pq(q_hist("sectoriadb_metastore_group_batch_size", 0.5, by=""), "batch size p50", "A"),
+        pq(q_hist("sectoriadb_metastore_group_batch_size", 0.99, by=""), "batch size p99", "B"),
+        pq(f"sum(rate(sectoriadb_metastore_group_batch_size_sum[{R}])) / sum(rate(sectoriadb_metastore_group_batch_size_count[{R}]))", "batch size mean", "C")], "short",
+        desc="Write bodies per metastore commit. 1 means no grouping (idle or serial load); the more concurrent writers, the larger the batch and the cheaper each write (one pair of fsyncs per batch)."), 8, 8)
+    d.add(ts("Metastore group commit: queue wait p50/p99", [
+        pq(q_hist("sectoriadb_metastore_group_queue_wait_seconds", 0.5, by=""), "queue wait p50", "A"),
+        pq(q_hist("sectoriadb_metastore_group_queue_wait_seconds", 0.99, by=""), "queue wait p99", "B"),
+        pq(q_hist("sectoriadb_metastore_commit_seconds", 0.99, by=""), "commit p99", "C")], "s", log=True,
+        desc="Time from submit to the start of the body (the batch ahead of it is committing). Roughly one commit time at saturation; durability adds that body's own batch commit."), 8, 8)
     d.add(ts("Engine lock waits p99", [
         pq(q_hist("sectoriadb_small_append_lock_wait_seconds", 0.99, by=""), "small append", "A"),
         pq(q_hist("sectoriadb_cuckoo_lock_wait_seconds", 0.99, by=""), "cuckoo insert", "B")], "s", log=True), 8, 8)

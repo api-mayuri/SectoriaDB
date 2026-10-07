@@ -25,6 +25,10 @@ public class RecordingMetrics implements StorageMetrics {
     public final AtomicLong smallLockWaits = new AtomicLong();
     public final AtomicLong metaWriterLockWaits = new AtomicLong();
     public final AtomicLong metaCommits = new AtomicLong();
+    public final AtomicLong groupBodies = new AtomicLong();
+    public final AtomicLong groupBatches = new AtomicLong();
+    public final AtomicLong groupQueueWaits = new AtomicLong();
+    public final AtomicLong groupRollbacks = new AtomicLong();
     public final List<Boolean> resizes = new CopyOnWriteArrayList<>();
     public final AtomicLong autoResizeRuns = new AtomicLong();
 
@@ -51,6 +55,9 @@ public class RecordingMetrics implements StorageMetrics {
     @Override public void smallAppendLockWait(long nanos) { smallLockWaits.incrementAndGet(); }
     @Override public void metaWriterLockWait(long nanos) { metaWriterLockWaits.incrementAndGet(); }
     @Override public void metaCommit(long nanos) { metaCommits.incrementAndGet(); }
+    @Override public void metaGroupBatch(int bodies, int pages) { groupBodies.addAndGet(bodies); groupBatches.incrementAndGet(); }
+    @Override public void metaGroupQueueWait(long nanos) { groupQueueWaits.incrementAndGet(); }
+    @Override public void metaGroupBodyRollback() { groupRollbacks.incrementAndGet(); }
     @Override public void resize(long nanos, boolean success) { resizes.add(success); }
     @Override public void autoResizeRun() { autoResizeRuns.incrementAndGet(); }
 }

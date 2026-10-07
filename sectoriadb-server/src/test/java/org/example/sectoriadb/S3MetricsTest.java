@@ -302,6 +302,13 @@ class S3MetricsTest {
         assertTrue(text.contains("sectoriadb_cuckoo_eviction_path_length_bucket{application=\"SectoriaDB\",le=\"0.5\"}"));
         assertTrue(sampleOr0(text, "sectoriadb_metastore_commit_seconds_count") >= 3);
         assertTrue(sampleOr0(text, "sectoriadb_metastore_writer_lock_wait_seconds_count") >= 3);
+        assertTrue(sampleOr0(text, "sectoriadb_metastore_group_batch_size_count") >= 3, "one batch per commit");
+        assertTrue(sampleOr0(text, "sectoriadb_metastore_group_batch_size_sum") >= 3, "at least one body per batch");
+        assertTrue(sampleOr0(text, "sectoriadb_metastore_group_queue_wait_seconds_count") >= 3);
+        assertTrue(text.contains("sectoriadb_metastore_group_batch_size_bucket{application=\"SectoriaDB\",le=\"1.0\"}")
+                || text.contains("sectoriadb_metastore_group_batch_size_bucket{application=\"SectoriaDB\",le=\"1\"}"));
+        assertFalse(Double.isNaN(sample(text, "sectoriadb_metastore_group_batch_pages_count")));
+        assertFalse(Double.isNaN(sample(text, "sectoriadb_metastore_group_body_rollbacks_total")));
         assertTrue(sampleOr0(text, "sectoriadb_small_append_lock_wait_seconds_count") >= 1);
         assertFalse(Double.isNaN(sample(text, "sectoriadb_cuckoo_table_full_total")));
         assertFalse(Double.isNaN(sample(text, "sectoriadb_cuckoo_dedup_hits_total")));
