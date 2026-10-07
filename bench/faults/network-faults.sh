@@ -33,7 +33,6 @@ fi
 PP=$((S3_PORT + 1))
 "$PY" "$FAULTS_DIR/slowproxy.py" --listen "$PP" --target "localhost:$S3_PORT" --cut-after-bytes $(( 15 * 1048576 )) > "$WORK/proxy.log" 2>&1 &
 proxy=$!; sleep 1
-before="$(metric 'sectoriadb_s3_requests_inflight')"
 FAULT_ENDPOINT="http://localhost:$PP" "$PY" "$FAULTS_DIR/s3c.py" put netb cut "$WORK/files/n.bin" | sed 's/^/      client: /'
 kill "$proxy" 2>/dev/null; sleep 2
 [ "$(s3c get netb cut)" = "GET absent" ] && pass "PUT cut at 15 MiB of 40: no partial object visible" || fail "partial object visible after the connection was cut: $(s3c get netb cut)"

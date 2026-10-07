@@ -67,7 +67,7 @@ STAMP="$(utc_now)"; SHA="$(git_short)"; DIRTY="$(git_dirty)"
 [ "$DIRTY" = true ] && SHA="${SHA}-dirty"
 RUN_DIR="$RESULTS_DIR/${STAMP}_${SHA}_${MODE}_${SIZE_LABEL}_c${CONC}"
 mkdir -p "$RUN_DIR"
-WARP_MOUNT="$RUN_DIR"
+export WARP_MOUNT="$RUN_DIR"
 
 [ -n "$BUCKET" ] || BUCKET="warp-bench-${MODE}-${SIZE_LABEL}-c${CONC}-${STAMP:9:6}"
 BUCKET="$(echo "$BUCKET" | tr 'A-Z_' 'a-z-')"

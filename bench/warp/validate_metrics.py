@@ -36,10 +36,11 @@ bad = 0
 # "Report: GET (4941 reqs). Ran Duration: 17s, starting 22:55:44 UTC"  (also "Report: GET. Concurrency: 20. Ran: 17s" in older output)
 blocks = re.split(r"\n(?=Report: )", text)
 for b in blocks:
-    m = re.match(r"Report: (\w+)(?: \((\d+) reqs\))?\. Ran Duration: (\d+)s(?:\d*ms)?, starting (\d\d:\d\d:\d\d) UTC", b)
+    m = re.match(r"Report: (\w+)(?: \((\d+) reqs\))?\. Ran Duration: (?:(\d+)h)?(?:(\d+)m)?(\d+)s, starting (\d\d:\d\d:\d\d) UTC", b)
     if not m:
         continue
-    op, reqs, dur, start = m.group(1), m.group(2), int(m.group(3)), m.group(4)
+    op, reqs, start = m.group(1), m.group(2), m.group(6)
+    dur = int(m.group(3) or 0) * 3600 + int(m.group(4) or 0) * 60 + int(m.group(5))
     if op not in OPS:
         continue
     t0 = dt.datetime.strptime(f"{day} {start}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=dt.timezone.utc)
