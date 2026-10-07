@@ -2,6 +2,7 @@ package org.example.sectoriadb.metastore;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.ConcurrentModificationException;
 
 /**
  * Forward range cursor over a tree, implemented with a root-to-leaf stack (copy-on-write pages have no
@@ -52,8 +53,7 @@ public final class Cursor implements AutoCloseable {
 
     /** Advances to the next entry; false when the range is exhausted. */
     public boolean next() {
-        tx.ensureOpen();
-        if (tx.modCount() != stamp) throw new java.util.ConcurrentModificationException();
+        checkUnmodified();
         curKey = null;
         curVal = null;
         while (!done) {
@@ -93,12 +93,19 @@ public final class Cursor implements AutoCloseable {
         done = true;
     }
 
+    private void checkUnmodified() {
+        tx.ensureOpen();
+        if (tx.modCount() != stamp) throw new ConcurrentModificationException();
+    }
+
     public byte[] key() {
+        checkUnmodified();
         if (curKey == null) throw new IllegalStateException("no current entry");
         return curKey.clone();
     }
 
     public byte[] value() {
+        checkUnmodified();   // after a change the overflow pages of the current value may already be reused
         if (curVal == null) throw new IllegalStateException("no current entry");
         return tx.readValue(curVal);
     }

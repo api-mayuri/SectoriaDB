@@ -260,6 +260,7 @@ public final class WriteTxn extends ReadTxn {
 
     /** Writes the value into a fresh overflow chain right away; the pages are unreachable until commit. */
     long writeOverflow(byte[] v) {
+        if (v.length == 0) throw new IllegalArgumentException("an empty value has no overflow chain");
         int per = pager.pageSize - 16;
         int n = (v.length + per - 1) / per;
         long[] ids = new long[n];

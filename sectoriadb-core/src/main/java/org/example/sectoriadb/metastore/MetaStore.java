@@ -26,7 +26,7 @@ import java.util.function.Function;
 
 /**
  * Embedded transactional key-value store with named copy-on-write B+trees in a single file.
- * See docs/architecture/04-btree-metastore.md for the file format and the commit protocol.
+ * See docs/architecture/06-btree-metastore.md for the file format and the commit protocol.
  *
  * <p>One write transaction at a time, any number of concurrent read transactions with snapshot isolation.
  */
@@ -62,6 +62,7 @@ public final class MetaStore implements AutoCloseable {
     private final StorageMetrics metrics;
     private final GroupCommitter committer;
     private final Object stateLock = new Object();
+    private final Object closeMonitor = new Object();
     private final TreeMap<Long, Integer> readers = new TreeMap<>();
     private volatile Snapshot committed;
     private volatile boolean closed;
@@ -78,7 +79,6 @@ public final class MetaStore implements AutoCloseable {
     // free-page state; only touched while holding the writer permit
     final LongList available = new LongList();                  // reusable right now
     final TreeMap<Long, long[]> pending = new TreeMap<>();      // freeing txId -> pages, waiting for readers
-    private final TreeMap<Long, LongList> restartPending = new TreeMap<>();
     long[] chainPages = new long[0];                            // pages of the persisted freelist chain
     /**
      * Old freelist chains, keyed by the txn that replaced them. Only meta pages reference a chain, never a
@@ -113,14 +113,20 @@ public final class MetaStore implements AutoCloseable {
             if (lock == null) throw new IOException("metastore file is already open: " + file);
             Snapshot snap;
             Pager pager;
-            if (ch.size() == 0) {
+            long size = ch.size();
+            if (needsInitialisation(ch, size)) {
+                // Fresh file, or one whose creation never finished (a store has at least two pages, so a shorter file
+                // cannot hold a commit): write both meta slots in ONE write so that a crash leaves either nothing
+                // usable (re-initialised on the next open) or a complete file.
+                ch.truncate(0);
                 pager = new Pager(ch, opts.pageSize(), opts.fsync(), opts.metrics());
                 snap = new Snapshot(0, 0, 0, 2);
-                pager.writeRaw(0, encodeMeta(pager.pageSize, snap));
-                pager.writeRaw(pager.pageSize, new byte[pager.pageSize]);
+                byte[] both = new byte[2 * pager.pageSize];
+                System.arraycopy(encodeMeta(pager.pageSize, snap), 0, both, 0, pager.pageSize);
+                pager.writeRaw(0, both);
                 pager.force();
+                if (opts.fsync()) syncParentDirectory(file);
             } else {
-                long size = ch.size();
                 Object[] r = chooseMeta(ch, size);
                 pager = new Pager(ch, (Integer) r[0], opts.fsync(), opts.metrics());
                 snap = (Snapshot) r[1];
@@ -134,6 +140,41 @@ public final class MetaStore implements AutoCloseable {
         } catch (RuntimeException e) {
             closeQuietly(ch);
             throw e;
+        }
+    }
+
+    /**
+     * True for an empty file and for a file whose creation was interrupted: it holds no commit, because a store has at
+     * least two pages and its first commit rewrites a meta page only after both exist. That is the case when the first
+     * meta page is valid with txId 0 but the file is shorter than two pages, or when the file is shorter than the
+     * largest possible two pages and all zeros (the size was extended but the data never reached the disk).
+     */
+    private static boolean needsInitialisation(FileChannel ch, long size) throws IOException {
+        if (size == 0) return true;
+        Object[] m0 = readMetaAt(ch, 0, size);
+        if (m0 != null) {
+            Snapshot s = (Snapshot) m0[1];
+            return s.txId() == 0 && size < 2L * (Integer) m0[0];
+        }
+        if (size > 2L * MetaStoreOptions.MAX_PAGE_SIZE) return false;
+        ByteBuffer bb = ByteBuffer.allocate((int) size);
+        while (bb.hasRemaining()) {
+            if (ch.read(bb, bb.position()) < 0) return false;
+        }
+        for (byte x : bb.array()) {
+            if (x != 0) return false;
+        }
+        return true;
+    }
+
+    /** Makes the directory entry of a newly created file durable; best effort (not supported on every platform). */
+    private static void syncParentDirectory(Path file) {
+        Path dir = file.toAbsolutePath().getParent();
+        if (dir == null) return;
+        try (FileChannel d = FileChannel.open(dir, StandardOpenOption.READ)) {
+            d.force(true);
+        } catch (IOException | RuntimeException e) {
+            log.debug("Cannot fsync directory {}: {}", dir, e.toString());
         }
     }
 
@@ -222,6 +263,7 @@ public final class MetaStore implements AutoCloseable {
     private void loadFreelist(boolean restart) {
         Snapshot s = committed;
         List<Long> chain = new ArrayList<>();
+        TreeMap<Long, LongList> restartPending = new TreeMap<>();
         long id = s.freelistRoot();
         while (id != 0) {
             if (chain.size() > s.pageCount()) throw new CorruptedPageException(id, "freelist chain loop");
@@ -255,15 +297,15 @@ public final class MetaStore implements AutoCloseable {
             pending.put(e.getKey(), arr);
             kept += arr.length;
         }
-        restartPending.clear();
         freeCountApprox = available.size() + kept;
     }
 
     // ---------------------------------------------------------------- transactions
 
     public ReadTxn beginRead() {
-        checkOpen();   // a failed commit does not stop reads: the committed snapshot and its pages are intact
+        // a failed commit does not stop reads: the committed snapshot and its pages are intact
         synchronized (stateLock) {
+            checkOpen();   // under the lock close() takes to set the flag: no reader registers after close began
             Snapshot s = committed;
             readers.merge(s.txId(), 1, Integer::sum);
             return new ReadTxn(this, s, true);
@@ -272,17 +314,39 @@ public final class MetaStore implements AutoCloseable {
 
     /** Blocks until the single write transaction slot is free. */
     public WriteTxn beginWrite() {
+        rejectOnCommitterThread("beginWrite");
+        return beginWriteInternal();
+    }
+
+    /** Used by the committer thread itself, which is the only thread allowed to take the slot from inside a grouped write. */
+    WriteTxn beginWriteInternal() {
         long t0 = System.nanoTime();
         writer.acquireUninterruptibly();
-        metrics.metaWriterLockWait(System.nanoTime() - t0);
+        waitMetric(System.nanoTime() - t0);
         return startWrite();
+    }
+
+    /** The committer thread holds the single writer slot while a body runs: asking for it again would wait for itself. */
+    private void rejectOnCommitterThread(String what) {
+        if (committer.onCommitterThread()) {
+            throw new IllegalStateException(what + " must not be called from inside a grouped write body (the writer slot is already held)");
+        }
+    }
+
+    private void waitMetric(long nanos) {
+        try {
+            metrics.metaWriterLockWait(nanos);
+        } catch (RuntimeException | Error e) {
+            log.warn("Metrics callback failed: {}", e.toString());
+        }
     }
 
     /** Like {@link #beginWrite()} but gives up after the timeout (empty result). */
     public Optional<WriteTxn> tryBeginWrite(long timeout, TimeUnit unit) throws InterruptedException {
+        rejectOnCommitterThread("tryBeginWrite");
         long t0 = System.nanoTime();
         if (!writer.tryAcquire(timeout, unit)) return Optional.empty();
-        metrics.metaWriterLockWait(System.nanoTime() - t0);
+        waitMetric(System.nanoTime() - t0);
         return Optional.of(startWrite());
     }
 
@@ -414,7 +478,6 @@ public final class MetaStore implements AutoCloseable {
         long t0 = System.nanoTime();
         try {
             doCommit(w);
-            metrics.metaCommit(System.nanoTime() - t0);
         } catch (Throwable t) {
             // in-memory free-page state is unreliable now; the file itself is still consistent (copy on write): the
             // write side stays closed until recoverIfPoisoned() has rebuilt it from disk, reads are not affected
@@ -427,6 +490,12 @@ public final class MetaStore implements AutoCloseable {
                         + " until its disk works again", io);
             }
             throw t;
+        }
+        // the commit is durable and published: a failing metrics sink must not make it look failed
+        try {
+            metrics.metaCommit(System.nanoTime() - t0);
+        } catch (RuntimeException | Error e) {
+            log.warn("Metrics callback failed after a successful commit: {}", e.toString());
         }
     }
 
@@ -531,6 +600,7 @@ public final class MetaStore implements AutoCloseable {
      * @throws CorruptedPageException on the first problem found
      */
     public VerifyReport verify() {
+        rejectOnCommitterThread("verify");
         writer.acquireUninterruptibly();
         try {
             checkOpen();
@@ -539,10 +609,6 @@ public final class MetaStore implements AutoCloseable {
         } finally {
             writer.release();
         }
-    }
-
-    Snapshot committedSnapshot() {
-        return committed;
     }
 
     /**
@@ -605,13 +671,21 @@ public final class MetaStore implements AutoCloseable {
         } catch (Throwable t) {
             nextRecoveryAt = System.nanoTime() + recoveryBackoffNanos;
             poisoned = t;
-            metrics.metaRecovery(false);
+            recoveryMetric(false);
             log.warn("Metadata store recovery failed, writes stay refused: {}", t.toString());
             throw unavailable(t);
         }
         poisoned = null;
-        metrics.metaRecovery(true);
+        recoveryMetric(true);
         log.warn("Metadata store recovered after a failed commit (was: {}); writes are accepted again", cause.toString());
+    }
+
+    private void recoveryMetric(boolean ok) {
+        try {
+            metrics.metaRecovery(ok);
+        } catch (RuntimeException | Error e) {
+            log.warn("Metrics callback failed: {}", e.toString());
+        }
     }
 
     private void doRecover() {
@@ -636,7 +710,6 @@ public final class MetaStore implements AutoCloseable {
         available.clear();
         pending.clear();
         chainPending.clear();
-        restartPending.clear();
         loadFreelist(false);
     }
 
@@ -650,20 +723,30 @@ public final class MetaStore implements AutoCloseable {
         }
     }
 
+    /**
+     * Commits what is queued, waits for a running write transaction and closes the file. Idempotent and safe to call
+     * concurrently: every caller returns only after the store is closed. Read transactions still open fail afterwards.
+     */
     @Override
     public void close() {
-        if (closed) return;
-        committer.shutdown();              // commit what is queued, fail late submitters, stop the thread
-        writer.acquireUninterruptibly();   // wait for a running write transaction
-        try {
+        synchronized (closeMonitor) {
             if (closed) return;
-            closed = true;
-            if (fileLock != null) fileLock.release();
-            channel.close();
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        } finally {
-            writer.release();
+            committer.shutdown();              // commit what is queued, fail late submitters, stop the thread
+            writer.acquireUninterruptibly();   // wait for a running write transaction
+            try {
+                synchronized (stateLock) {
+                    closed = true;             // beginRead() checks this under the same lock
+                }
+                try {
+                    if (fileLock != null) fileLock.release();
+                } finally {
+                    channel.close();           // also when releasing the lock failed
+                }
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            } finally {
+                writer.release();
+            }
         }
     }
 }
