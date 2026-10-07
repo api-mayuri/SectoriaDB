@@ -5,6 +5,9 @@ global:
   external_labels:
     stand: sectoria-bench
 
+rule_files:
+  - /etc/prometheus/alerts.yml
+
 scrape_configs:
   # Server metrics (management port, no SigV4). 5s while benchmarking: short runs need resolution.
   - job_name: sectoriadb

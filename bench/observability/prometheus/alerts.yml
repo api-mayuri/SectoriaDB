@@ -1,0 +1,109 @@
+# Alert rules (proposed thresholds; adjust after measuring on your hardware: docs/architecture/08-observability-bench.md,
+# section "Пороги алертов"). Prometheus only evaluates them (visible at /alerts and as the ALERTS series, usable in
+# Grafana); delivery needs an Alertmanager, which this stand does not run.
+groups:
+  - name: sectoriadb-integrity
+    rules:
+      - alert: SectoriaIntegrityFailure
+        expr: sum by (kind) (increase(sectoriadb_integrity_crc_failures_total[10m])) > 0
+        labels: {severity: critical}
+        annotations: {summary: "CRC failure ({{ $labels.kind }}): data on disk does not match its checksum; run verify-all"}
+      - alert: SectoriaQuarantinedSlots
+        expr: sectoriadb_cuckoo_slots_quarantined > 0
+        labels: {severity: critical}
+        annotations: {summary: "{{ $value }} cuckoo slot(s) in quarantine"}
+      - alert: SectoriaTableFull
+        expr: increase(sectoriadb_cuckoo_table_full_total[10m]) > 0
+        labels: {severity: critical}
+        annotations: {summary: "inserts rejected: the cuckoo table is full (resize needed)"}
+  - name: sectoriadb-availability
+    rules:
+      - alert: SectoriaDown
+        expr: up{job="sectoriadb"} == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations: {summary: "SectoriaDB target is down"}
+      - alert: SectoriaServerErrors
+        expr: sum(rate(sectoriadb_s3_requests_seconds_count{status_class="5xx"}[5m])) / sum(rate(sectoriadb_s3_requests_seconds_count[5m])) > 0.01
+        for: 5m
+        labels: {severity: critical}
+        annotations: {summary: "more than 1 % of requests end with 5xx"}
+      - alert: SectoriaAbortedRequests
+        expr: sum(increase(sectoriadb_s3_requests_aborted_total[10m])) > 0
+        labels: {severity: warning}
+        annotations: {summary: "requests aborted by the server (for example a GET cut after the headers by a CRC failure)"}
+  - name: sectoriadb-latency-saturation
+    rules:
+      - alert: SectoriaPutLatencyHigh
+        expr: histogram_quantile(0.99, sum by (le) (rate(sectoriadb_s3_requests_seconds_bucket{operation="PutObject"}[5m]))) > 1
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "PutObject p99 above 1 s for 10 minutes"}
+      - alert: SectoriaGetTtfbHigh
+        expr: histogram_quantile(0.99, sum by (le) (rate(sectoriadb_s3_get_ttfb_seconds_bucket[5m]))) > 0.5
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "GetObject time to first byte p99 above 500 ms"}
+      - alert: SectoriaFsyncSlow
+        expr: histogram_quantile(0.99, sum by (le, target) (rate(sectoriadb_storage_fsync_seconds_bucket[5m]))) > 0.1
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "fsync p99 above 100 ms for {{ $labels.target }}: the disk is the bottleneck"}
+      - alert: SectoriaWriterQueue
+        expr: histogram_quantile(0.99, sum by (le) (rate(sectoriadb_metastore_writer_lock_wait_seconds_bucket[5m]))) > 1
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "metastore writer lock wait p99 above 1 s: writes queue behind the single writer"}
+      - alert: SectoriaTomcatThreadsBusy
+        expr: tomcat_threads_busy_threads / tomcat_threads_config_max_threads > 0.9
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "more than 90 % of Tomcat worker threads busy"}
+      - alert: SectoriaFileDescriptors
+        expr: process_files_open_files / process_files_max_files > 0.8
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "more than 80 % of file descriptors in use"}
+      - alert: SectoriaGcPauses
+        expr: histogram_quantile(0.99, sum by (le) (rate(jvm_gc_pause_seconds_bucket[5m]))) > 0.5
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "JVM GC pause p99 above 500 ms"}
+  - name: sectoriadb-capacity
+    rules:
+      - alert: SectoriaFillHigh
+        expr: 100 * sum(sectoriadb_cuckoo_slots_active) / sum(sectoriadb_cuckoo_slots_capacity) > 80
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "cuckoo table above 80 % full: latency grows, expand the blob"}
+      - alert: SectoriaFillCritical
+        expr: 100 * sum(sectoriadb_cuckoo_slots_active) / sum(sectoriadb_cuckoo_slots_capacity) > 90
+        for: 5m
+        labels: {severity: critical}
+        annotations: {summary: "cuckoo table above 90 % full"}
+      - alert: SectoriaDiskFreeLow
+        expr: 100 * sectoriadb_disk_free_bytes / sectoriadb_disk_total_bytes < 15
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "less than 15 % free on {{ $labels.dir }} volume"}
+      - alert: SectoriaDiskFullSoon
+        expr: predict_linear(sectoriadb_disk_free_bytes{dir="data"}[6h], 24 * 3600) < 0
+        for: 30m
+        labels: {severity: warning}
+        annotations: {summary: "the data volume runs out of space within 24 hours at the current rate"}
+      - alert: SectoriaGcQueueGrowing
+        expr: deriv(sectoriadb_gc_queue_length[1h]) > 0 and sectoriadb_gc_queue_length > 100000
+        for: 1h
+        labels: {severity: warning}
+        annotations: {summary: "garbage collection queue is long and still growing"}
+  - name: sectoriadb-security
+    rules:
+      - alert: SectoriaAuthFailureBurst
+        expr: sum by (reason) (rate(sectoriadb_s3_auth_failures_total{reason=~"signature_mismatch|unknown_key|disabled_key"}[5m])) > 5
+        for: 5m
+        labels: {severity: warning}
+        annotations: {summary: "burst of authentication failures ({{ $labels.reason }}): probing or a misconfigured client"}
+      - alert: SectoriaClockSkew
+        expr: sum(increase(sectoriadb_s3_auth_failures_total{reason="clock_skew"}[15m])) > 10
+        labels: {severity: warning}
+        annotations: {summary: "clients with a wrong clock (RequestTimeTooSkewed); check NTP"}
