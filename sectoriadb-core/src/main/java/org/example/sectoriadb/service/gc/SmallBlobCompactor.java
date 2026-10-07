@@ -218,35 +218,35 @@ public class SmallBlobCompactor {
             // 3. copy into a new, sealed blob
             target = blobs.createSmall(pool, true);
             try (ResidentHandle<SmallObjectBlob> targetHandle = smallCache.acquire(target)) {
-            SmallObjectBlob targetBlob = targetHandle.get();
-            Map<String, SmallMove> moves = copy(oldBlob, targetBlob, live);
+                SmallObjectBlob targetBlob = targetHandle.get();
+                Map<String, SmallMove> moves = copy(oldBlob, targetBlob, live);
 
-            // 4. swap
-            GcRepository.CompactionSwap swap = gcRepo.swapSmallBlob(old.getId(), target.getId(), moves);
-            if (!swap.swapped()) {
-                log.warn("Compaction of small blob {} abandoned at the swap: {}", old.getId(), swap.reason());
-                abandonTarget(target);
-                target = null;
-                return fail(old, "swap refused: " + swap.reason(), t0);
-            }
-            swapped = true;
-
-            // 5. release
-            long bytesAfter = targetBlob.tail();
-            targetBlob.unseal();
-            for (String id : swap.retired()) {
-                try {
-                    targetBlob.markDeleted(moves.get(id).newOffset());
-                } catch (IOException e) {
-                    log.warn("Could not mark the copy of retired manifest {} DELETED: {}", id, e.getMessage());
+                // 4. swap
+                GcRepository.CompactionSwap swap = gcRepo.swapSmallBlob(old.getId(), target.getId(), moves);
+                if (!swap.swapped()) {
+                    log.warn("Compaction of small blob {} abandoned at the swap: {}", old.getId(), swap.reason());
+                    abandonTarget(target);
+                    target = null;
+                    return fail(old, "swap refused: " + swap.reason(), t0);
                 }
-            }
-            pending.add(new PendingFile(old.getId(), Path.of(old.getFilePath()),
-                    System.currentTimeMillis() + props.getGc().getGrace().toMillis()));
-            log.info("Compacted small blob {} into {}: {} record(s), {} -> {} bytes", old.getId(), target.getId(),
-                    swap.repointed(), bytesBefore, bytesAfter);
-            return new CompactionReport(old.getId(), true, null, swap.repointed(), bytesBefore,
-                    bytesAfter, target.getId(), System.currentTimeMillis() - t0);
+                swapped = true;
+
+                // 5. release
+                long bytesAfter = targetBlob.tail();
+                targetBlob.unseal();
+                for (String id : swap.retired()) {
+                    try {
+                        targetBlob.markDeleted(moves.get(id).newOffset());
+                    } catch (IOException e) {
+                        log.warn("Could not mark the copy of retired manifest {} DELETED: {}", id, e.getMessage());
+                    }
+                }
+                pending.add(new PendingFile(old.getId(), Path.of(old.getFilePath()),
+                        System.currentTimeMillis() + props.getGc().getGrace().toMillis()));
+                log.info("Compacted small blob {} into {}: {} record(s), {} -> {} bytes", old.getId(), target.getId(),
+                        swap.repointed(), bytesBefore, bytesAfter);
+                return new CompactionReport(old.getId(), true, null, swap.repointed(), bytesBefore,
+                        bytesAfter, target.getId(), System.currentTimeMillis() - t0);
             }
         } catch (IOException | RuntimeException e) {
             log.error("Compaction of small blob {} failed (the old blob stays authoritative): {}", old.getId(), e.toString());

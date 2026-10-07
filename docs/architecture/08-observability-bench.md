@@ -129,10 +129,13 @@
 | `sectoriadb_metastore_group_batch_pages` | Г | нет | шт. | страниц, записанных одним групповым коммитом (предел `max-batch-pages`) | `histogram_quantile(0.5, sum by (le)(rate(sectoriadb_metastore_group_batch_pages_bucket[5m])))` |
 | `sectoriadb_metastore_group_queue_wait_seconds` | Г | нет | с | ожидание тела записи в очереди группового коммита до начала выполнения (замена «ожидания писателя» для запросов: само ожидание слота теперь делает один коммиттер) | `histogram_quantile(0.99, sum by (le)(rate(sectoriadb_metastore_group_queue_wait_seconds_bucket[5m])))` |
 | `sectoriadb_metastore_group_body_rollbacks_total` | счётчик | нет | шт. | тела, бросившие исключение и откатанные к точке сохранения без влияния на остальные тела пачки | `rate(sectoriadb_metastore_group_body_rollbacks_total[5m])` |
+| `sectoriadb_metastore_recoveries_total` | счётчик | `result` | шт. | попытки метахранилища восстановить сторону записи после сбоя коммита (часть B этапа 10): `success` / `failure`. Рост `failure` это диск, который ещё не работает; чтения в это время идут | `increase(sectoriadb_metastore_recoveries_total{result="failure"}[5m]) > 0` |
 | `sectoriadb_small_append_lock_wait_seconds` | Г | нет | с | ожидание блокировки добавления в `small_*.sob`. После этапа 09 (групповой `fsync`) блокировка держится только на запись в page cache, ожидание около нуля; долговечность это строка ниже | аналогично |
 | `sectoriadb_small_durability_wait_seconds` | Г | нет | с | добавление в `small_*.sob`: от взятия блокировки до долговечности записи (ожидание блокировки + запись + ожидание общего `force`) | `histogram_quantile(0.99, sum by (le)(rate(sectoriadb_small_durability_wait_seconds_bucket[5m])))` |
 | `sectoriadb_small_group_fsync_records` | Г | нет | шт. | записей `.sob`, ставших долговечными одним `fsync` (групповой `fsync`, doc 09 часть B). `le="1"` это «без группировки» | `histogram_quantile(0.99, sum by (le)(rate(sectoriadb_small_group_fsync_records_bucket[5m])))` |
 | `sectoriadb_cuckoo_lock_wait_seconds` | Г | нет | с | ожидание блокировки записи кукушкиной таблицы перед вставкой чанка | аналогично |
+| `sectoriadb_cuckoo_barrier_wait_seconds` | Г | нет | с | время загрузки в барьере долговечности кукушки перед коммитом метахранилища (`fsync`, который она выполнила как ведущий, или ожидание чужого). Вызывается только когда есть неподтверждённые вставки | `histogram_quantile(0.99, sum by (le)(rate(sectoriadb_cuckoo_barrier_wait_seconds_bucket[5m])))` |
+| `sectoriadb_cuckoo_barrier_inserts` | Г | нет | шт. | вставок чанков, ставших долговечными одним `fsync` барьера (размер группы) | `rate(sectoriadb_cuckoo_barrier_inserts_sum[5m]) / rate(sectoriadb_cuckoo_barrier_inserts_count[5m])` |
 | `tomcat_threads_busy_threads` / `tomcat_threads_config_max_threads` / `tomcat_threads_current_threads` | gauge | нет | шт. | пул потоков Tomcat S3-порта (включено `server.tomcat.mbeanregistry.enabled=true`) | `tomcat_threads_busy_threads / tomcat_threads_config_max_threads` |
 | `jvm_gc_pause_seconds` | Г | `action`, `cause`, `gc` | с | паузы GC (границы заданы свойством `management.metrics.distribution.slo.jvm.gc.pause`) | `histogram_quantile(0.99, sum by (le)(rate(jvm_gc_pause_seconds_bucket[5m])))` |
 | `jvm_memory_used_bytes`, `jvm_memory_max_bytes` | gauge | `area`, `id` | байт | куча и не-куча | `jvm_memory_used_bytes{area="heap"} / jvm_memory_max_bytes{area="heap"}` |
@@ -148,17 +151,19 @@
 | `sectoriadb_cuckoo_table_full_total` | счётчик | нет | шт. | вставки, отклонённые `TableFullException` | `increase(sectoriadb_cuckoo_table_full_total[1h]) > 0` |
 | `sectoriadb_cuckoo_dedup_hits_total` | счётчик | нет | шт. | вставки, нашедшие тот же чанк (дедупликация) | `rate(sectoriadb_cuckoo_dedup_hits_total[5m])` |
 | `sectoriadb_cuckoo_rekeys_total` | счётчик | нет | шт. | настоящие коллизии 64-битного хэша: чанк сохранён под ключом с солью | `increase(sectoriadb_cuckoo_rekeys_total[1d])` |
+| `sectoriadb_cuckoo_tables_evicted_total` | счётчик | нет | шт. | таблицы кукушкиных блобов, вытесненные из памяти по LRU (`sectoriadb.cache.max-resident-tables`) | `rate(sectoriadb_cuckoo_tables_evicted_total[5m])` |
 | `sectoriadb_integrity_crc_failures_total` | счётчик | `kind` | шт. | провалы проверки CRC: `chunk` (CRC/длина слота при чтении и при лечении), `small_record` (заголовок/данные записи `.sob`), `whole_object` (CRC32C объекта из манифеста), `metastore_page` (страница `sectoria.db`), `slot_meta` (запись слота при загрузке блоба: слот попадает в карантин). **Любой ненулевой прирост это инцидент** | `sum by (kind)(increase(sectoriadb_integrity_crc_failures_total[1h])) > 0` |
 | `sectoriadb_cuckoo_slots_active` | gauge | нет | шт. | занятые слоты, сумма по загруженным блобам | |
 | `sectoriadb_cuckoo_slots_capacity` | gauge | нет | шт. | всего слотов у загруженных блобов (в метрике намеренно не `..._total`: Micrometer отрезает такой суффикс у gauge) | `100 * sectoriadb_cuckoo_slots_active / sectoriadb_cuckoo_slots_capacity` |
 | `sectoriadb_cuckoo_slots_quarantined` | gauge | нет | шт. | слоты в карантине (запись слота не прошла CRC, чанк недоступен, слот не перезаписывается) | `sectoriadb_cuckoo_slots_quarantined > 0` |
-| `sectoriadb_cuckoo_tables_loaded` | gauge | нет | шт. | кукушкины блобы, загруженные в память этого процесса | |
+| `sectoriadb_cuckoo_tables_loaded` | gauge | нет | шт. | таблицы кукушкиных блобов в памяти **сейчас** (до этапа 10 «загружено за время жизни»; теперь ограничено `sectoriadb.cache.max-resident-tables`) | `sectoriadb_cuckoo_tables_loaded / sectoriadb_cuckoo_tables_max` |
+| `sectoriadb_cuckoo_tables_resident_bytes`, `sectoriadb_cuckoo_tables_max` | gauge | нет | байт / шт. | память слот-метаданных резидентных таблиц / настроенный предел их числа | `sectoriadb_cuckoo_tables_resident_bytes / jvm_memory_max_bytes{area="heap"}` |
 | `sectoriadb_cuckoo_used_bytes` | gauge | нет | байт | активные слоты x размер чанка (загруженные блобы) | |
 | `sectoriadb_cuckoo_capacity_bytes` | gauge | нет | байт | ёмкость всех кукушкиных блобов (слоты x размер чанка), загруженных или нет: «общая ёмкость» | `sectoriadb_cuckoo_used_bytes / sectoriadb_cuckoo_capacity_bytes` |
 | `sectoriadb_blobs` | gauge | `kind` | шт. | зарегистрированные блоб-файлы | |
 | `sectoriadb_small_live_bytes`, `sectoriadb_small_dead_bytes` | gauge | нет | байт | занятое живыми и удалёнными (ещё не возвращёнными) записями `.sob`, открытые файлы | `sectoriadb_small_dead_bytes / (sectoriadb_small_live_bytes + sectoriadb_small_dead_bytes)` |
 | `sectoriadb_small_live_records`, `sectoriadb_small_dead_records` | gauge | нет | шт. | то же в записях | |
-| `sectoriadb_small_blobs_open` | gauge | нет | шт. | открытые файлы малых объектов | |
+| `sectoriadb_small_blobs_open` | gauge | нет | шт. | открытые файлы малых объектов (ограничено `sectoriadb.cache.max-open-small-blobs`) | |
 | `sectoriadb_metastore_file_bytes` | gauge | нет | байт | размер `sectoria.db` | |
 | `sectoriadb_metastore_pages`, `sectoriadb_metastore_free_pages` | gauge | нет | шт. | страниц в файле / свободных (включая ждущие читателей) | `sectoriadb_metastore_free_pages / sectoriadb_metastore_pages` |
 | `sectoriadb_metastore_last_txid` | gauge | нет | номер | последняя зафиксированная транзакция | коммитов в секунду: `sum(rate(sectoriadb_metastore_commit_seconds_count[1m]))`; сам `last_txid` кэшируется на 15 с и растёт ступенями, `rate()` по нему даёт неточный результат на коротких окнах |
@@ -753,7 +758,7 @@ checksum-режимы AWS, SigV2. Из 886 собранных тестов за�
 |---|---|---|---|
 | `kill-put.sh` | `kill -9` контейнера во время `PutObject` объекта 800 МиБ, три раза: когда на диск записано 10 %, 50 %, 90 % | объект отсутствует или цел; повторный PUT работает; `verify-all` чист; счётчик CRC-сбоев 0 | 10 PASS, 0 FAIL. При 10, 50 и 90 % записи в блоб объект после перезапуска отсутствует, повторный PUT проходит и читается; счётчик CRC-сбоев 0; `verify-all`: `RESULT: OK` |
 | `kill-multipart.sh` | (а) `kill -9` между частями multipart; (б) `kill -9` во время `CompleteMultipartUpload` | загрузка видна после перезапуска и достраивается (а); объект отсутствует или цел, загрузка не потеряна (б); `verify-all` чист | 5 PASS, 0 FAIL. (а) загрузка сохранилась и видна в `ListMultipartUploads`, 5 загруженных частей на месте, докачка и `Complete` дают целый объект (SHA-256 совпал); (б) объект отсутствует, загрузка осталась и может быть завершена; `verify-all`: `RESULT: OK` |
-| `full-disk.sh` | каталог данных (или метаданных, `TARGET=meta`) на ext4-образе 64 МиБ через loop-устройство; PUT пока не кончится место | чистая 5xx-ошибка без зависания и падения; прочитанное ранее цело; после освобождения места PUT снова работает; `verify-all` чист | каталог данных: 7 PASS, 0 FAIL (507, см. ниже); каталог метаданных: 6 PASS, 1 FAIL (чтение недоступно до перезапуска, см. ниже и п. 24) |
+| `full-disk.sh` | каталог данных (или метаданных, `TARGET=meta`) на ext4-образе 64 МиБ через loop-устройство; PUT пока не кончится место | чистая 5xx-ошибка без зависания и падения; прочитанное ранее цело; после освобождения места PUT снова работает; `verify-all` чист | каталог данных: 7 PASS, 0 FAIL (507, см. ниже); каталог метаданных: 6 PASS, 1 FAIL (чтение недоступно до перезапуска); после этапа 10 (часть B) 9 PASS, 0 FAIL |
 | `corrupt-chunk.sh` | при остановленном сервере переворачивает байты в чанке большого объекта и в записи малого | `verify-all` находит оба; GET не отдаёт испорченные байты; счётчик `integrity_crc_failures_total` растёт | 5 PASS, 0 FAIL: `verify-all` выдаёт `CORRUPT` для всех трёх объектов, GET `500`, `integrity_crc_failures_total` = 6 |
 | `network-faults.sh` | `tc netem` (если ядро позволяет) и userspace-прокси `slowproxy.py`: обрыв соединения посреди PUT, задержка и ограничение скорости | частичного объекта нет, запрос не «висит» в `inflight`, медленная линия не портит данные | 4 PASS, 0 FAIL; `tc netem` недоступен (ядро без `sch_netem`) |
 | `security.sh` / `security.py` | проверки безопасности (п. 18) | | 69 PASS, 0 FAIL, 7 INFO (поведение «по замыслу»: нет IAM, метаданные 4 КиБ, медленные тела) |
@@ -783,8 +788,9 @@ checksum-режимы AWS, SigV2. Из 886 собранных тестов за�
 Если заканчивается место на диске **метаданных** (`TARGET=meta`): первая ошибка записи тоже `507`, но после неё
 метахранилище объявляет себя неработоспособным (`store failed during a commit and must be reopened`) и отказывает во
 **всех** запросах, включая GET (теперь `503 ServiceUnavailable`, раньше ошибочно `409 BucketNotEmpty`); оправиться можно только
-перезапуском, после которого `verify-all` чист (6088 объектов; до 507 успели пройти 6087 PUT по 1 КиБ). Это заметный недостаток: чтение могло бы продолжать работать
-по последнему зафиксированному состоянию. Вынесено в список проблем.
+перезапуском, после которого `verify-all` чист (6088 объектов; до 507 успели пройти 6087 PUT по 1 КиБ). **Исправлено в этапе 10 (часть B)**: отравляется
+только запись, чтение продолжает работать по последнему зафиксированному состоянию, запись отказывает с `507` / `503 SlowDown` и возобновляется сама, когда
+диск снова работает (прогон после исправления: 7234 PUT до 507, запись возобновилась без перезапуска, `verify-all` 7236 объектов `RESULT: OK`, 9 PASS из 9).
 
 **Порча данных.** При порче байтов в чанке и в записи малого объекта: `verify-all` печатает `CORRUPT` с причиной
 (`Chunk corrupted: ... CRC32C mismatch`, `Small object corrupted: ... data CRC32C mismatch`) и завершается `RESULT: FAILED`;
@@ -958,6 +964,29 @@ sectoriadb_s3_response_bytes_total)` на конец окна. Порог: ра�
   в `SmallObjectBlob`.
 * Ошибок нет ни в одном прогоне; чтение (в `mixed`) не изменилось.
 
+### 21.2. После 10 (часть B): кукушка без `fsync` под блокировкой
+
+Те же сценарии (`put small` на 50 и 200 потоках, `mixed small` на 50 и 200, `get medium` на 20; по 30 с, `fsync=true`, одиночные прогоны,
+разброс до 30 %), «до» это jar части A этапа 10 (`1b2876c`), «после» голова ветки: новая вставка в кукушку пишет данные и мету без `fsync`
+под блокировкой таблицы, `fsync` один на барьер перед коммитом (docs/architecture/10-gc-and-resize.md, B4). Подробности и выводы в doc 10, B5.
+
+| Режим | Потоков | obj/s до | obj/s после | PUT p50 / p99, мс до | PUT p50 / p99, мс после | Ожидание блокировки кукушки p99, мс до / после | `fsync` кукушки в с до / после |
+|---|---:|---:|---:|---|---|---|---|
+| put small | 50 | 807 | 771 | 40,7 / 404 | 56,1 / **242** | 360 / **4,4** | 397 / **117** |
+| put small | 200 | 1082 | 1108 | 20,9 / 2157 | 148 / **695** | 680 / **3,7** | 559 / **151** |
+| mixed small (всего) | 50 | 2918 | 3096 | 32,8 / 234 | 42,0 / 212 | 99 / **12,8** | 221 / **90** |
+| mixed small (всего) | 200 | 3014 | 3277 | 31,4 / 2242 | 240 / **974** | 945 / **47** | 261 / **72** |
+| get medium | 20 | 954 | 930 | | | | 0 / 0 |
+
+* Блокировка записи кукушки больше не узкое место (p99 ожидания с сотен миллисекунд до единиц); хвост PUT при 200 потоках короче втрое
+  (2,1 с до 0,7 с, регрессия этапа 09 снята). Медиана при 200 потоках выросла из-за того, что очередь стала справедливой (закон Литтла: при
+  неизменных 1100 obj/s и 200 запросах в полёте среднее время ответа около 180 мс в обоих вариантах). **Пропускная способность не выросла**:
+  потолок это четыре ядра, общие с warp, и диск песочницы.
+* Новые метрики барьера: `sectoriadb_cuckoo_barrier_wait_seconds` (p50 4,5-9 мс, p99 43-86 мс) и `sectoriadb_cuckoo_barrier_inserts`;
+  `fsync` кукушки в секунду упали в 2,6-3,6 раза (0,52 `fsync` на вставку вместо 2).
+* Заполнение диска метаданных (`bench/faults/full-disk.sh`, `TARGET=meta`): теперь 9 проверок из 9, запись возобновляется без перезапуска
+  (раздел «Отказы», п. 17 и 24).
+
 ### 22. Дашборды: проверка запросов
 
 `bench/observability/check_dashboards.py` после прогонов выполнил запрос каждой панели через `/api/ds/query`:
@@ -990,7 +1019,7 @@ and float` (задержка, TTFB, таблица итогов); исправл
 | 9 | Ключи с эмодзи (символы вне BMP): `SignatureDoesNotMatch` | `security.py` | канонический URI кодирует кодовые точки, а не половины суррогатных пар |
 | 10 | `Content-Length` 6 ТиБ держал поток 10 минут | `security.py` | `400 EntityTooLarge` для заявленных больше 5 ГиБ |
 | 11 | Заполнение диска: `500 InternalError` | `full-disk.sh` | `507 InsufficientStorage` |
-| 12 | После сбоя коммита метахранилища все запросы (даже GET) отвечали `409 BucketNotEmpty` | `full-disk.sh TARGET=meta` | `503 ServiceUnavailable` (сам отказ работать до перезапуска остаётся, п. 24) |
+| 12 | После сбоя коммита метахранилища все запросы (даже GET) отвечали `409 BucketNotEmpty` | `full-disk.sh TARGET=meta` | `503 ServiceUnavailable`; с этапа 10 (часть B) запись отказывает с `507` / `503 SlowDown`, чтение работает, запись возобновляется без перезапуска (п. 24, doc 10 B2) |
 | 13 | Пустой/неверный XML в `CompleteMultipartUpload`: 500 | s3-tests | `400 MalformedXML` |
 | 14 | `verify` и `verify-all` работали только в интерактивной оболочке | kill-тесты | CLI-режим `java -jar sectoriadb.jar verify-all` (офлайн) |
 | 15 | Имена бакетов: код `InvalidArgument` | s3-tests | `InvalidBucketName` |
@@ -1001,12 +1030,12 @@ and float` (задержка, TTFB, таблица итогов); исправл
 
 | Проблема | Свидетельство | Куда |
 |---|---|---|
-| **Метахранилище после ошибки коммита (нет места на диске метаданных) отказывает во всех запросах, включая чтение, до перезапуска** | `full-disk.sh TARGET=meta`: 6087 PUT по 1 КиБ, затем 507, дальше 503 на всём, после перезапуска `verify-all` чист | 06/07 |
+| ~~**Метахранилище после ошибки коммита (нет места на диске метаданных) отказывает во всех запросах, включая чтение, до перезапуска**~~ исправлено в `10-gc-and-resize` (часть B): отравляется только запись, чтения идут по последнему снимку, запись восстанавливается сама (`507` / `503 SlowDown`), `full-disk.sh TARGET=meta` ожидает возобновление без перезапуска | `full-disk.sh TARGET=meta`: 6087 PUT по 1 КиБ, затем 507, дальше 503 на всём, после перезапуска `verify-all` чист | 06/07 |
 | **Медленные тела авторизованных клиентов исчерпывают 200 потоков Tomcat** (таймаут соединения 10 мин) | `security.py`: 220 соединений с телом по 1 байту, новые запросы не обслуживаются | 11 (конфигурация, лимиты) |
-| **Таблица каждого блоба остаётся в памяти навсегда** (около 9 МиБ: `17 байт x 524 288 слотов`), кэш `HashTableCache` ничего не вытесняет; каждый бакет это минимум один блоб. При `-Xmx1g` хватает примерно на 100 блобов: на матрице warp (по бакету на прогон, до исправления гонки 81 блоб на 20 бакетов) сервер получил `OutOfMemoryError`, после чего **метахранилище осталось неработоспособным** (все запросы 503) до перезапуска; в стенде добавлены `-XX:+ExitOnOutOfMemoryError` и `restart: unless-stopped` | сбой в `CuckooHashTable.<init>`, `sectoriadb_cuckoo_tables_loaded` = 81, `jvm_gc_overhead` 0,47 перед отказом | 09 частично: пул ограничен `sectoriadb.pool.max-blobs` и растёт блобами, индекс чанков есть; ленивая загрузка и вытеснение таблиц остаются в плане (10-11) |
+| ~~**Таблица каждого блоба остаётся в памяти навсегда**~~ исправлено в `10-gc-and-resize` (часть B): ссылочные счётчики и вытеснение по LRU (`sectoriadb.cache.max-resident-tables`); исходное описание: (около 9 МиБ: `17 байт x 524 288 слотов`), кэш `HashTableCache` ничего не вытесняет; каждый бакет это минимум один блоб. При `-Xmx1g` хватает примерно на 100 блобов: на матрице warp (по бакету на прогон, до исправления гонки 81 блоб на 20 бакетов) сервер получил `OutOfMemoryError`, после чего **метахранилище осталось неработоспособным** (все запросы 503) до перезапуска; в стенде добавлены `-XX:+ExitOnOutOfMemoryError` и `restart: unless-stopped` | сбой в `CuckooHashTable.<init>`, `sectoriadb_cuckoo_tables_loaded` = 81, `jvm_gc_overhead` 0,47 перед отказом | 09 частично: пул ограничен `sectoriadb.pool.max-blobs` и растёт блобами, индекс чанков есть; ленивая загрузка и вытеснение таблиц остаются в плане (10-11) |
 | ~~**Запись ограничена единственным писателем метахранилища**~~ исправлено в `09a` (групповой коммит): запись малых объектов выросла в 1,25-2 раза, ожидание слота заменено очередью p99 7-10 мс | раздел 21.1 | 09 |
-| **Запись малых объектов теперь упирается в блокировку добавления `small_*.sob`** (добавление + `fsync` на файл, p50 ожидания 62 мс при 50 потоках) | раздел 21.1 | 09/10 |
-| Удаление объектов не возвращает место; чанки, записанные до обрыва PUT, остаются мусором | `kill-put.sh`; GC не реализован | 10 |
+| ~~**Запись малых объектов теперь упирается в блокировку добавления `small_*.sob`**~~ исправлено в `09` (групповой `fsync`); следующее узкое место, блокировка записи кукушки с двумя `fsync` на чанк, снято в `10` (часть B, барьер долговечности); исходное описание: (добавление + `fsync` на файл, p50 ожидания 62 мс при 50 потоках) | раздел 21.1 | 09/10 |
+| ~~Удаление объектов не возвращает место; чанки, записанные до обрыва PUT, остаются мусором~~ исправлено в `10-gc-and-resize` (часть A, сборщик мусора) | `kill-put.sh` | 10 |
 | Тело PUT сначала целиком пишется во временный файл (двойная запись, нужен том под `java.io.tmpdir` не меньше самого большого объекта, 5 ГиБ) | `FileStorageService.stageStream` | 10/11 |
 | Повторный `CompleteMultipartUpload` не идемпотентен | `test_multipart_upload` | 10 |
 | Границы частей multipart не сохраняются: нет `partNumber` при чтении, нет `PartsCount` | warp `multipart`, `test_multipart_get_part` | 09 |

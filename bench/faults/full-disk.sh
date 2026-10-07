@@ -43,7 +43,9 @@ done
 mkfile "$WORK/obj.bin" "$OBJ_MIB"; WANT="$(sha "$WORK/obj.bin")"; OBJ_BYTES=$(( OBJ_MIB * 1048576 ))
 r2="$(s3c put diskb after-full "$WORK/obj.bin")"; info "another PUT while still full: $r2"
 if [ "$TARGET" = meta ]; then
-  echo "$r2" | grep -qE "(507|503)" && pass "writes are refused with 507/503 while the metadata disk is full" || fail "unexpected answer while the metadata disk is full: $r2"
+  # a write that fits into pages the store can reuse still succeeds (copy on write reuses freed pages); one that needs the
+  # file to grow is refused with 507 / 503: anything else (500, a hang) is a failure
+  echo "$r2" | grep -qE "(PUT ok|507|503)" && pass "while the metadata disk is full a write is accepted (reused pages) or refused with 507/503: $r2" || fail "unexpected answer while the metadata disk is full: $r2"
   [ "$ok" -ge 1 ] && [ "$(s3c get diskb o1)" = "GET ok $(( OBJ_KIB * 1024 )) $(awk '$1 == "o1" {print $2}' "$WORK/fill.sha")" ] \
     && pass "reads keep working while the metadata disk is full" || fail "reads do not work while the metadata disk is full"
 fi
