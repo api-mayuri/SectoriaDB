@@ -171,19 +171,20 @@ class SmallObjectStorageTest {
     }
 
     @Test
-    void deleteMarksTheRecordDeleted() throws Exception {
+    void deleteLeavesTheRecordForTheCollector() throws Exception {
         ManifestEntity a = put(bytes(100));
         ManifestEntity b = files.storeStream(new java.io.ByteArrayInputStream(bytes(200)), pool, "other", null);
         BlobFileEntity sob = manifestRepo.findById(a.getId()).orElseThrow().getSmallBlob();
         assertEquals(2, blobService.getSmallStats(sob).liveRecords());
 
         files.delete(a.getId());
+        // the record is NOT marked DELETED at delete time (a reader that holds the old manifest must still read it);
+        // the garbage collector does that after the grace period (GarbageCollectionTest)
         var stats = blobService.getSmallStats(sob);
-        assertEquals(1, stats.liveRecords());
-        assertEquals(1, stats.deadRecords());
-        assertThrows(SmallObjectCorruptedException.class,
-                () -> smallCache.get(sob).read(a.getSmallOffset(), a.getSmallLength(), a.getSmallCrc32c()),
-                "a deleted record is no longer readable");
+        assertEquals(2, stats.liveRecords());
+        assertEquals(0, stats.deadRecords());
+        assertArrayEquals(bytes(100), smallCache.get(sob).read(a.getSmallOffset(), a.getSmallLength(), a.getSmallCrc32c()),
+                "a retired record stays readable until it is collected");
         assertArrayEquals(bytes(200), get(b));
 
         // empty and chunked deletes still work
@@ -203,8 +204,8 @@ class SmallObjectStorageTest {
         assertArrayEquals(bytes(2000), get(b));
         BlobFileEntity sob = manifestRepo.findById(b.getId()).orElseThrow().getSmallBlob();
         var s = blobService.getSmallStats(sob);
-        assertEquals(1, s.liveRecords());
-        assertEquals(1, s.deadRecords());
+        assertEquals(2, s.liveRecords(), "the deleted record is still ACTIVE until the collector marks it");
+        assertEquals(0, s.deadRecords());
         // appends continue into the same blob
         ManifestEntity c = put(bytes(300));
         assertEquals(sob.getId(), c.getSmallBlobId());
