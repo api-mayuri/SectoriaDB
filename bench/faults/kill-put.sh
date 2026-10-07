@@ -9,12 +9,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 ensure_venv
 SIZE_MIB="${SIZE_MIB:-800}"; ITER="${ITER:-10 50 90}"
 fresh_data; mkdir -p "$WORK/files"
-F="$WORK/files/big-put.bin"; mkfile "$F" "$SIZE_MIB"; WANT="$(sha "$F")"
+F="$WORK/files/big-put.bin"
 start_server || exit 2
 s3c mb faultb >/dev/null
 i=0
 for pct in $ITER; do
   i=$((i + 1)); key="big-$i"
+  # new random content each time: identical chunks would be deduplicated against earlier iterations and never written
+  mkfile "$F" "$SIZE_MIB"; WANT="$(sha "$F")"
   # progress = bytes the engine wrote to disk (the request-bytes counter only moves when the request is over)
   base="$(metric 'sectoriadb_storage_disk_write_bytes_total')"
   s3c put faultb "$key" "$F" > "$WORK/put-$i.out" 2>&1 &
