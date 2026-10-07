@@ -69,6 +69,13 @@ public final class MetaStore implements AutoCloseable {
     final TreeMap<Long, long[]> pending = new TreeMap<>();      // freeing txId -> pages, waiting for readers
     private final TreeMap<Long, LongList> restartPending = new TreeMap<>();
     long[] chainPages = new long[0];                            // pages of the persisted freelist chain
+    /**
+     * Old freelist chains, keyed by the txn that replaced them. Only meta pages reference a chain, never a
+     * reader snapshot, so these wait for the meta fallback window only and not for the oldest reader:
+     * otherwise a long-lived reader would make every commit pin a new chain sized by the whole pending set,
+     * and the file would grow by a fixed percentage per commit.
+     */
+    final TreeMap<Long, long[]> chainPending = new TreeMap<>();
 
     volatile CommitHook commitHook;
 
@@ -271,6 +278,11 @@ public final class MetaStore implements AutoCloseable {
             while (!pending.isEmpty() && pending.firstKey() < minReader) {
                 for (long p : pending.pollFirstEntry().getValue()) available.push(p);
             }
+            // a chain replaced by txn U is referenced by meta U-1 only, which stops being a fallback once
+            // U+1 has committed (then the two meta slots hold U and U+1)
+            while (!chainPending.isEmpty() && chainPending.firstKey() < s.txId()) {
+                for (long p : chainPending.pollFirstEntry().getValue()) available.push(p);
+            }
             return new WriteTxn(this, s);
         } catch (RuntimeException | Error e) {
             writer.release();
@@ -402,15 +414,15 @@ public final class MetaStore implements AutoCloseable {
 
         // 2. free-page bookkeeping: pages freed by this txn wait for readers; the old freelist chain is
         //    still referenced by the previous meta, so it is freed by this txn as well
-        List<Long> freed = new ArrayList<>(w.pendingFreed);
-        for (long p : chainPages) freed.add(p);
-        if (!freed.isEmpty()) pending.put(t, freed.stream().mapToLong(Long::longValue).toArray());
+        if (!w.pendingFreed.isEmpty()) pending.put(t, w.pendingFreed.stream().mapToLong(Long::longValue).toArray());
+        if (chainPages.length > 0) chainPending.put(t, chainPages);
         for (long p : w.reusable) available.push(p);
         w.reusable.clear();
 
         // 3. new freelist chain; its pages come from the free list itself where possible
         long total = available.size();
         for (long[] g : pending.values()) total += g.length;
+        for (long[] g : chainPending.values()) total += g.length;
         int per = (ps - 16) / 16;
         int n = (int) ((total + per - 1) / per);
         long[] chain = new long[n];
@@ -418,6 +430,10 @@ public final class MetaStore implements AutoCloseable {
         List<long[]> entries = new ArrayList<>();
         for (int i = 0; i < available.size(); i++) entries.add(new long[]{available.get(i), 0});
         for (Map.Entry<Long, long[]> e : pending.entrySet()) {
+            for (long p : e.getValue()) entries.add(new long[]{p, e.getKey()});
+        }
+        // after a restart these come back as ordinary pending groups, which is safe (no readers then)
+        for (Map.Entry<Long, long[]> e : chainPending.entrySet()) {
             for (long p : e.getValue()) entries.add(new long[]{p, e.getKey()});
         }
         int pos = 0;
@@ -449,6 +465,7 @@ public final class MetaStore implements AutoCloseable {
         chainPages = chain;
         long free = available.size();
         for (long[] g : pending.values()) free += g.length;
+        for (long[] g : chainPending.values()) free += g.length;
         freeCountApprox = free;
         synchronized (stateLock) {
             committed = ns;

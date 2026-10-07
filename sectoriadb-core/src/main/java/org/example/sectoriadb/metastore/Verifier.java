@@ -56,6 +56,12 @@ final class Verifier {
                 free++;
             }
         }
+        for (long[] group : store.chainPending.values()) {
+            for (long p : group) {
+                mark(p);
+                free++;
+            }
+        }
         int missing = seen.nextClearBit(0);
         if (missing < snap.pageCount()) throw new CorruptedPageException(missing, "page is leaked (unreachable and not free)");
         return new MetaStore.VerifyReport(trees, entries, treePages, overflowPages, freelistPages, free);

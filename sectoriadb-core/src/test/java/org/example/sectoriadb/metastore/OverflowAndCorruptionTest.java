@@ -185,4 +185,42 @@ class OverflowAndCorruptionTest {
         }
         MetaStore.open(f, MetaStoreOptions.defaults()).close();
     }
+
+    @Test
+    void longLivedReaderCausesOnlyLinearGrowth() {
+        // A reader pins every page freed after it opened, so growth while it is open is unavoidable, but it
+        // must stay linear in the number of commits: old freelist chains are not pinned by readers.
+        Random r = new Random(7);
+        try (MetaStore s = MetaStore.open(dir.resolve("reader.db"), MetaStoreOptions.defaults().pageSize(512).fsync(false))) {
+            s.writeVoid(tx -> {
+                for (int i = 0; i < 50; i++) tx.tree("t").put(k("key" + i), bytes(r, 2000));
+            });
+            long p0;
+            long p1;
+            long[] mid = new long[1];
+            long p2;
+            try (ReadTxn reader = s.beginRead()) {
+                p0 = s.stats().pageCount();
+                for (int round = 0; round < 400; round++) {
+                    s.writeVoid(tx -> {
+                        BTree t = tx.tree("t");
+                        for (int i = 0; i < 10; i++) t.put(k("key" + r.nextInt(50)), bytes(r, 2000));
+                    });
+                    if (round == 199) mid[0] = s.stats().pageCount();
+                }
+                p1 = mid[0];
+                p2 = s.stats().pageCount();
+                assertEquals(2000, reader.tree("t").get(k("key0")).orElseThrow().length);
+            }
+            long first = p1 - p0;
+            long second = p2 - p1;
+            assertTrue(second <= first * 1.25 + 50,
+                    "growth is not linear: +" + first + " pages in the first 200 commits, +" + second + " in the next 200");
+            // once the reader is gone, a couple of commits make the pinned pages reusable again
+            for (int i = 0; i < 3; i++) s.writeVoid(tx -> tx.tree("x").put(k("a"), bytes(r, 10)));
+            var st = s.stats();
+            assertTrue(st.freePages() >= (p2 - p0) * 8 / 10, st.toString());
+            s.verify();
+        }
+    }
 }
