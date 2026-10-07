@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
 import static org.example.sectoriadb.format.SmallBlobLayout.*;
@@ -25,9 +26,12 @@ import static org.example.sectoriadb.format.SmallBlobLayout.*;
  * {@code docs/architecture/04-small-objects.md} for the protocol).
  *
  * <ul>
- *   <li><b>Append</b>: serialized by a per-file lock. The record (header + data + padding) is written at the tail,
- *       forced (unless fsync is off), and only then the in-memory tail is published. A crash before the force
- *       leaves a torn record beyond the last published tail.</li>
+ *   <li><b>Append</b>: group fsync. An appender takes the per-file lock only for the time it needs to reserve the
+ *       next offset and write its record there (a positional write into the page cache); it then waits, without the
+ *       lock, until a force has covered its record. One waiting appender becomes the leader and forces the file once
+ *       for every record written so far; followers whose record end is at or below the forced offset just return.
+ *       The in-memory tail is published only after the force, so a reader never sees a record that is not durable,
+ *       and a crash before the force leaves a torn record beyond the last published tail.</li>
  *   <li><b>Read</b>: lock-free positional IO. A read never looks past the published tail and verifies header CRC,
  *       state, length and data CRC32C.</li>
  *   <li><b>Delete</b>: a single-byte state flip (ACTIVE to DELETED). Space is not reclaimed here; the live/dead
@@ -69,11 +73,21 @@ public final class SmallObjectBlob implements AutoCloseable {
     private final StorageMetrics metrics;
     private final ReentrantLock lock = new ReentrantLock();
 
+    private final Condition durableChanged = lock.newCondition();
+
+    /** End of the durable log: records below it are forced and visible to readers. */
     private volatile long tail;
+    /** End of the written log (reserved offsets): {@code >= tail}; the difference is waiting for a force. */
+    private volatile long writeEnd;
     private volatile boolean writable = true;
     private volatile boolean closed;
 
     // guarded by lock
+    private boolean forcing;                // a leader is inside channel.force()
+    private int recordsSinceForce;          // records written since the leader last took its target
+    private long pendingRecords;            // records written but not yet durable
+    private long failureGeneration;         // bumped when a force fails: every record beyond tail is dropped
+    private BeforeForceHook beforeForceHook;
     private long nextSequence;
     private long liveRecords, deadRecords, liveBytes, deadBytes;
     private long checkpointTail;
@@ -141,7 +155,7 @@ public final class SmallObjectBlob implements AutoCloseable {
 
     /** True if a record of {@code dataLength} bytes can be appended without exceeding the size limit. */
     public boolean hasRoom(int dataLength) {
-        long t = tail;
+        long t = writeEnd;
         return writable && (t == DATA_START || t + recordSpan(dataLength) <= maxFileBytes);
     }
 
@@ -156,9 +170,24 @@ public final class SmallObjectBlob implements AutoCloseable {
 
     // ── Append ─────────────────────────────────────────────────────────────────
 
+    /** Test hook run by the leader right before it forces the file (may throw to simulate a failing disk). */
+    @FunctionalInterface
+    public interface BeforeForceHook {
+        void run(long targetEnd) throws IOException;
+    }
+
+    public void setBeforeForceHook(BeforeForceHook hook) {
+        lock.lock();
+        try {
+            this.beforeForceHook = hook;
+        } finally {
+            lock.unlock();
+        }
+    }
+
     /**
-     * Appends one record. Returns its location, or {@code null} if the blob has no room left (the caller must
-     * pick another blob; an empty blob always accepts one record).
+     * Appends one record and returns after it is durable. Returns its location, or {@code null} if the blob has no
+     * room left (the caller must pick another blob; an empty blob always accepts one record).
      */
     public Location append(byte[] data, int ownerTag) throws IOException {
         if (data.length > MAX_RECORD_DATA) {
@@ -166,44 +195,155 @@ public final class SmallObjectBlob implements AutoCloseable {
         }
         int dataCrc = crc(data, 0, data.length);
         int span = (int) recordSpan(data.length);
+        byte[] rec = new byte[span];                       // encoded outside the lock; the sequence is patched in
+        long end;
+        long generation;
+        long at;
         long lockT0 = System.nanoTime();
         lock.lock();
         metrics.smallAppendLockWait(System.nanoTime() - lockT0);
+        long written0 = System.nanoTime();
         try {
             ensureOpen();
             if (!writable) {
                 return null;
             }
-            long at = tail;
+            at = writeEnd;
             if (at != DATA_START && at + span > maxFileBytes) {
                 return null;
             }
-            byte[] rec = new byte[span];
             encodeRecordHeader(rec, 0, STATE_ACTIVE, data.length, dataCrc, nextSequence, ownerTag);
             System.arraycopy(data, 0, rec, RECORD_HEADER_SIZE, data.length);
             try {
                 long w0 = System.nanoTime();
                 FileChannelWrites.writeFully(channel, ByteBuffer.wrap(rec), at);
                 metrics.diskWrite(StorageMetrics.Target.SMALL, System.nanoTime() - w0, rec.length);
-                if (fsync) {
-                    long f0 = System.nanoTime();
-                    channel.force(false);
-                    metrics.fsync(StorageMetrics.Target.SMALL, System.nanoTime() - f0);
-                }
             } catch (IOException e) {
+                // nobody reserved anything after `at` (reserve and write are one critical section): cut it off
                 try { channel.truncate(at); } catch (IOException ignored) { }
                 throw e;
             }
             nextSequence++;
             liveRecords++;
             liveBytes += span;
-            tail = at + span;       // publish: readers may now see the record
-            if (tail - checkpointTail >= checkpointInterval) {
-                writeCheckpoint();
+            end = at + span;
+            writeEnd = end;
+            recordsSinceForce++;
+            pendingRecords++;
+            generation = failureGeneration;
+            if (!fsync) {
+                tail = end;                                // no durability to wait for
+                pendingRecords--;
+                recordsSinceForce = 0;
+                maybeCheckpointNoForce();
+                return new Location(at, data.length, dataCrc);
             }
-            return new Location(at, data.length, dataCrc);
         } finally {
             lock.unlock();
+        }
+        awaitDurable(end, generation);
+        metrics.smallDurabilityWait(System.nanoTime() - written0);
+        return new Location(at, data.length, dataCrc);
+    }
+
+    /**
+     * Blocks until the log is durable up to {@code end}. Group commit: the first waiter that finds no force in
+     * progress is the leader, it forces the file once for everything written so far; the others sleep on the condition
+     * and return when {@code tail >= end}. A waiter that loses its place to a failed force gets an IOException.
+     */
+    private void awaitDurable(long end, long generation) throws IOException {
+        lock.lock();
+        try {
+            while (tail < end) {
+                if (failureGeneration != generation) {
+                    throw new IOException("Small-object blob " + id + ": the force covering this record failed;"
+                            + " the record was dropped and the blob is now read-only until it is reopened");
+                }
+                if (closed) {
+                    throw new java.nio.channels.ClosedChannelException();
+                }
+                if (forcing) {
+                    durableChanged.awaitUninterruptibly();
+                } else {
+                    lead();
+                }
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    /** Called with the lock held and no force in progress; returns with the lock held. */
+    private void lead() {
+        forcing = true;
+        long target = writeEnd;
+        int records = recordsSinceForce;
+        recordsSinceForce = 0;
+        BeforeForceHook hook = beforeForceHook;
+        lock.unlock();
+        IOException failure = null;
+        try {
+            if (hook != null) {
+                hook.run(target);
+            }
+            long f0 = System.nanoTime();
+            channel.force(false);
+            metrics.fsync(StorageMetrics.Target.SMALL, System.nanoTime() - f0);
+        } catch (IOException | RuntimeException e) {
+            failure = e instanceof IOException io ? io : new IOException(e);
+        }
+        boolean checkpoint = false;
+        lock.lock();
+        try {
+            if (failure == null) {
+                tail = target;                             // publish: every record below target is durable
+                pendingRecords -= records;
+                metrics.smallGroupFsync(records);
+                checkpoint = tail - checkpointTail >= checkpointInterval && writable;
+            } else {
+                failForce(failure);
+            }
+            durableChanged.signalAll();                    // release the followers before the (rare) checkpoint
+            if (checkpoint) {
+                long cpTail = target;
+                lock.unlock();
+                try {
+                    writeCheckpoint(cpTail);
+                } catch (IOException e) {
+                    log.warn("Small blob {}: could not write the recovery checkpoint (recovery will scan more): {}",
+                            id, e.getMessage());
+                } finally {
+                    lock.lock();
+                }
+            }
+        } finally {
+            forcing = false;
+            durableChanged.signalAll();
+        }
+    }
+
+    /** Lock held. The unforced records cannot be trusted any more: drop them and stop appending. */
+    private void failForce(IOException cause) {
+        long durable = tail;
+        log.error("Small blob {}: force failed, dropping {} unforced record(s) ({} byte(s)) and making the blob"
+                + " read-only: {}", id, pendingRecords, writeEnd - durable, cause.toString());
+        failureGeneration++;
+        writable = false;
+        liveRecords -= pendingRecords;
+        liveBytes -= writeEnd - durable;
+        pendingRecords = 0;
+        recordsSinceForce = 0;
+        writeEnd = durable;
+        try {
+            channel.truncate(durable);
+        } catch (IOException e) {
+            log.warn("Small blob {}: could not truncate the unforced tail: {}", id, e.getMessage());
+        }
+    }
+
+    private void maybeCheckpointNoForce() throws IOException {
+        if (tail - checkpointTail >= checkpointInterval) {
+            writeCheckpoint(tail);
         }
     }
 
@@ -263,16 +403,16 @@ public final class SmallObjectBlob implements AutoCloseable {
                 return false;
             }
             FileChannelWrites.writeFully(channel, ByteBuffer.wrap(new byte[]{STATE_DELETED}), offset + STATE_OFFSET);
-            forceTimed();
             long span = h.span();
             liveRecords--;
             deadRecords++;
             liveBytes -= span;
             deadBytes += span;
-            return true;
         } finally {
             lock.unlock();
         }
+        forceTimed();   // outside the append lock: a delete must not stall appenders for the duration of an fsync
+        return true;
     }
 
     // ── Scrub ──────────────────────────────────────────────────────────────────
@@ -290,16 +430,20 @@ public final class SmallObjectBlob implements AutoCloseable {
     public void close() throws IOException {
         lock.lock();
         try {
+            while (forcing) {
+                durableChanged.awaitUninterruptibly();
+            }
             if (closed) {
                 return;
             }
             try {
                 if (writable && tail != checkpointTail) {
-                    writeCheckpoint();
+                    writeCheckpoint(tail);
                 }
             } finally {
                 closed = true;
                 channel.close();
+                durableChanged.signalAll();   // waiters of unforced records fail with ClosedChannelException
             }
         } finally {
             lock.unlock();
@@ -316,14 +460,14 @@ public final class SmallObjectBlob implements AutoCloseable {
 
     // ── Checkpoint ─────────────────────────────────────────────────────────────
 
-    /** Caller holds the lock; all records below {@code tail} were forced already. */
-    private void writeCheckpoint() throws IOException {
+    /** All records below {@code durableTail} were forced already. Only one thread at a time (the leader, or close). */
+    private void writeCheckpoint(long durableTail) throws IOException {
         long gen = checkpointGeneration + 1;
         int slot = (gen % 2 == 1) ? CHECKPOINT_SLOT_A : CHECKPOINT_SLOT_B;
-        FileChannelWrites.writeFully(channel, ByteBuffer.wrap(encodeCheckpoint(tail, gen)), slot);
+        FileChannelWrites.writeFully(channel, ByteBuffer.wrap(encodeCheckpoint(durableTail, gen)), slot);
         forceTimed();
         checkpointGeneration = gen;
-        checkpointTail = tail;
+        checkpointTail = durableTail;
     }
 
     // ── Recovery ───────────────────────────────────────────────────────────────
@@ -354,6 +498,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         nextSequence = s.maxSequence + 1;
         writable = s.damagedRegions == 0;
         tail = s.tail;
+        writeEnd = s.tail;
         if (!writable) {
             log.error("Small blob {} has {} damaged region(s) inside the log; it is read-only. Problems: {}",
                     id, s.damagedRegions, s.problems);

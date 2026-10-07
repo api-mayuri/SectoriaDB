@@ -92,6 +92,12 @@ public interface StorageMetrics {
     /** Time an append waited for the per-file append lock of a small-object blob. */
     void smallAppendLockWait(long nanos);
 
+    /** One force of a small-object blob made {@code records} appended records durable at once (group fsync). */
+    default void smallGroupFsync(int records) { }
+
+    /** An append waited {@code nanos} from taking the lock until its record was durable (lock wait + write + force). */
+    default void smallDurabilityWait(long nanos) { }
+
     // ---- metastore ---------------------------------------------------------------------------------------------
 
     /** Time a write transaction waited for the single-writer slot. */
