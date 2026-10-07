@@ -390,6 +390,65 @@ class MultiBlobPoolTest {
         }
     }
 
+    /** A ChunkRepository that counts the lookups the read path makes. */
+    private ChunkRepository counting(AtomicInteger lookups) {
+        return (ChunkRepository) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+                new Class<?>[]{ChunkRepository.class}, (proxy, method, args) -> {
+                    if (method.getName().equals("find") || method.getName().equals("findAll")) lookups.incrementAndGet();
+                    try {
+                        return method.invoke(rig.chunks, args);
+                    } catch (java.lang.reflect.InvocationTargetException e) {
+                        throw e.getCause();
+                    }
+                });
+    }
+
+    @Test
+    void hotChunkLocationsAreServedFromTheCacheAndSurviveAResize() throws Exception {
+        rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
+        rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
+        AtomicInteger lookups = new AtomicInteger();
+        ChunkStore store = new ChunkStore(counting(lookups), rig.blobService, rig.cache);
+        FileStorageService files = new FileStorageService(rig.manifests, rig.blobService, rig.cache, rig.smallCache, store, rig.opLog, rig.props);
+        byte[] data = bytes(30 * CHUNK, 321);
+        files.storeStream(new ByteArrayInputStream(data), pool, "hot", null);
+        int afterPut = lookups.get();
+        assertTrue(store.cachedLocations() >= 30);
+
+        ManifestEntity m = rig.manifests.findCurrent("bkt", "hot").orElseThrow();
+        for (int i = 0; i < 3; i++) {
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            files.streamToOutput(m, out);
+            assertArrayEquals(data, out.toByteArray());
+        }
+        assertEquals(afterPut, lookups.get(), "reads of chunks written by this process do not touch the index");
+
+        // the cache follows a resize: the old blob id resolves to its replacement
+        BlobFileEntity victim = cuckoo().get(0);
+        rig.resizeService.resizeBlobFile(victim.getId(), TINY_BUCKETS * 4);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        files.streamToOutput(m, out);
+        assertArrayEquals(data, out.toByteArray());
+        assertEquals(afterPut, lookups.get(), "still no index lookups: hints are re-pointed through the replacement table");
+
+        // a cold process (new store) resolves through the index, one batched lookup per 256 positions
+        AtomicInteger cold = new AtomicInteger();
+        ChunkStore coldStore = new ChunkStore(counting(cold), rig.blobService, rig.cache);
+        FileStorageService coldFiles = new FileStorageService(rig.manifests, rig.blobService, rig.cache, rig.smallCache, coldStore, rig.opLog, rig.props);
+        ByteArrayOutputStream out2 = new ByteArrayOutputStream();
+        coldFiles.streamToOutput(m, out2);
+        assertArrayEquals(data, out2.toByteArray());
+        assertEquals(1, cold.get(), "30 chunks = one window = one lookup");
+        // a disabled cache is correct too
+        rig.props.getPool().setLocationCacheEntries(0);
+        ChunkStore noCache = new ChunkStore(rig.chunks, rig.blobService, rig.cache, rig.props);
+        FileStorageService nf = new FileStorageService(rig.manifests, rig.blobService, rig.cache, rig.smallCache, noCache, rig.opLog, rig.props);
+        ByteArrayOutputStream out3 = new ByteArrayOutputStream();
+        nf.streamToOutput(m, out3);
+        assertArrayEquals(data, out3.toByteArray());
+        assertEquals(0, noCache.cachedLocations());
+    }
+
     @Test
     void poolsHaveOneChunkSize() throws Exception {
         rig.blobService.create(pool, TINY_BUCKETS, CHUNK);

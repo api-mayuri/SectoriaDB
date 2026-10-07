@@ -56,6 +56,7 @@ public class StorageProperties {
         private int initialBlobs = 1;
         private int maxBlobs = 16;
         private int growThresholdPercent = 75;
+        private int locationCacheEntries = 65_536;
 
         /** Cuckoo blobs created when a pool receives its first chunked object. */
         public int getInitialBlobs() { return initialBlobs; }
@@ -68,6 +69,13 @@ public class StorageProperties {
         /** When the aggregate fill of the pool's blobs reaches this percent, a new blob is added (and when no blob accepts a chunk). */
         public int getGrowThresholdPercent() { return growThresholdPercent; }
         public void setGrowThresholdPercent(int v) { this.growThresholdPercent = Math.min(100, Math.max(1, v)); }
+
+        /**
+         * Entries of the LRU that remembers which blob holds a chunk (about 100 bytes each). A hint only: a wrong or stale
+         * entry costs one index lookup, never a wrong read. 0 disables the cache.
+         */
+        public int getLocationCacheEntries() { return locationCacheEntries; }
+        public void setLocationCacheEntries(int v) { this.locationCacheEntries = Math.max(0, v); }
     }
 
     /** Small-object blobs: objects smaller than {@code default-chunk-size} are stored whole in an append-only log. */

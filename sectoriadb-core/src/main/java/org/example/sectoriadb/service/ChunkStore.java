@@ -1,5 +1,6 @@
 package org.example.sectoriadb.service;
 
+import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.ChunkEntry;
@@ -70,19 +71,85 @@ public class ChunkStore {
     private final HashTableCache cache;
     private final StorageMetrics metrics;
     private final BytesHasher hasher;
+    private final LocationCache locations;
 
     @Autowired
+    public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, StorageProperties props) {
+        this(index, blobs, cache, new XxHash64BytesHasher(), props.getPool().getLocationCacheEntries());
+    }
+
     public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache) {
-        this(index, blobs, cache, new XxHash64BytesHasher());
+        this(index, blobs, cache, new XxHash64BytesHasher(), new StorageProperties().getPool().getLocationCacheEntries());
     }
 
     /** With a custom hasher (tests force key collisions with it). */
     public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, BytesHasher hasher) {
+        this(index, blobs, cache, hasher, new StorageProperties().getPool().getLocationCacheEntries());
+    }
+
+    private ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, BytesHasher hasher,
+                       int locationCacheEntries) {
         this.index = index;
         this.blobs = blobs;
         this.cache = cache;
         this.metrics = cache.metrics();
         this.hasher = hasher;
+        this.locations = new LocationCache(locationCacheEntries);
+    }
+
+    // ── Location cache ───────────────────────────────────────────────────────
+
+    /**
+     * Small LRU of {@code (pool, chunkKey) -> blobId}: a GET of a 1 MiB object resolves 64 chunks and a B+tree lookup
+     * costs about 13 us, which was a 20 % loss on GET medium. An entry is only a <i>hint</i>, never trusted blindly:
+     * the chunk is content addressed and the table verifies its length and CRC32C, so a hint that points at a blob
+     * without the chunk (replaced by a resize, freed by the collector, deleted) just misses and the authoritative
+     * index lookup runs; a hint to a blob that still holds a copy returns the right bytes. Resizes are followed through
+     * {@link HashTableCache#resolveRedirect}. Stage 10 calls {@link #forget} after freeing a chunk (not required for
+     * correctness, it only frees the slot of the cache).
+     */
+    static final class LocationCache {
+        private record Loc(String pool, long key) {
+        }
+
+        private final int capacity;
+        private final java.util.LinkedHashMap<Loc, String> map;
+
+        LocationCache(int capacity) {
+            this.capacity = Math.max(0, capacity);
+            this.map = new java.util.LinkedHashMap<>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<Loc, String> eldest) {
+                    return size() > LocationCache.this.capacity;
+                }
+            };
+        }
+
+        synchronized String get(String pool, long key) {
+            return capacity == 0 ? null : map.get(new Loc(pool, key));
+        }
+
+        synchronized void put(String pool, long key, String blobId) {
+            if (capacity > 0) map.put(new Loc(pool, key), blobId.intern());
+        }
+
+        synchronized void remove(String pool, long key) {
+            map.remove(new Loc(pool, key));
+        }
+
+        synchronized int size() {
+            return map.size();
+        }
+    }
+
+    /** Drops the cached location of a chunk (after the collector freed it). */
+    public void forget(String poolId, long chunkKey) {
+        locations.remove(poolId, chunkKey);
+    }
+
+    /** Number of cached chunk locations (tests, diagnostics). */
+    public int cachedLocations() {
+        return locations.size();
     }
 
     // ── Write ─────────────────────────────────────────────────────────────────
@@ -156,6 +223,7 @@ public class ChunkStore {
                 if (verifyExisting(e.blobId(), key, e.dataLength(), e.crc32c(), data, crc)) {
                     metrics.poolDedupHit();
                     placed.put(key, new PlacedChunk(key, e.blobId(), data.length, crc, true));
+                    locations.put(pool.getId(), key, e.blobId());
                     return key;
                 }
                 continue;   // a different chunk is indexed under this key: collision
@@ -163,6 +231,7 @@ public class ChunkStore {
             try {
                 String blobId = place(pool, chunkSize, key, data);
                 placed.put(key, new PlacedChunk(key, blobId, data.length, crc, false));
+                locations.put(pool.getId(), key, blobId);   // a read right after the PUT needs no index lookup
                 return key;
             } catch (KeyCollisionException collision) {
                 log.warn("{}", collision.getMessage());   // an uncommitted copy of another chunk sits under this key
@@ -299,6 +368,12 @@ public class ChunkStore {
         public ByteBuffer read(int index) throws IOException {
             long key = keys[index];
             int size = sizeOf(index);
+            String hint = locations.get(poolId, key);
+            if (hint != null) {
+                ByteBuffer b = tryRead(hint, key, size);
+                if (b != null) return b;
+                locations.remove(poolId, key);   // stale hint: the authoritative lookup below decides
+            }
             ChunkEntry e = entry(index, false);
             for (int attempt = 0; ; attempt++) {
                 if (e == null) throw new ChunkNotFoundException(key);
@@ -306,15 +381,23 @@ public class ChunkStore {
                     throw new ChunkCorruptedException(e.blobId(), -1, key, "the chunk index records " + e.dataLength()
                             + " bytes but the manifest needs " + size);
                 }
-                try {
-                    var r = blobs.tableOf(e.blobId()).readChunkByKey(key, size);
-                    if (r.isPresent()) return r.get();
-                } catch (BlobService.BlobGoneException | ClosedChannelException stale) {
-                    if (attempt > 0) throw stale;
+                ByteBuffer b = tryRead(e.blobId(), key, size);
+                if (b != null) {
+                    locations.put(poolId, key, e.blobId());
+                    return b;
                 }
                 if (attempt > 0) throw new ChunkNotFoundException(key);
                 // the lookup may predate a resize that moved the chunk to another blob: look again, once
                 e = entry(index, true);
+            }
+        }
+
+        /** The chunk from this blob (following resizes), or null if the blob is gone or does not hold it. */
+        private ByteBuffer tryRead(String blobId, long key, int size) throws IOException {
+            try {
+                return blobs.tableOf(cache.resolveRedirect(blobId)).readChunkByKey(key, size).orElse(null);
+            } catch (BlobService.BlobGoneException | ClosedChannelException stale) {
+                return null;
             }
         }
 
@@ -325,9 +408,16 @@ public class ChunkStore {
             if (winBase < 0 || index < winBase || index >= winBase + WINDOW) {
                 winBase = index - index % WINDOW;
                 int end = Math.min(keys.length, winBase + WINDOW);
-                window = ChunkStore.this.index.findAll(poolId, Arrays.copyOfRange(keys, winBase, end));
+                // only the positions the location cache does not know: a hot object needs no index lookup at all
+                long[] missing = new long[end - winBase];
+                int n = 0;
+                for (int i = winBase; i < end; i++) {
+                    if (locations.get(poolId, keys[i]) == null) missing[n++] = keys[i];
+                }
+                window = n == 0 ? Map.of() : ChunkStore.this.index.findAll(poolId, Arrays.copyOf(missing, n));
             }
-            return window.get(keys[index]);
+            ChunkEntry e = window.get(keys[index]);
+            return e != null ? e : ChunkStore.this.index.find(poolId, keys[index]).orElse(null);
         }
     }
 

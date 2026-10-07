@@ -216,6 +216,17 @@ def server():
         pq(q_hist("sectoriadb_metastore_group_queue_wait_seconds", 0.99, by=""), "queue wait p99", "B"),
         pq(q_hist("sectoriadb_metastore_commit_seconds", 0.99, by=""), "commit p99", "C")], "s", log=True,
         desc="Time from submit to the start of the body (the batch ahead of it is committing). Roughly one commit time at saturation; durability adds that body's own batch commit."), 8, 8)
+    d.add(ts("Small objects: group fsync", [
+        pq(q_hist("sectoriadb_small_group_fsync_records", 0.5, by=""), "records per fsync p50", "A"),
+        pq(q_hist("sectoriadb_small_group_fsync_records", 0.99, by=""), "records per fsync p99", "B"),
+        pq(f"sum(rate(sectoriadb_small_group_fsync_records_sum[{R}])) / sum(rate(sectoriadb_small_group_fsync_records_count[{R}]))", "records per fsync mean", "C"),
+        pq(f'sum(rate(sectoriadb_storage_fsync_seconds_count{{target="small"}}[{R}]))', "small fsyncs/s", "D")], "short",
+        desc="Appends to small_*.sob share one fsync: the appender that finds no force in progress forces for every record written so far. 1 means no sharing (low concurrency)."), 8, 8)
+    d.add(ts("Small objects: time to durability p50/p99", [
+        pq(q_hist("sectoriadb_small_durability_wait_seconds", 0.5, by=""), "append -> durable p50", "A"),
+        pq(q_hist("sectoriadb_small_durability_wait_seconds", 0.99, by=""), "append -> durable p99", "B"),
+        pq(q_hist("sectoriadb_small_append_lock_wait_seconds", 0.99, by=""), "append lock wait p99", "C")], "s", log=True,
+        desc="From taking the append lock to the record being forced (lock wait + write + waiting for a force). The lock itself is held only for the write into the page cache."), 8, 8)
     d.add(ts("Engine lock waits p99", [
         pq(q_hist("sectoriadb_small_append_lock_wait_seconds", 0.99, by=""), "small append", "A"),
         pq(q_hist("sectoriadb_cuckoo_lock_wait_seconds", 0.99, by=""), "cuckoo insert", "B")], "s", log=True), 8, 8)
@@ -259,6 +270,19 @@ def server():
         pq("sum by (kind) (increase(sectoriadb_integrity_crc_failures_total[$__interval]))", "{{kind}}")], "short", minv=0), 8, 8)
     d.add(ts("Quarantined slots", [pq("sectoriadb_cuckoo_slots_quarantined", "quarantined")], "short", minv=0), 8, 8)
     d.add(ts("GC queue (manifests waiting for garbage collection)", [pq("sectoriadb_gc_queue_length", "queue")], "short", minv=0), 8, 8)
+    d.add(ts("Chunk index", [
+        pq("sectoriadb_chunks_indexed", "chunks indexed", "A"), pq("sectoriadb_chunks_refs", "references (chunk positions of live objects)", "B")], "short", fill=0,
+        desc="Pool-wide chunk index (chunks tree). refs / chunks is the average sharing factor; a chunk shared by many objects is stored once."), 8, 8)
+    d.add(ts("Chunk collection queue and orphans", [
+        pq("sectoriadb_chunks_gc_queue_length", "chunks with zero references (chunk_gc)", "A"),
+        pq("sectoriadb_chunks_orphans", "orphan copies (written twice by concurrent uploads)", "B")], "short", minv=0,
+        desc="Both grow until the garbage collector of stage 10 runs; nothing frees chunk slots yet."), 8, 8)
+    d.add(ts("Pool placement: dedup, fallbacks, growth", [
+        pq(f"rate(sectoriadb_pool_dedup_hits_total[{R}])", "pool-wide dedup hits/s", "A"),
+        pq(f"increase(sectoriadb_pool_placement_fallbacks_total[{R}])", "placement fallbacks (top choice refused)", "B"),
+        pq(f"increase(sectoriadb_pool_grown_total[{R}])", "blobs added to pools", "C"),
+        pq("sectoriadb_pool_blobs_max", "most blobs in one pool", "D")], "short",
+        desc="Chunks are ranked over the blobs of a pool by weighted rendezvous hashing; a fallback means the best-ranked blob was full and the next one took the chunk."), 8, 8)
     d.add(ts("Resize", [
         pq("increase(sectoriadb_resize_seconds_count[$__interval])", "resizes {{result}}", "A"),
         pq("sum(rate(sectoriadb_resize_seconds_sum[$__interval]))", "time resizing (s/s)", "B"),
