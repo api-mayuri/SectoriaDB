@@ -80,7 +80,8 @@ public final class S3Support {
      * Writes and deletes must not carry query parameters that nobody handles. A request such as
      * {@code DELETE /bucket?tagging} or {@code PUT /bucket/key?retention} that no sub-resource handler claims would
      * otherwise be executed as the plain DeleteBucket / DeleteObject / PutObject and destroy data. Only the names in
-     * {@code allowed} (for example {@code x-id}, which the AWS SDKs for JavaScript and Go add to every request) pass.
+     * {@code allowed} (for example {@code x-id}, which the AWS SDKs for JavaScript and Go add to every request) pass, and so do the SigV4 query
+     * parameters of presigned URLs ({@code X-Amz-*}).
      */
     public static void requireOnlyQueryParams(jakarta.servlet.http.HttpServletRequest request, String... allowed) {
         String q = request.getQueryString();
@@ -89,7 +90,8 @@ public final class S3Support {
             if (pair.isEmpty()) continue;
             int eq = pair.indexOf('=');
             String name = java.net.URLDecoder.decode(eq < 0 ? pair : pair.substring(0, eq), java.nio.charset.StandardCharsets.UTF_8);
-            boolean ok = false;
+            // presigned URLs carry the SigV4 parameters (X-Amz-Algorithm, X-Amz-Credential, X-Amz-Signature, ...) in the query
+            boolean ok = name.regionMatches(true, 0, "X-Amz-", 0, 6);
             for (String a : allowed) if (a.equals(name)) { ok = true; break; }
             if (!ok) {
                 throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",

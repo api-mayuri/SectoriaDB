@@ -510,6 +510,11 @@ class S3ApiRegressionTest {
         assertEquals(200, send(HttpRequest.newBuilder(uri("/del-xid?x-id=CreateBucket")).PUT(BodyPublishers.noBody())).statusCode());
         assertEquals(200, send(HttpRequest.newBuilder(uri("/del-xid/o?x-id=PutObject")).PUT(BodyPublishers.ofString("v"))).statusCode());
         assertEquals(204, send(HttpRequest.newBuilder(uri("/del-xid/o?x-id=DeleteObject")).DELETE()).statusCode());
+        // presigned PUT / DELETE URLs carry the SigV4 parameters in the query string (mint: PresignedPut regressed)
+        String presign = "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature=00";
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/del-xid/p?" + presign)).PUT(BodyPublishers.ofString("presigned"))).statusCode());
+        assertEquals("presigned", new String(get("del-xid", "p").body()));
+        assertEquals(204, send(HttpRequest.newBuilder(uri("/del-xid/p?" + presign)).DELETE()).statusCode());
         assertEquals(204, send(HttpRequest.newBuilder(uri("/del-xid?x-id=DeleteBucket")).DELETE()).statusCode());
     }
 
