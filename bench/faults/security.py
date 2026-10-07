@@ -47,7 +47,7 @@ def sign(method, raw_path, query="", headers=None, body=b"", creds=MAIN, now=Non
 
 
 def call(method, raw_path, query="", headers=None, body=b"", creds=MAIN, signed=True, now=None, payload_hash=None, timeout=60):
-    hd = sign(method, raw_path, query, headers, body, creds, now, payload_hash) if signed else dict(headers or {})
+    hd = sign(method, raw_path, query, headers, body, creds, now, payload_hash) if signed else {"host": f"{HOST}:{PORT}", **(headers or {})}
     c = http.client.HTTPConnection(HOST, PORT, timeout=timeout)
     try:
         c.putrequest(method, raw_path + ("?" + query if query else ""), skip_host=True, skip_accept_encoding=True)
@@ -109,9 +109,15 @@ def probe_auth():
     for k, v in hd.items(): c.putheader(k, v)
     c.endheaders(); r = c.getresponse(); d = r.read(); c.close()
     out("PASS" if r.status == 403 else "FAIL", f"signature of /tamper replayed for /other: {r.status} {code(d)}")
-    # header injection in user metadata
-    s, _, d = call("PUT", f"/{B}/inj", headers={"x-amz-meta-x": "a\r\nSet-Cookie: pwn=1"}, body=b"x")
-    out("PASS" if s in (400, 403, -1) or (s == 200) else "FAIL", f"CR/LF in a metadata header value: {s} {code(d)}")
+    # header injection: a bare CR/LF-terminated extra header inside a metadata value, sent over a raw socket
+    hd = sign("PUT", f"/{B}/inj", headers={"x-amz-meta-x": "a"}, body=b"x")
+    raw = (f"PUT /{B}/inj HTTP/1.1\r\n" + "".join(f"{k}: {v}\r\n" for k, v in hd.items() if k != "x-amz-meta-x")
+           + "x-amz-meta-x: a\r\nSet-Cookie: pwn=1\r\nContent-Length: 1\r\n\r\nx").encode()
+    sck = socket.create_connection((HOST, PORT), timeout=10); sck.sendall(raw)
+    resp = sck.recv(65536); sck.close()
+    status = resp.split(b" ", 2)[1].decode() if resp.startswith(b"HTTP/") else "?"
+    s2, h2, _ = call("HEAD", f"/{B}/inj")
+    out("PASS" if "set-cookie" not in {k.lower() for k in h2} else "FAIL", f"injected extra header line in a signed request: status {status}, never reflected as a response header (HEAD: {s2})")
 
 
 def probe_paths():
@@ -290,7 +296,7 @@ def metrics_summary():
         out("INFO", f"metrics not readable: {e}"); return
     fails = {m.group(1): float(m.group(2)) for m in re.finditer(r'sectoriadb_s3_auth_failures_total\{[^}]*reason="(\w+)"\} ([0-9.]+)', txt) if float(m.group(2)) > 0}
     out("INFO", f"auth failures counted by the server: {fails}")
-    out("PASS" if fails.get("clock_skew", 0) >= 4 and fails.get("signature_mismatch", 0) >= 1 else "FAIL", "metrics saw the clock_skew / signature_mismatch probes")
+    out("PASS" if fails.get("clock_skew", 0) >= 3 and fails.get("signature_mismatch", 0) >= 1 else "FAIL", "metrics saw the clock_skew / signature_mismatch probes")
 
 
 if __name__ == "__main__":

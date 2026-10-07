@@ -193,16 +193,18 @@ public final class SigV4Utils {
     public static String uriEncode(String value, boolean encodeSlash) {
         if (value == null) return "";
         StringBuilder result = new StringBuilder();
-        for (char c : value.toCharArray()) {
-            if (isUnreserved(c) || (!encodeSlash && c == '/')) {
-                result.append(c);
+        // By code point, not by char: a character outside the BMP (emoji, rare CJK) is a surrogate PAIR in Java, and
+        // encoding each half separately yields "?" bytes, i.e. a wrong canonical URI and SignatureDoesNotMatch.
+        value.codePoints().forEach(cp -> {
+            if (cp < 0x80 && (isUnreserved((char) cp) || (!encodeSlash && cp == '/'))) {
+                result.append((char) cp);
             } else {
-                byte[] bytes = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
+                byte[] bytes = new String(Character.toChars(cp)).getBytes(StandardCharsets.UTF_8);
                 for (byte b : bytes) {
-                    result.append('%').append(String.format("%02X", b & 0xFF));
+                    result.append('%').append(HexFormat.of().withUpperCase().toHexDigits(b));
                 }
             }
-        }
+        });
         return result.toString();
     }
 
