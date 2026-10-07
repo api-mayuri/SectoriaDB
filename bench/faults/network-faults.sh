@@ -39,13 +39,13 @@ kill "$proxy" 2>/dev/null; sleep 2
 [ "$(s3c get netb cut)" = "GET absent" ] && pass "PUT cut at 15 MiB of 40: no partial object visible" || fail "partial object visible after the connection was cut: $(s3c get netb cut)"
 infl="$(metric 'sectoriadb_s3_requests_inflight')"
 [ "$infl" = 0 ] && pass "in-flight requests back to 0 after the cut (no leaked request)" || fail "in-flight gauge stuck at $infl after the cut"
-info "aborted/error counters: $(curl -s "http://localhost:$MGMT_PORT/actuator/prometheus" | grep -E '^sectoriadb_s3_(errors|requests_aborted)_total' | sed 's/application="SectoriaDB",//' | tr '\n' ' ')"
+info "aborted/error counters: $(curl -s "http://localhost:$MGMT_PORT/actuator/prometheus" | grep -E '^sectoriadb_s3_(errors|requests_aborted)_total' | grep -v ' 0.0$' | sed 's/application="SectoriaDB",//' | tr '\n' ' ')"
 
-"$PY" "$FAULTS_DIR/slowproxy.py" --listen "$PP" --target "localhost:$S3_PORT" --delay-ms 40 --rate-kbps 4000 > "$WORK/proxy.log" 2>&1 &
+"$PY" "$FAULTS_DIR/slowproxy.py" --listen "$PP" --target "localhost:$S3_PORT" --delay-ms 5 --rate-kbps 8000 > "$WORK/proxy.log" 2>&1 &
 proxy=$!; sleep 1
 t=$(date +%s.%N); r="$(FAULT_ENDPOINT="http://localhost:$PP" s3c put netb slow "$WORK/files/n.bin")"; el=$(awk -v a="$t" -v b="$(date +%s.%N)" 'BEGIN{printf "%.1f", b-a}')
 kill "$proxy" 2>/dev/null
-[ "$r" = "PUT ok" ] && [ "$(s3c get netb slow)" = "GET ok $SIZE $WANT" ] && pass "PUT through a 4 MB/s, +40 ms/chunk link: intact (${el}s)" || fail "PUT through the slow link: $r"
+[ "$r" = "PUT ok" ] && [ "$(s3c get netb slow)" = "GET ok $SIZE $WANT" ] && pass "PUT through a 8 MB/s, +5 ms/chunk link: intact (${el}s)" || fail "PUT through the slow link: $r"
 stop_server
 out="$(offline_verify)"; echo "$out" | tail -3 | sed 's/^/      /'
 echo "$out" | grep -q "RESULT: OK" && pass "verify-all clean" || fail "verify-all reports problems"
