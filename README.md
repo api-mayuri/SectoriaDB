@@ -279,6 +279,24 @@ curl -s localhost:9464/actuator/health
 Полный каталог метрик, границы гистограмм, правила кардинальности и примеры PromQL:
 [docs/architecture/08-observability-bench.md](docs/architecture/08-observability-bench.md).
 
+### Стенд: Prometheus, Grafana, InfluxDB, warp
+
+Готовый стенд лежит в [`bench/`](bench/README.md): `docker compose` поднимает SectoriaDB, Prometheus (метрики сервера и
+хоста через node_exporter), Grafana с дашбордами «SectoriaDB — server» и «warp — client» и InfluxDB v2 для живых результатов
+нагрузочного инструмента `minio/warp`.
+
+```bash
+cd bench/observability && cp .env.example .env && docker compose up -d     # Grafana: http://localhost:3000
+bench/warp/run.sh --mode mixed --size small --conc 50 --duration 5m --influx
+```
+
+* Сценарии нагрузки, матрица режимов, сравнение прогонов, методика измерений:
+  [bench/README.md](bench/README.md) и раздел «Стенд и бенчмарки» в
+  [docs/architecture/08-observability-bench.md](docs/architecture/08-observability-bench.md).
+* Совместимость с S3 (ceph/s3-tests, minio/mint): `bench/compat/`, результаты в разделе «Совместимость» той же главы.
+* Отказы и безопасность (`kill -9`, полный диск, порча чанка, XXE, дрейф часов, медленные клиенты): `bench/faults/`.
+* Проверить целостность хранилища без запуска сервера: `java -jar sectoriadb.jar verify-all` (при остановленном сервере).
+
 ## Тесты
 
 ```bash
