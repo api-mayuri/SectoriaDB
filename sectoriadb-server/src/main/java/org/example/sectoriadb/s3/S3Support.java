@@ -56,6 +56,26 @@ public final class S3Support {
         rejectIfPresent(request, UNSUPPORTED_OBJECT_SUBRESOURCES);
     }
 
+    /** S3 limit for one PutObject / UploadPart request: 5 GiB. */
+    public static final long MAX_SINGLE_UPLOAD_BYTES = 5L * 1024 * 1024 * 1024;
+
+    /**
+     * Refuses an upload whose declared size is over the S3 limit before a single body byte is read (the body is
+     * spooled to a temp file first, so an absurd Content-Length would otherwise fill the temp volume and hold a
+     * worker thread until the connection times out).
+     */
+    public static void requireDeclaredSizeWithinLimit(jakarta.servlet.http.HttpServletRequest request) {
+        long declared = request.getContentLengthLong();
+        String decoded = request.getHeader("x-amz-decoded-content-length");   // aws-chunked: payload without framing
+        if (decoded != null) {
+            try { declared = Long.parseLong(decoded.trim()); } catch (NumberFormatException ignored) { /* checked later */ }
+        }
+        if (declared > MAX_SINGLE_UPLOAD_BYTES) {
+            throw new S3Exception(org.springframework.http.HttpStatus.BAD_REQUEST, "EntityTooLarge",
+                    "Your proposed upload exceeds the maximum allowed size (5 GiB for one request; use multipart upload)");
+        }
+    }
+
     /**
      * Writes and deletes must not carry query parameters that nobody handles. A request such as
      * {@code DELETE /bucket?tagging} or {@code PUT /bucket/key?retention} that no sub-resource handler claims would

@@ -85,6 +85,7 @@ public class S3ObjectController {
         // UploadPart (partNumber + uploadId) and the sub-resource writes (?retention, ?legal-hold, ...) have their own
         // handlers; a request that reaches PutObject with any of those parameters must not overwrite the object
         S3Support.requireOnlyQueryParams(request, "x-id");
+        S3Support.requireDeclaredSizeWithinLimit(request);
 
         // Verify bucket exists; throws NoSuchBucket if not
         PoolEntity pool = lookup.requireBucket(bucket);

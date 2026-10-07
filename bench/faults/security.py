@@ -36,7 +36,7 @@ def sign(method, raw_path, query="", headers=None, body=b"", creds=MAIN, now=Non
     for k, v in (headers or {}).items():
         hd[k.lower()] = v
     signed = sorted(hd)
-    canon_q = "&".join(sorted(query.split("&"))) if query else ""
+    canon_q = "&".join(sorted(p if "=" in p else p + "=" for p in query.split("&"))) if query else ""
     canon = "\n".join([method, raw_path, canon_q, "".join(f"{k}:{hd[k].strip()}\n" for k in signed), ";".join(signed), ph])
     scope = f"{day}/{region}/s3/aws4_request"
     sts = "\n".join(["AWS4-HMAC-SHA256", amz, scope, hashlib.sha256(canon.encode()).hexdigest()])

@@ -155,6 +155,7 @@ public class S3MultipartController {
         if (partNumber < 1 || partNumber > 10000) {
             throw S3Exception.invalidArgument("Invalid part number: " + partNumber);
         }
+        S3Support.requireDeclaredSizeWithinLimit(request);
 
         // Validate and load upload directory
         Path uploadDir = validateUploadId(uploadId, bucket);

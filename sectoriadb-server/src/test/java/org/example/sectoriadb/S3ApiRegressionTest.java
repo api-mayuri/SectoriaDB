@@ -534,4 +534,22 @@ class S3ApiRegressionTest {
         assertEquals("ru", head.headers().firstValue("Content-Language").orElse(null));
         assertEquals("text/bla", head.headers().firstValue("Content-Type").orElse(null));
     }
+
+    /** security probe: Content-Length of 6 TiB without a body held a worker thread until the 10 minute timeout. */
+    @Test
+    void declaredUploadSizeOverFiveGiBIsRefusedImmediately() throws Exception {
+        mkBucket("too-big");
+        try (java.net.Socket sock = new java.net.Socket("localhost", port)) {
+            sock.setSoTimeout(5000);
+            sock.getOutputStream().write(("PUT /too-big/huge HTTP/1.1\r\nHost: localhost\r\nContent-Length: "
+                    + 6L * 1024 * 1024 * 1024 * 1024 + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            sock.getOutputStream().flush();
+            byte[] buf = new byte[2048];
+            int n = sock.getInputStream().read(buf);
+            String resp = new String(buf, 0, Math.max(n, 0), StandardCharsets.UTF_8);
+            assertTrue(resp.startsWith("HTTP/1.1 400"), resp);
+            assertTrue(resp.contains("EntityTooLarge"), resp);
+        }
+        assertEquals(404, get("too-big", "huge").statusCode());
+    }
 }
