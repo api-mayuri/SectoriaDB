@@ -90,6 +90,15 @@ public class BlobService {
 
     /** Creates an empty small-object blob (append-only log of whole small objects) in the pool. */
     public BlobFileEntity createSmall(PoolEntity pool) throws IOException {
+        return createSmall(pool, false);
+    }
+
+    /**
+     * As {@link #createSmall(PoolEntity)}; with {@code sealed} the blob is closed for ordinary appends BEFORE it is
+     * registered, so no writer can pick it: the target of a compaction (only the compactor appends until it swaps the
+     * blob in and unseals it).
+     */
+    public BlobFileEntity createSmall(PoolEntity pool, boolean sealed) throws IOException {
         long t0 = System.currentTimeMillis();
         String blobId   = UUID.randomUUID().toString();
         String fileName = "small_" + blobId.substring(0, 8) + ".sob";
@@ -107,6 +116,7 @@ public class BlobService {
         entity.setChunkSize(0);
         entity.setTotalBytes(org.example.sectoriadb.format.SmallBlobLayout.HEADER_SIZE);
         entity.setCreatedAt(Instant.now());
+        if (sealed) smallCache.get(entity).seal();   // opened (and sealed) from the file before the registry knows it
         blobRepo.save(entity);
 
         opLog.success("BLOB_CREATE", blobId, fileName,
@@ -137,6 +147,26 @@ public class BlobService {
                 }
             }
             return createSmall(pool);
+        }
+    }
+
+    /**
+     * The small-object blob that ordinary writes of the pool go to now: the newest one that has room. Empty when the
+     * pool has none (the next small write creates one). Mirrors {@link #chooseSmallBlobForWrite} without creating.
+     */
+    public java.util.Optional<BlobFileEntity> smallAppendTarget(PoolEntity pool) {
+        synchronized (smallChooseLock) {
+            return blobRepo.findByPoolId(pool.getId()).stream()
+                    .filter(b -> b.getKind() == BlobKind.SMALL)
+                    .sorted(Comparator.comparing(BlobFileEntity::getCreatedAt).reversed())
+                    .filter(b -> {
+                        try {
+                            return smallCache.get(b).hasRoom(1);
+                        } catch (IOException e) {
+                            return false;
+                        }
+                    })
+                    .findFirst();
         }
     }
 

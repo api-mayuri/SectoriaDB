@@ -126,6 +126,52 @@ public interface StorageMetrics {
     /** A grouped write body threw and was rolled back without affecting the rest of its batch. */
     default void metaGroupBodyRollback() { }
 
+    // ---- garbage collection (doc 10) ----------------------------------------------------------------------------
+
+    /** Why the collector left something for a later pass. */
+    enum GcDeferral {
+        /** the blob is frozen or replaced by a resize */
+        BLOB_BUSY("blob_busy"),
+        /** uploads were in flight and did not finish within the gate wait */
+        UPLOADS_IN_FLIGHT("uploads_in_flight"),
+        /** the blob (small-object) is the append target or has nothing to compact yet */
+        NOT_ELIGIBLE("not_eligible");
+
+        private final String label;
+
+        GcDeferral(String label) {
+            this.label = label;
+        }
+
+        public String label() {
+            return label;
+        }
+    }
+
+    /** One pass of the collector (chunks, orphans, tombstones) finished after {@code nanos}. */
+    default void gcRun(long nanos, boolean success) { }
+
+    /** The collector freed {@code chunks} slots holding {@code bytes} bytes of unreferenced chunks (queue {@code chunk_gc}). */
+    default void gcChunksFreed(long chunks, long bytes) { }
+
+    /** Stray physical copies freed (no index entry points at them): {@code source} is "orphan" or "sweep". */
+    default void gcStraysFreed(String source, long chunks, long bytes) { }
+
+    /** A blob sweep finished: slots examined and strays found. */
+    default void gcSweep(long nanos, long slotsScanned, long strays) { }
+
+    /** Retired manifests (tombstones) removed; small-object records among them were marked DELETED. */
+    default void gcTombstones(long manifests, long smallRecords) { }
+
+    /** A small-object blob was compacted; {@code reclaimedBytes} is the file size that was given back. */
+    default void gcCompaction(long nanos, long reclaimedBytes, boolean success) { }
+
+    /** Something was left for a later pass. */
+    default void gcDeferred(GcDeferral reason) { }
+
+    /** A collector step failed (IO error, store poisoned); it is retried by the next pass. */
+    default void gcError() { }
+
     // ---- resize ------------------------------------------------------------------------------------------------
 
     /** A blob resize finished (successfully or not) after {@code nanos}. */

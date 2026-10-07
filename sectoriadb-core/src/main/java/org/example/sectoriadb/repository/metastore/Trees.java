@@ -206,7 +206,9 @@ final class Trees {
     }
 
     static void enqueueDeleted(WriteTxn tx, String manifestId) {
-        tx.tree(DELETED_MANIFESTS).put(gcKey(tx.txId() + 1, manifestId), EMPTY);
+        // the value is the queueing time: the collector waits for the grace period before it removes the tombstone
+        tx.tree(DELETED_MANIFESTS).put(gcKey(tx.txId() + 1, manifestId),
+                java.nio.ByteBuffer.allocate(8).putLong(System.currentTimeMillis()).array());
     }
 
     /**

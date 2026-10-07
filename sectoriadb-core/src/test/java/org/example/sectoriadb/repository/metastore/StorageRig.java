@@ -46,6 +46,9 @@ public final class StorageRig implements AutoCloseable {
     public PoolService poolService;
     public FileStorageService files;
     public ObjectVerificationService verifier;
+    public org.example.sectoriadb.repository.GcRepository gcRepo;
+    public org.example.sectoriadb.service.gc.SmallBlobCompactor compactor;
+    public org.example.sectoriadb.service.gc.GarbageCollector gc;
 
     public StorageRig(Path root) {
         this.root = root;
@@ -79,6 +82,11 @@ public final class StorageRig implements AutoCloseable {
         files = new FileStorageService(manifests, blobService, cache, smallCache, chunkStore, opLog, props);
         resizeService = new ResizeService(blobs, pools, cache, props, opLog);
         verifier = new ObjectVerificationService(files);
+        gcRepo = new MetaStoreGcRepository(stores);
+        compactor = new org.example.sectoriadb.service.gc.SmallBlobCompactor(blobs, manifests, pools, gcRepo, blobService,
+                smallCache, chunkStore, props, metrics);
+        gc = new org.example.sectoriadb.service.gc.GarbageCollector(gcRepo, chunks, manifests, blobs, pools, blobService,
+                cache, smallCache, chunkStore, compactor, props, metrics);
     }
 
     /** Closes everything and builds a new graph over the same files, as after a process restart. */

@@ -127,6 +127,24 @@ public class S3ExceptionHandler {
     }
 
     /**
+     * The chunks of an upload cannot be committed because the garbage collector freed one the upload had found in the
+     * index (COLLECTED), or a resize / key collision raced with it. Nothing was written; the client retries the whole
+     * request, which is what S3 clients do on a 503 (doc 09, 10).
+     */
+    @ExceptionHandler(org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException.class)
+    public ResponseEntity<S3Error> handleChunkPlacement(org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException ex) {
+        String requestId = S3Support.requestId();
+        log.warn("Upload rejected, retry expected [{}]: {} ({})", requestId, ex.reason(), ex.getMessage());
+        ObservabilityAttributes.noteErrorCode("ServiceUnavailable");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", "1")
+                .contentType(MediaType.APPLICATION_XML)
+                .body(new S3Error("ServiceUnavailable",
+                        "The object could not be committed because storage was reorganized under the upload. Please retry.",
+                        null, requestId));
+    }
+
+    /**
      * IllegalStateException: BucketNotEmpty from a bucket deletion conflict; anything else is a server-side state
      * problem (for example the metadata store refusing work after a failed commit, "must be reopened"), which is a
      * 503, not a bucket conflict: reads of existing objects used to answer 409 BucketNotEmpty in that state.

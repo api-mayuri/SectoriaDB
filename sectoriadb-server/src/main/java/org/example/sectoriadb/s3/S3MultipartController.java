@@ -462,26 +462,31 @@ public class S3MultipartController {
             entity = fileService.stageStream(combined, pool, objectKey, contentType, wholeObject);
         }
 
-        // Compute S3 multipart ETag: md5(concat of binary md5s)-{partCount}
-        String s3Etag = "\"" + HexFormat.of().formatHex(md5Digest().digest(etagConcat)) + "-" + partNums.size() + "\"";
-        entity.setEtag(s3Etag);
-        if (meta.getProperty("cacheControl") != null) entity.setCacheControl(meta.getProperty("cacheControl"));
-        if (meta.getProperty("contentDisposition") != null) entity.setContentDisposition(meta.getProperty("contentDisposition"));
-        if (meta.getProperty("contentEncoding") != null) entity.setContentEncoding(meta.getProperty("contentEncoding"));
-        if (meta.getProperty("contentLanguage") != null) entity.setContentLanguage(meta.getProperty("contentLanguage"));
-        Map<String, String> userMeta = new java.util.LinkedHashMap<>();
-        for (String name : meta.stringPropertyNames()) {
-            if (name.startsWith(USER_META_PREFIX)) userMeta.put(name.substring(USER_META_PREFIX.length()), meta.getProperty(name));
+        String s3Etag;
+        try {
+            // Compute S3 multipart ETag: md5(concat of binary md5s)-{partCount}
+            s3Etag = "\"" + HexFormat.of().formatHex(md5Digest().digest(etagConcat)) + "-" + partNums.size() + "\"";
+            entity.setEtag(s3Etag);
+            if (meta.getProperty("cacheControl") != null) entity.setCacheControl(meta.getProperty("cacheControl"));
+            if (meta.getProperty("contentDisposition") != null) entity.setContentDisposition(meta.getProperty("contentDisposition"));
+            if (meta.getProperty("contentEncoding") != null) entity.setContentEncoding(meta.getProperty("contentEncoding"));
+            if (meta.getProperty("contentLanguage") != null) entity.setContentLanguage(meta.getProperty("contentLanguage"));
+            Map<String, String> userMeta = new java.util.LinkedHashMap<>();
+            for (String name : meta.stringPropertyNames()) {
+                if (name.startsWith(USER_META_PREFIX)) userMeta.put(name.substring(USER_META_PREFIX.length()), meta.getProperty(name));
+            }
+            if (!userMeta.isEmpty()) entity.setUserMetadata(userMeta);
+            if (composite != null) {
+                entity.setChecksumAlgorithm(uploadAlg);
+                entity.setChecksumValue(composite);
+                entity.setChecksumType(ChecksumType.COMPOSITE);
+            }
+            // One transaction: the manifest with its final multipart ETag / checksum, the (bucket, key) index entry, and
+            // retirement of the version it replaces.
+            entity = fileService.commitObject(entity);
+        } finally {
+            fileService.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
         }
-        if (!userMeta.isEmpty()) entity.setUserMetadata(userMeta);
-        if (composite != null) {
-            entity.setChecksumAlgorithm(uploadAlg);
-            entity.setChecksumValue(composite);
-            entity.setChecksumType(ChecksumType.COMPOSITE);
-        }
-        // One transaction: the manifest with its final multipart ETag / checksum, the (bucket, key) index entry, and
-        // retirement of the version it replaces.
-        entity = fileService.commitObject(entity);
 
         // Delete upload directory
         try {

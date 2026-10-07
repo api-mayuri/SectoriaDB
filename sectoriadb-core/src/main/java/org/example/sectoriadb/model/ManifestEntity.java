@@ -87,6 +87,13 @@ public class ManifestEntity {
     @JsonIgnore
     private List<PlacedChunk> stagedChunks = List.of();
 
+    /**
+     * Held from the moment the upload wrote its data until the commit finished (see {@link UploadHold}); transient,
+     * never stored. Null for manifests that were loaded from the store.
+     */
+    @JsonIgnore
+    private transient UploadHold uploadHold;
+
     /** Resolved small-object blob (SMALL manifests only) — not stored in JSON. */
     @JsonIgnore
     private BlobFileEntity smallBlob;
@@ -99,6 +106,12 @@ public class ManifestEntity {
      */
     @JsonIgnore
     public BlobFileEntity getPhysicalBlob() { return smallBlob; }
+
+    @JsonIgnore
+    public UploadHold getUploadHold() { return uploadHold; }
+
+    @JsonIgnore
+    public void setUploadHold(UploadHold hold) { this.uploadHold = hold; }
 
     @JsonIgnore
     public List<PlacedChunk> getStagedChunks() { return stagedChunks; }

@@ -6,6 +6,7 @@ import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.ChunkEntry;
 import org.example.sectoriadb.model.PlacedChunk;
 import org.example.sectoriadb.model.PoolEntity;
+import org.example.sectoriadb.model.UploadHold;
 import org.example.sectoriadb.placement.RendezvousPlacement;
 import org.example.sectoriadb.placement.RendezvousPlacement.Candidate;
 import org.example.sectoriadb.repository.ChunkRepository;
@@ -72,6 +73,7 @@ public class ChunkStore {
     private final StorageMetrics metrics;
     private final BytesHasher hasher;
     private final LocationCache locations;
+    private final UploadGate gate = new UploadGate();
 
     @Autowired
     public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, StorageProperties props) {
@@ -142,6 +144,14 @@ public class ChunkStore {
         }
     }
 
+    /**
+     * The upload gate: {@link #stage} registers every chunked upload on it until the upload commits or is abandoned; the
+     * garbage collector uses it to free copies without an index entry only while no upload of the pool is in flight.
+     */
+    public UploadGate gate() {
+        return gate;
+    }
+
     /** Drops the cached location of a chunk (after the collector freed it). */
     public void forget(String poolId, long chunkKey) {
         locations.remove(poolId, chunkKey);
@@ -154,8 +164,13 @@ public class ChunkStore {
 
     // ── Write ─────────────────────────────────────────────────────────────────
 
-    /** The chunks an upload wrote, in file order, ready to be committed with its manifest. */
-    public record Staged(long[] keys, List<PlacedChunk> placed, int chunkSize, int lastChunkSize, long totalBytes) {
+    /**
+     * The chunks an upload wrote, in file order, ready to be committed with its manifest. {@code hold} keeps the
+     * garbage collector away from the copies until the commit has finished: the caller releases it (commit, failure,
+     * abandonment), see {@link UploadGate}.
+     */
+    public record Staged(long[] keys, List<PlacedChunk> placed, int chunkSize, int lastChunkSize, long totalBytes,
+                         UploadHold hold) {
     }
 
     /**
@@ -163,6 +178,16 @@ public class ChunkStore {
      * the pool's first blobs and, when the pool is nearly full, add one.
      */
     public Staged stage(Path file, PoolEntity pool) throws IOException {
+        UploadGate.Hold hold = gate.enter(pool.getId());   // before the first byte is written
+        try {
+            return stage(file, pool, hold);
+        } catch (IOException | RuntimeException | Error e) {
+            hold.release();
+            throw e;
+        }
+    }
+
+    private Staged stage(Path file, PoolEntity pool, UploadGate.Hold hold) throws IOException {
         List<BlobFileEntity> pb = blobs.ensureInitialBlobs(pool);
         blobs.growIfOverThreshold(pool);
         int chunkSize = pb.get(0).getChunkSize();
@@ -199,7 +224,7 @@ public class ChunkStore {
                 }
             }
         }
-        return new Staged(keys, new ArrayList<>(placed.values()), chunkSize, last, size);
+        return new Staged(keys, new ArrayList<>(placed.values()), chunkSize, last, size, hold);
     }
 
     private long storeChunk(PoolEntity pool, int chunkSize, long firstKey, byte[] data,

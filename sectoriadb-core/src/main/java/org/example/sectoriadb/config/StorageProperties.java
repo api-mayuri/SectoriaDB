@@ -2,6 +2,7 @@ package org.example.sectoriadb.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.time.Duration;
 import java.util.List;
 
 @ConfigurationProperties(prefix = "sectoriadb")
@@ -18,6 +19,7 @@ public class StorageProperties {
     private Pool pool = new Pool();
     private S3 s3 = new S3();
     private SmallObject smallObject = new SmallObject();
+    private Gc gc = new Gc();
 
     public String getMetaDir() { return metaDir; }
     public void setMetaDir(String v) { this.metaDir = v; }
@@ -45,6 +47,9 @@ public class StorageProperties {
 
     public SmallObject getSmallObject() { return smallObject; }
     public void setSmallObject(SmallObject v) { this.smallObject = v; }
+
+    public Gc getGc() { return gc; }
+    public void setGc(Gc v) { this.gc = v; }
 
     public S3 getS3() { return s3; }
     public void setS3(S3 v) { this.s3 = v; }
@@ -90,6 +95,77 @@ public class StorageProperties {
         /** The recovery hint in the blob header is advanced after this many appended bytes (and on close). */
         public long getCheckpointIntervalBytes() { return checkpointIntervalBytes; }
         public void setCheckpointIntervalBytes(long v) { this.checkpointIntervalBytes = v; }
+    }
+
+    /** Garbage collection (doc 10): freeing the slots of unreferenced chunks, stray copies, tombstones, small-blob compaction. */
+    public static class Gc {
+        private boolean enabled = false;
+        private Duration grace = Duration.ofMinutes(15);
+        private Duration interval = Duration.ofMinutes(1);
+        private int maxChunksPerRun = 10_000;
+        private int batchSize = 16;
+        private Duration sweepInterval = Duration.ofHours(6);
+        private Duration compactInterval = Duration.ofMinutes(10);
+        private int smallCompactDeadPercent = 50;
+        private long smallCompactMinDeadBytes = 1L << 20;
+        private Duration sweepGateWait = Duration.ofSeconds(2);
+        private Duration uploadTicketTtl = Duration.ofMinutes(30);
+
+        /** Run the background scheduler ({@code GarbageCollectionScheduler}). The shell commands work either way. */
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean v) { this.enabled = v; }
+
+        /**
+         * Grace period G: a chunk / retired manifest is collected only when it has been garbage for at least this long.
+         * It covers the window "an upload found the chunk in the index and has not committed yet" and readers that walk
+         * an old snapshot of a manifest (and, for compaction, the time the old small-object file is kept).
+         */
+        public Duration getGrace() { return grace; }
+        public void setGrace(Duration v) { this.grace = v == null || v.isNegative() ? Duration.ZERO : v; }
+
+        /** Pause between collector passes (chunks, orphans, tombstones). */
+        public Duration getInterval() { return interval; }
+        public void setInterval(Duration v) { this.interval = v; }
+
+        /** At most this many chunk slots are freed per pass (rate limit); the rest waits for the next pass. */
+        public int getMaxChunksPerRun() { return maxChunksPerRun; }
+        public void setMaxChunksPerRun(int v) { this.maxChunksPerRun = Math.max(1, v); }
+
+        /**
+         * Chunks (or stray copies) freed per exclusive metastore transaction. 1 is the strict "one transaction per
+         * chunk" of the contract; larger values amortize the two fsyncs of a commit, at the price of blocking the
+         * writers a little longer per batch. Every chunk of a batch is re-checked inside the transaction.
+         */
+        public int getBatchSize() { return batchSize; }
+        public void setBatchSize(int v) { this.batchSize = Math.max(1, v); }
+
+        /** Pause between full sweeps for stray copies of each blob. */
+        public Duration getSweepInterval() { return sweepInterval; }
+        public void setSweepInterval(Duration v) { this.sweepInterval = v; }
+
+        /** Pause between checks for small-object blobs worth compacting. */
+        public Duration getCompactInterval() { return compactInterval; }
+        public void setCompactInterval(Duration v) { this.compactInterval = v; }
+
+        /** A small-object blob is compacted when at least this percent of its record bytes are dead. */
+        public int getSmallCompactDeadPercent() { return smallCompactDeadPercent; }
+        public void setSmallCompactDeadPercent(int v) { this.smallCompactDeadPercent = Math.min(100, Math.max(1, v)); }
+
+        /** ... and at least this many dead bytes (compacting a few kilobytes is not worth a new file). */
+        public long getSmallCompactMinDeadBytes() { return smallCompactMinDeadBytes; }
+        public void setSmallCompactMinDeadBytes(long v) { this.smallCompactMinDeadBytes = Math.max(0, v); }
+
+        /** How long a sweep waits for the uploads in flight of a pool to finish before it gives up and retries later. */
+        public Duration getSweepGateWait() { return sweepGateWait; }
+        public void setSweepGateWait(Duration v) { this.sweepGateWait = v; }
+
+        /**
+         * An upload that stays between "chunks written" and "committed" longer than this can be revoked by a sweep that
+         * needs the gate (its commit then fails with a retryable 503 instead of pointing at a freed slot). Safety net
+         * for an abandoned upload; a normal one releases its hold when it commits or fails.
+         */
+        public Duration getUploadTicketTtl() { return uploadTicketTtl; }
+        public void setUploadTicketTtl(Duration v) { this.uploadTicketTtl = v; }
     }
 
     public static class S3 {

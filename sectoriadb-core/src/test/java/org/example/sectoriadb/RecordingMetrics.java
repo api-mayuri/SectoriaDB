@@ -26,6 +26,16 @@ public class RecordingMetrics implements StorageMetrics {
     public final AtomicLong placementFallbacks = new AtomicLong();
     public final AtomicLong poolDedupHits = new AtomicLong();
     public final AtomicLong poolGrown = new AtomicLong();
+    public final AtomicLong gcRuns = new AtomicLong();
+    public final AtomicLong gcChunksFreed = new AtomicLong();
+    public final AtomicLong gcBytesFreed = new AtomicLong();
+    public final AtomicLong gcStraysFreed = new AtomicLong();
+    public final AtomicLong gcSweeps = new AtomicLong();
+    public final AtomicLong gcTombstones = new AtomicLong();
+    public final AtomicLong gcCompactions = new AtomicLong();
+    public final AtomicLong gcReclaimedBytes = new AtomicLong();
+    public final AtomicLong gcDeferrals = new AtomicLong();
+    public final AtomicLong gcErrors = new AtomicLong();
     public final AtomicLong smallForces = new AtomicLong();
     public final AtomicLong smallForcedRecords = new AtomicLong();
     public final AtomicLong metaWriterLockWaits = new AtomicLong();
@@ -62,6 +72,14 @@ public class RecordingMetrics implements StorageMetrics {
     @Override public void poolDedupHit() { poolDedupHits.incrementAndGet(); }
     @Override public void poolGrown() { poolGrown.incrementAndGet(); }
     @Override public void smallGroupFsync(int records) { smallForces.incrementAndGet(); smallForcedRecords.addAndGet(records); }
+    @Override public void gcRun(long nanos, boolean success) { gcRuns.incrementAndGet(); }
+    @Override public void gcChunksFreed(long chunks, long bytes) { gcChunksFreed.addAndGet(chunks); gcBytesFreed.addAndGet(bytes); }
+    @Override public void gcStraysFreed(String source, long chunks, long bytes) { gcStraysFreed.addAndGet(chunks); }
+    @Override public void gcSweep(long nanos, long slotsScanned, long strays) { gcSweeps.incrementAndGet(); }
+    @Override public void gcTombstones(long manifests, long smallRecords) { gcTombstones.addAndGet(manifests); }
+    @Override public void gcCompaction(long nanos, long reclaimedBytes, boolean success) { gcCompactions.incrementAndGet(); gcReclaimedBytes.addAndGet(reclaimedBytes); }
+    @Override public void gcDeferred(GcDeferral reason) { gcDeferrals.incrementAndGet(); }
+    @Override public void gcError() { gcErrors.incrementAndGet(); }
     @Override public void metaWriterLockWait(long nanos) { metaWriterLockWaits.incrementAndGet(); }
     @Override public void metaCommit(long nanos) { metaCommits.incrementAndGet(); }
     @Override public void metaGroupBatch(int bodies, int pages) { groupBodies.addAndGet(bodies); groupBatches.incrementAndGet(); }

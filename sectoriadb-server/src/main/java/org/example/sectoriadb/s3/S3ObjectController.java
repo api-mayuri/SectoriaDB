@@ -106,8 +106,12 @@ public class S3ObjectController {
 
             entity.setUserMetadata(extractUserMetadata(request));
 
-            accessControl.applyObjectAcl(request, new byte[0], entity);
-            entity = fileService.commitObject(entity);
+            try {
+                accessControl.applyObjectAcl(request, new byte[0], entity);
+                entity = fileService.commitObject(entity);
+            } finally {
+                fileService.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
+            }
 
             var ok = ResponseEntity.ok()
                     .header("ETag", entity.getEtag() != null ? entity.getEtag() : "\"\"")
@@ -448,8 +452,12 @@ public class S3ObjectController {
                 entity.setContentLanguage(srcEntity.getContentLanguage());
                 entity.setUserMetadata(srcEntity.getUserMetadata());
             }
-            accessControl.applyObjectAcl(request, new byte[0], entity);
-            entity = fileService.commitObject(entity);   // one transaction, replaces the previous destination version
+            try {
+                accessControl.applyObjectAcl(request, new byte[0], entity);
+                entity = fileService.commitObject(entity);   // one transaction, replaces the previous destination version
+            } finally {
+                fileService.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
+            }
 
             String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
                     + "<CopyObjectResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"

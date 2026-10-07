@@ -13,6 +13,7 @@ import org.example.sectoriadb.service.impl.SmallObjectBlob;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PlacedChunk;
 import org.example.sectoriadb.model.PoolEntity;
+import org.example.sectoriadb.model.UploadHold;
 import org.example.sectoriadb.model.FileManifest;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.service.impl.BlobFileWriteService;
@@ -91,7 +92,7 @@ public class FileStorageService {
             in.transferTo(java.io.OutputStream.nullOutputStream());
         }
         ManifestEntity entity = stage(filePath, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
-        withRedirects(entity, () -> manifestRepo.saveNew(entity));
+        committing(entity, () -> withRedirects(entity, () -> manifestRepo.saveNew(entity)));
         logStored(entity);
         return entity;
     }
@@ -127,15 +128,23 @@ public class FileStorageService {
         int ownerTag = entity.getId().hashCode();
         SmallObjectBlob.Location loc = null;
         BlobFileEntity blobEntity = null;
-        for (int attempt = 0; attempt < 8 && loc == null; attempt++) {
-            blobEntity = blobService.chooseSmallBlobForWrite(pool, data.length);
-            loc = smallCache.get(blobEntity).append(data, ownerTag);   // null: filled up meanwhile, choose again
-        }
-        if (loc == null) {
-            IOException e = new IOException("No small-object blob with room found for pool " + pool.getName());
-            opLog.failure("STORE", null, filePath.getFileName().toString(), e, System.currentTimeMillis() - t0);
+        // the record is written before the manifest exists: the hold keeps compaction from dropping it as "unreferenced"
+        UploadHold hold = chunkStore.gate().enter(pool.getId());
+        try {
+            for (int attempt = 0; attempt < 8 && loc == null; attempt++) {
+                blobEntity = blobService.chooseSmallBlobForWrite(pool, data.length);
+                loc = smallCache.get(blobEntity).append(data, ownerTag);   // null: filled up meanwhile, choose again
+            }
+            if (loc == null) {
+                IOException e = new IOException("No small-object blob with room found for pool " + pool.getName());
+                opLog.failure("STORE", null, filePath.getFileName().toString(), e, System.currentTimeMillis() - t0);
+                throw e;
+            }
+        } catch (IOException | RuntimeException | Error e) {
+            hold.release();
             throw e;
         }
+        entity.setUploadHold(hold);
         entity.setSmallBlob(blobEntity);
         entity.setSmallOffset(loc.offset());
         entity.setSmallLength(loc.length());
@@ -173,6 +182,7 @@ public class FileStorageService {
         entity.setChunkKeyArray(staged.keys());
         entity.setLastChunkSize(staged.lastChunkSize());
         entity.setStagedChunks(staged.placed());
+        entity.setUploadHold(staged.hold());
         return entity;
     }
 
@@ -374,16 +384,50 @@ public class FileStorageService {
 
     /**
      * Step 2 of an S3 PUT: ONE metastore transaction saves the manifest with all its fields, points
-     * {@code objects[(bucket, key)]} at it and retires the version it replaces. Afterwards the data of a replaced
-     * small object is marked DELETED (best effort; the chunks of a replaced chunked object stay until GC).
+     * {@code objects[(bucket, key)]} at it and retires the version it replaces. The data of the replaced version is
+     * NOT touched here: the chunks wait in {@code chunk_gc} and the record of a replaced small object stays ACTIVE until
+     * the garbage collector marks it, after the grace period (a reader that holds the old version must still be able to
+     * read it). The upload's hold on the garbage collector is released when the commit has finished, whatever its result.
      *
      * @throws org.example.sectoriadb.repository.ManifestRepository.PoolNotFoundException if the bucket vanished
+     * @throws org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException COLLECTED (retry the upload) if
+     *         the chunks were collected meanwhile
      */
     public ManifestEntity commitObject(ManifestEntity entity) {
-        ManifestRepository.CommitResult r = withRedirects(entity, () -> manifestRepo.commitObject(entity));
-        r.superseded().ifPresent(old -> releaseData(old, "PUT"));
+        ManifestRepository.CommitResult r = committing(entity,
+                () -> withRedirects(entity, () -> manifestRepo.commitObject(entity)));
         logStored(r.current());
         return r.current();
+    }
+
+    /**
+     * Gives up a staged upload that will not be committed (a later step failed): releases its hold on the garbage
+     * collector; the data it wrote becomes garbage for the sweep. Safe to call after a commit and more than once.
+     */
+    public void abortStaged(ManifestEntity entity) {
+        UploadHold hold = entity == null ? null : entity.getUploadHold();
+        if (hold != null) {
+            hold.release();
+            entity.setUploadHold(null);
+        }
+    }
+
+    private <T> T committing(ManifestEntity entity, java.util.function.Supplier<T> commit) {
+        UploadHold hold = entity.getUploadHold();
+        try {
+            if (hold != null && !hold.beginCommit()) {
+                throw new org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException(
+                        org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException.Reason.COLLECTED,
+                        "The upload waited too long between writing its data and committing: the garbage collector"
+                                + " revoked its hold and may have freed the data, the upload must be retried");
+            }
+            return commit.get();
+        } finally {
+            if (hold != null) {
+                hold.release();
+                entity.setUploadHold(null);
+            }
+        }
     }
 
     /**
@@ -594,31 +638,10 @@ public class FileStorageService {
     }
 
     private void afterDelete(ManifestEntity entity, long t0) {
-        releaseData(entity, "DELETE");
         String blobId = entity.getPhysicalBlob() != null ? entity.getPhysicalBlob().getId() : "";
         opLog.success("DELETE", entity.getId(), entity.getSourceFileName(),
                 Map.of("blobFileId", blobId, "storageKind", entity.getStorageKind().name()),
                 System.currentTimeMillis() - t0);
         log.info("Object deleted: id={} name={}", entity.getId(), entity.getSourceFileName());
-    }
-
-    /**
-     * Called AFTER the transaction that retired {@code entity} committed. A small object's record is flipped to DELETED
-     * (one byte). A crash in between leaves a dead manifest whose record is still ACTIVE: a leak for the GC stage,
-     * never a live object without data. Chunks of a chunked object are reclaimed by the GC stage from the queue.
-     */
-    private void releaseData(ManifestEntity entity, String reason) {
-        if (entity.getStorageKind() != StorageKind.SMALL) return;
-        try {
-            BlobFileEntity blob = entity.getSmallBlob();
-            if (blob != null) {
-                smallCache.get(blob).markDeleted(entity.getSmallOffset());
-            } else {
-                log.warn("Small-object blob {} of retired manifest {} is gone", entity.getSmallBlobId(), entity.getId());
-            }
-        } catch (IOException | RuntimeException e) {
-            log.warn("Could not mark small-object record DELETED after {} (manifest {} stays retired, space leaks): {}",
-                    reason, entity.getId(), e.getMessage());
-        }
     }
 }

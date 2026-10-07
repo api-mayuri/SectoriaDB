@@ -80,6 +80,8 @@ public final class SmallObjectBlob implements AutoCloseable {
     /** End of the written log (reserved offsets): {@code >= tail}; the difference is waiting for a force. */
     private volatile long writeEnd;
     private volatile boolean writable = true;
+    /** Closed for ordinary appends by the compactor (in memory only; a restart reopens the blob for appends). */
+    private volatile boolean sealed;
     private volatile boolean closed;
 
     // guarded by lock
@@ -156,7 +158,7 @@ public final class SmallObjectBlob implements AutoCloseable {
     /** True if a record of {@code dataLength} bytes can be appended without exceeding the size limit. */
     public boolean hasRoom(int dataLength) {
         long t = writeEnd;
-        return writable && (t == DATA_START || t + recordSpan(dataLength) <= maxFileBytes);
+        return writable && !sealed && (t == DATA_START || t + recordSpan(dataLength) <= maxFileBytes);
     }
 
     public Stats stats() {
@@ -190,6 +192,32 @@ public final class SmallObjectBlob implements AutoCloseable {
      * room left (the caller must pick another blob; an empty blob always accepts one record).
      */
     public Location append(byte[] data, int ownerTag) throws IOException {
+        return append(data, ownerTag, false);
+    }
+
+    /**
+     * Closes the blob for ordinary appends ({@link #append} returns null, {@link #hasRoom} false) so that its set of
+     * records can no longer grow: the first step of a compaction. Reads and deletes keep working. In memory only.
+     */
+    public void seal() {
+        sealed = true;
+    }
+
+    /** Reopens a sealed blob for appends (compaction aborted, or the blob is the target of one and was just swapped in). */
+    public void unseal() {
+        sealed = false;
+    }
+
+    public boolean isSealed() {
+        return sealed;
+    }
+
+    /** Appends to a blob that is sealed for everybody but the compactor that fills it. Same durability as {@link #append}. */
+    public Location appendWhileSealed(byte[] data, int ownerTag) throws IOException {
+        return append(data, ownerTag, true);
+    }
+
+    private Location append(byte[] data, int ownerTag, boolean bypassSeal) throws IOException {
         if (data.length > MAX_RECORD_DATA) {
             throw new IllegalArgumentException("Record too large for a small-object blob: " + data.length);
         }
@@ -205,7 +233,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         long written0 = System.nanoTime();
         try {
             ensureOpen();
-            if (!writable) {
+            if (!writable || (sealed && !bypassSeal)) {
                 return null;
             }
             at = writeEnd;
