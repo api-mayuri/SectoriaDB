@@ -464,6 +464,70 @@ public class CuckooHashTable implements AutoCloseable {
         }
     }
 
+    /**
+     * Frees the slot that holds {@code chunkKey} (garbage collection, doc 10): ACTIVE becomes DELETED, the change is
+     * forced to disk, the active counter drops (fill statistics and placement weights see the space at once). The data
+     * bytes stay where they are and are overwritten by whatever chunk takes the slot next. DELETED slots are free for
+     * the insert path (eviction-path search treats them like FREE) and invisible to lookups and reads.
+     *
+     * <p>Idempotent: a key that is not stored (never was, or already freed) returns {@code false} and changes nothing.
+     * Takes the table write lock (reentrant, so a caller that holds {@link #lockForWrite()} for a multi-step operation
+     * can call it). If the meta write fails the in-memory state is unchanged and the exception propagates.
+     *
+     * @return the length of the freed chunk in bytes, or -1 if the key was not stored
+     */
+    public int freeSlot(long chunkKey) throws IOException {
+        lock.writeLock().lock();
+        try {
+            int idx = findActiveSlot(chunkKey);
+            if (idx < 0) {
+                return -1;
+            }
+            int len = lengthMeta[idx];
+            writeMeta(idx, chunkKey, DELETED, 0, 0);
+            return len;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    /** True if an ACTIVE slot holds the key (no IO). */
+    public boolean contains(long chunkKey) {
+        lock.readLock().lock();
+        try {
+            return findActiveSlot(chunkKey) >= 0;
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
+    /** A page of {@link #activeKeys}: {@code next} is the slot to continue from, or -1 when the table is exhausted. */
+    public record KeyPage(long[] keys, int next) {
+    }
+
+    /**
+     * The keys of ACTIVE slots, in slot order, starting at slot {@code fromSlot}, at most {@code max} of them. Metadata
+     * only: no data is read and nothing is verified (the sweep of stray copies needs the keys, not the bytes). The
+     * keys are a snapshot: slots may change right after the call returns.
+     */
+    public KeyPage activeKeys(int fromSlot, int max) {
+        lock.readLock().lock();
+        try {
+            long[] out = new long[Math.min(max, 1024)];
+            int n = 0;
+            int idx = Math.max(0, fromSlot);
+            for (; idx < totalSlots && n < max; idx++) {
+                if (stateMeta[idx] == ACTIVE) {
+                    if (n == out.length) out = Arrays.copyOf(out, Math.min(max, out.length * 2));
+                    out[n++] = chunkIdMeta[idx];
+                }
+            }
+            return new KeyPage(Arrays.copyOf(out, n), idx >= totalSlots ? -1 : idx);
+        } finally {
+            lock.readLock().unlock();
+        }
+    }
+
     /** Verifies every ACTIVE slot's data CRC and reports ok / corrupt / quarantined counts. */
     public ScrubReport scrub() throws IOException {
         lock.readLock().lock();
@@ -518,6 +582,8 @@ public class CuckooHashTable implements AutoCloseable {
         }
     }
 
+    /** Number of slots of the table (both halves). */
+    public int totalSlots() { return totalSlots; }
     public int getNumBuckets() { return numBuckets; }
     public int getChunkSize() { return chunkSize; }
     public BlobFile getBlobFile() { return blobFile; }
