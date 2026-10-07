@@ -29,7 +29,7 @@ public class MetaStoreBlobFileRepository implements BlobFileRepository {
 
     @Override
     public BlobFileEntity save(BlobFileEntity entity) {
-        return store().write(tx -> {
+        return store().writeGrouped(tx -> {
             Trees.putBlob(tx, entity);
             return entity;
         });

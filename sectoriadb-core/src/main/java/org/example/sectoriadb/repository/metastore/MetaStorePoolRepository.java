@@ -31,7 +31,7 @@ public class MetaStorePoolRepository implements PoolRepository {
 
     @Override
     public PoolEntity save(PoolEntity entity) {
-        return store().write(tx -> {
+        return store().writeGrouped(tx -> {
             Trees.putPool(tx, entity);
             return entity;
         });
@@ -75,12 +75,12 @@ public class MetaStorePoolRepository implements PoolRepository {
 
     @Override
     public void delete(PoolEntity entity) {
-        store().writeVoid(tx -> Trees.deletePoolRecord(tx, entity));
+        store().writeGroupedVoid(tx -> Trees.deletePoolRecord(tx, entity));
     }
 
     @Override
     public Optional<PoolEntity> updateByName(String name, Consumer<PoolEntity> mutator) {
-        return store().write(tx -> {
+        return store().writeGrouped(tx -> {
             Optional<PoolEntity> found = Trees.poolByName(tx, name);
             found.ifPresent(p -> {
                 mutator.accept(p);

@@ -5,7 +5,6 @@ import org.example.sectoriadb.metastore.Cursor;
 import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.ReadTxn;
-import org.example.sectoriadb.metastore.WriteTxn;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.springframework.stereotype.Repository;
@@ -18,7 +17,8 @@ import java.util.function.Consumer;
 
 /**
  * {@link ManifestRepository} over the {@code manifests}, {@code objects}, {@code manifests_by_blob} and
- * {@code deleted_manifests} trees. Every public method is a single metastore transaction.
+ * {@code deleted_manifests} trees. Every public method is one atomic metastore write; the hot ones run as group-commit
+ * bodies ({@link MetaStore#writeGrouped}), i.e. share a commit (and its fsyncs) with concurrent writers.
  */
 @Repository
 public class MetaStoreManifestRepository implements ManifestRepository {
@@ -37,7 +37,7 @@ public class MetaStoreManifestRepository implements ManifestRepository {
 
     @Override
     public ManifestEntity save(ManifestEntity entity) {
-        return store().write(tx -> {
+        return store().writeGrouped(tx -> {
             Trees.putManifest(tx, entity);
             return entity;
         });
@@ -82,7 +82,7 @@ public class MetaStoreManifestRepository implements ManifestRepository {
         String key = entity.getObjectKey();
         if (bucket == null || key == null) throw new IllegalArgumentException("bucketName and objectKey are required");
         if (entity.getPoolId() == null) throw new IllegalArgumentException("poolId is required");
-        try (WriteTxn tx = store().beginWrite()) {
+        return store().writeGrouped(tx -> {
             if (!tx.tree(Trees.POOLS).containsKey(Trees.idKey(entity.getPoolId()))) {
                 throw new PoolNotFoundException(entity.getPoolId());
             }
@@ -99,14 +99,13 @@ public class MetaStoreManifestRepository implements ManifestRepository {
             if (previous.isPresent() && !previous.get().equals(entity.getId())) {
                 superseded = Trees.retire(tx, previous.get());
             }
-            tx.commit();
             return new CommitResult(entity, superseded);
-        }
+        });
     }
 
     @Override
     public Optional<ManifestEntity> deleteObject(String bucketName, String objectKey) {
-        try (WriteTxn tx = store().beginWrite()) {
+        return store().writeGrouped(tx -> {
             BTree objects = tx.tree(Trees.OBJECTS);
             byte[] k = Trees.objectKey(bucketName, objectKey);
             Optional<String> id = objects.get(k).map(Trees::str);
@@ -115,14 +114,13 @@ public class MetaStoreManifestRepository implements ManifestRepository {
             objects.delete(k);
             Optional<ManifestEntity> removed = Trees.retire(tx, id.get());
             Trees.adjustTotals(tx, -1, -removed.map(ManifestEntity::getTotalBytes).orElse(0L));
-            tx.commit();
             return removed;
-        }
+        });
     }
 
     @Override
     public Optional<ManifestEntity> deleteManifest(String manifestId) {
-        try (WriteTxn tx = store().beginWrite()) {
+        return store().writeGrouped(tx -> {
             Optional<ManifestEntity> current = Trees.manifest(tx, manifestId);
             if (current.isEmpty() || current.get().isDeleted()) return Optional.empty();
             ManifestEntity m = current.get();
@@ -135,24 +133,21 @@ public class MetaStoreManifestRepository implements ManifestRepository {
                     Trees.adjustTotals(tx, -1, -m.getTotalBytes());
                 }
             }
-            Optional<ManifestEntity> removed = Trees.retire(tx, manifestId);
-            tx.commit();
-            return removed;
-        }
+            return Trees.retire(tx, manifestId);
+        });
     }
 
     @Override
     public Optional<ManifestEntity> updateCurrent(String bucketName, String objectKey, Consumer<ManifestEntity> mutator) {
-        try (WriteTxn tx = store().beginWrite()) {
+        return store().writeGrouped(tx -> {
             Optional<ManifestEntity> found = currentId(tx, bucketName, objectKey).flatMap(id -> Trees.manifest(tx, id));
             if (found.isEmpty()) return Optional.empty();
             ManifestEntity m = found.get();
             mutator.accept(m);
             Trees.putManifest(tx, m);
             Trees.resolve(tx, m);
-            tx.commit();
             return Optional.of(m);
-        }
+        });
     }
 
     // ------------------------------------------------------------------ listing
@@ -271,7 +266,7 @@ public class MetaStoreManifestRepository implements ManifestRepository {
     public BucketStats totals() {
         long[] t = store().read(Trees::totals);
         if (t == null) {
-            t = store().write(tx -> {
+            t = store().writeGrouped(tx -> {
                 Trees.ensureTotals(tx);
                 return Trees.totals(tx);
             });
