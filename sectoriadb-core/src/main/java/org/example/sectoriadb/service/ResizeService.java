@@ -226,8 +226,4 @@ public class ResizeService {
         log.debug("Committed resize in the metastore: oldId={} newId={} chunkEntriesMoved={}", old.getId(), newId, moved);
         return newEntity;
     }
-
-    public int computeExpandedBuckets(int currentBuckets) {
-        return (int) Math.ceil(currentBuckets * (1.0 + props.getAutoResize().getExpandPercent() / 100.0));
-    }
 }

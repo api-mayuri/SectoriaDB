@@ -7,6 +7,7 @@ import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.repository.BlobFileRepository;
+import org.example.sectoriadb.repository.ChunkRepository;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.metastore.MetaStoreProvider;
 import org.example.sectoriadb.service.HashTableCache;
@@ -41,8 +42,9 @@ public class StorageGauges {
             long smallLiveBytes, long smallDeadBytes, long smallLiveRecords, long smallDeadRecords, long smallBlobsOpen,
             long metaFileBytes, long metaPages, long metaFreePages, long metaLastTxId, long metaLiveReaders, long metaPageSize,
             long gcQueue, long objects, long objectBytes,
+            long chunksIndexed, long chunkRefs, long chunkGcQueue, long chunkOrphans, long poolBlobsMax,
             long dataFree, long dataTotal, long metaDirFree, long metaDirTotal) {
-        static final Snapshot EMPTY = new Snapshot(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        static final Snapshot EMPTY = new Snapshot(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     private final MeterRegistry registry;
@@ -50,6 +52,7 @@ public class StorageGauges {
     private final SmallBlobCache smallBlobs;
     private final MetaStoreProvider stores;
     private final ManifestRepository manifests;
+    private final ChunkRepository chunks;
     private final BlobFileRepository blobs;
     private final StorageProperties props;
     private final long ttlNanos;
@@ -59,13 +62,14 @@ public class StorageGauges {
     private volatile boolean everComputed;
 
     public StorageGauges(MeterRegistry registry, HashTableCache tables, SmallBlobCache smallBlobs,
-                         MetaStoreProvider stores, ManifestRepository manifests, BlobFileRepository blobs,
+                         MetaStoreProvider stores, ManifestRepository manifests, ChunkRepository chunks, BlobFileRepository blobs,
                          StorageProperties props, ObservabilityProperties obs) {
         this.registry = registry;
         this.tables = tables;
         this.smallBlobs = smallBlobs;
         this.stores = stores;
         this.manifests = manifests;
+        this.chunks = chunks;
         this.blobs = blobs;
         this.props = props;
         this.ttlNanos = Math.max(0, obs.getGaugeCacheMs()) * 1_000_000L;
@@ -95,6 +99,11 @@ public class StorageGauges {
         g("sectoriadb.gc.queue.length", "Retired manifests waiting for the garbage collector", null, s -> s.gcQueue);
         g("sectoriadb.objects.stored", "Current S3 object versions (maintained in the commit transactions)", null, s -> s.objects);
         g("sectoriadb.objects.stored.bytes", "Total size of current S3 object versions", "bytes", s -> s.objectBytes);
+        g("sectoriadb.chunks.indexed", "Entries of the pool-wide chunk index (referenced or waiting for collection)", null, s -> s.chunksIndexed);
+        g("sectoriadb.chunks.refs", "Sum of the reference counts of all indexed chunks (chunk positions of live manifests)", null, s -> s.chunkRefs);
+        g("sectoriadb.chunks.gc.queue.length", "Chunks whose reference count reached zero, waiting for the collector", null, s -> s.chunkGcQueue);
+        g("sectoriadb.chunks.orphans", "Physical chunk copies recorded as orphans (written twice by concurrent uploads)", null, s -> s.chunkOrphans);
+        g("sectoriadb.pool.blobs.max", "Largest number of cuckoo blobs in one pool", null, s -> s.poolBlobsMax);
         g("sectoriadb.disk.free.bytes", "Usable space of the file system holding the directory", "bytes", "dir", "data", s -> s.dataFree);
         g("sectoriadb.disk.free.bytes", "Usable space of the file system holding the directory", "bytes", "dir", "meta", s -> s.metaDirFree);
         g("sectoriadb.disk.total.bytes", "Size of the file system holding the directory", "bytes", "dir", "data", s -> s.dataTotal);
@@ -149,10 +158,12 @@ public class StorageGauges {
             smallDeadRec += s.deadRecords();
             smallOpen++;
         }
-        long cuckooBlobs = 0, smallBlobCount = 0, capacity = 0;
+        long cuckooBlobs = 0, smallBlobCount = 0, capacity = 0, poolBlobsMax = 0;
+        java.util.Map<String, Long> perPool = new java.util.HashMap<>();
         for (BlobFileEntity e : blobs.findAll()) {
             if (e.getKind() == BlobKind.CUCKOO) {
                 cuckooBlobs++;
+                poolBlobsMax = Math.max(poolBlobsMax, perPool.merge(String.valueOf(e.getPoolId()), 1L, Long::sum));
                 capacity += 2L * e.getNumBuckets() * CuckooHashTable.SLOTS_PER_BUCKET * e.getChunkSize();
             } else {
                 smallBlobCount++;
@@ -161,12 +172,15 @@ public class StorageGauges {
         MetaStore.Stats ms = stores.get().stats();
         ManifestRepository.BucketStats totals = manifests.totals();
         long gc = manifests.gcQueueSize();
+        ChunkRepository.Stats cs = chunks.stats();
         long[] data = space(props.getDataDir());
         long[] meta = space(props.getMetaDir());
         return new Snapshot(active, total, quarantined, loaded.size(), used, cuckooBlobs, smallBlobCount, capacity,
                 smallLive, smallDead, smallLiveRec, smallDeadRec, smallOpen,
                 ms.fileSize(), ms.pageCount(), ms.freePages(), ms.lastTxId(), ms.liveReaders(), ms.pageSize(),
-                gc, totals.objects(), totals.bytes(), data[0], data[1], meta[0], meta[1]);
+                gc, totals.objects(), totals.bytes(),
+                cs.chunks(), cs.refs(), cs.gcQueue(), cs.orphans(), poolBlobsMax,
+                data[0], data[1], meta[0], meta[1]);
     }
 
     /** {usable, total} bytes of the file system holding {@code dir} (or its nearest existing parent). */

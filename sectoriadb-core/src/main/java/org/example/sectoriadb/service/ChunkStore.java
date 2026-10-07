@@ -11,7 +11,6 @@ import org.example.sectoriadb.repository.ChunkRepository;
 import org.example.sectoriadb.service.impl.ChunkCorruptedException;
 import org.example.sectoriadb.service.impl.ChunkNotFoundException;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
-import org.example.sectoriadb.service.impl.CuckooHashTable.FillStats;
 import org.example.sectoriadb.service.impl.FileChannelStorageIOEngine;
 import org.example.sectoriadb.service.impl.KeyCollisionException;
 import org.example.sectoriadb.service.impl.TableFullException;
@@ -215,12 +214,8 @@ public class ChunkStore {
             List<Candidate> candidates = new ArrayList<>();
             for (BlobFileEntity b : pb) {
                 if (cache.isFrozen(b.getId())) continue;
-                FillStats st = cache.get(b).getFillStats();
-                // a damaged blob (more than 5 % of its slots quarantined) is used only after every healthy one refused
-                double w = RendezvousPlacement.weightOf(st.totalSlots(), st.activeSlots() + st.quarantinedSlots(), chunkSize);
-                if (st.quarantinedSlots() * 20L > st.totalSlots()) w = 0;
                 byId.put(b.getId(), b);
-                candidates.add(Candidate.of(b.getId(), w));
+                candidates.add(Candidate.of(b.getId(), blobs.placementWeight(b)));
             }
             List<Candidate> ranked = RendezvousPlacement.rank(key, candidates);
             boolean first = true;

@@ -3,75 +3,63 @@ package org.example.sectoriadb.scheduler;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.model.BlobFileEntity;
-import org.example.sectoriadb.model.BlobKind;
-import org.example.sectoriadb.repository.BlobFileRepository;
-import org.example.sectoriadb.service.HashTableCache;
-import org.example.sectoriadb.service.ResizeService;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
+import org.example.sectoriadb.model.PoolEntity;
+import org.example.sectoriadb.service.BlobService;
+import org.example.sectoriadb.service.PoolService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.util.List;
+import java.util.Optional;
 
 /**
- * Background task that monitors fill ratios of all blob files and triggers
- * an automatic resize when a blob exceeds the configured threshold.
+ * Background task that grows pools: when the aggregate fill of a pool's cuckoo blobs reaches
+ * {@code sectoriadb.pool.grow-threshold-percent} a new blob is added (the writers do the same check before every
+ * chunked upload, this is the backstop for idle pools). Existing blobs are never rewritten; the manual shell command
+ * {@code resize} remains for expanding one blob in place.
  *
- * The check interval is read once at startup from
- * {@code sectoriadb.auto-resize.check-interval-ms} (default 60 s).
+ * The check interval is read once at startup from {@code sectoriadb.auto-resize.check-interval-ms} (default 60 s).
  */
 @Component
 public class AutoResizeScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(AutoResizeScheduler.class);
 
-    private final BlobFileRepository blobRepo;
-    private final HashTableCache cache;
-    private final ResizeService resizeService;
+    private final PoolService poolService;
+    private final BlobService blobService;
     private final StorageProperties props;
     private final StorageMetrics metrics;
 
-    public AutoResizeScheduler(BlobFileRepository blobRepo, HashTableCache cache,
-                                ResizeService resizeService, StorageProperties props, StorageMetrics metrics) {
-        this.metrics       = metrics;
-        this.blobRepo      = blobRepo;
-        this.cache         = cache;
-        this.resizeService = resizeService;
-        this.props         = props;
+    public AutoResizeScheduler(PoolService poolService, BlobService blobService,
+                               StorageProperties props, StorageMetrics metrics) {
+        this.poolService = poolService;
+        this.blobService = blobService;
+        this.props       = props;
+        this.metrics     = metrics;
     }
 
     @Scheduled(fixedDelayString = "${sectoriadb.auto-resize.check-interval-ms:60000}")
     public void checkFillRatios() {
-        StorageProperties.AutoResize ar = props.getAutoResize();
-        if (!ar.isEnabled()) return;
+        if (!props.getAutoResize().isEnabled()) return;
         metrics.autoResizeRun();
-
-        List<BlobFileEntity> blobs = blobRepo.findAll();
-        if (blobs.isEmpty()) return;
-
-        log.debug("Auto-resize check: {} blob file(s), threshold={}%", blobs.size(), ar.getThresholdPercent());
-
-        for (BlobFileEntity blob : blobs) {
-            if (blob.getKind() != BlobKind.CUCKOO) continue;   // small-object blobs have no slots to run out of
+        for (PoolEntity pool : poolService.listAll()) {
             try {
-                CuckooHashTable.FillStats stats = cache.get(blob).getFillStats();
-                double fill = stats.fillPercent();
-                log.debug("Blob {} fill={}%", blob.getId(), String.format("%.1f", fill));
-
-                if (fill >= ar.getThresholdPercent()) {
-                    int newBuckets = resizeService.computeExpandedBuckets(blob.getNumBuckets());
-                    log.warn("AUTO-RESIZE triggered: blob={} fill={}% >= {}% → expanding to {} buckets",
-                            blob.getId(), String.format("%.1f", fill), ar.getThresholdPercent(), newBuckets);
-                    System.out.printf("%n[AUTO-RESIZE] Blob %s fill=%.1f%% — expanding %d → %d buckets%n",
-                            blob.getId(), fill, blob.getNumBuckets(), newBuckets);
-                    resizeService.resizeBlobFile(blob.getId(), newBuckets);
-                    System.out.printf("[AUTO-RESIZE] Done.%n");
+                BlobService.PoolFill fill = blobService.poolFill(pool);
+                Optional<BlobFileEntity> grown = blobService.growIfOverThreshold(pool);
+                if (grown.isPresent()) {
+                    log.warn("POOL-GROW: pool={} fill={}% >= {}% -> added blob {} ({} blobs now)", pool.getName(),
+                            String.format("%.1f", fill.fillPercent()), props.getPool().getGrowThresholdPercent(),
+                            grown.get().getId(), fill.blobs() + 1);
+                } else if (fill.blobs() >= props.getPool().getMaxBlobs()
+                        && fill.fillPercent() >= props.getPool().getGrowThresholdPercent()) {
+                    log.warn("Pool {} is {}% full and already has the maximum of {} blobs: raise sectoriadb.pool.max-blobs"
+                            + " or expand a blob with the 'resize' command", pool.getName(),
+                            String.format("%.1f", fill.fillPercent()), fill.blobs());
                 }
-            } catch (IOException e) {
-                log.error("Auto-resize check failed for blob {}: {}", blob.getId(), e.getMessage());
+            } catch (IOException | RuntimeException e) {
+                log.error("Pool growth check failed for pool {}: {}", pool.getName(), e.toString());
             }
         }
     }

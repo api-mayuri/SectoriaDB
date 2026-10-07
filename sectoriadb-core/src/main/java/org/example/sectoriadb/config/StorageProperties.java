@@ -107,20 +107,17 @@ public class StorageProperties {
         public void setCredentials(List<String> v) { this.credentials = v; }
     }
 
+    /**
+     * Background check that grows pools (adds a blob when the aggregate fill reaches
+     * {@code sectoriadb.pool.grow-threshold-percent}). The old in-place expansion of one blob is now the manual
+     * {@code resize} shell command only.
+     */
     public static class AutoResize {
         private boolean enabled = true;
-        private int thresholdPercent = 80;
-        private int expandPercent = 50;
         private long checkIntervalMs = 60_000;
 
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean v) { this.enabled = v; }
-
-        public int getThresholdPercent() { return thresholdPercent; }
-        public void setThresholdPercent(int v) { this.thresholdPercent = v; }
-
-        public int getExpandPercent() { return expandPercent; }
-        public void setExpandPercent(int v) { this.expandPercent = v; }
 
         public long getCheckIntervalMs() { return checkIntervalMs; }
         public void setCheckIntervalMs(long v) { this.checkIntervalMs = v; }

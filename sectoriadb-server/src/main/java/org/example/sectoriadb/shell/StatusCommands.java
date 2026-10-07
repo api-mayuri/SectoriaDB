@@ -5,6 +5,7 @@ import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.model.OperationLogEntity;
 import org.example.sectoriadb.model.PoolEntity;
+import org.example.sectoriadb.repository.ChunkRepository;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.OperationLogRepository;
 import org.example.sectoriadb.service.BlobService;
@@ -34,9 +35,12 @@ public class StatusCommands {
     private final StorageProperties props;
     private final OperationLogRepository opLogRepo;
     private final ManifestRepository manifestRepo;
+    private final ChunkRepository chunkRepo;
 
     public StatusCommands(PoolService poolService, BlobService blobService, HashTableCache cache,
-                          StorageProperties props, OperationLogRepository opLogRepo, ManifestRepository manifestRepo) {
+                          StorageProperties props, OperationLogRepository opLogRepo, ManifestRepository manifestRepo,
+                          ChunkRepository chunkRepo) {
+        this.chunkRepo = chunkRepo;
         this.manifestRepo = manifestRepo;
         this.poolService = poolService;
         this.blobService = blobService;
@@ -58,16 +62,13 @@ public class StatusCommands {
             sb.append(String.format("Pool: %-20s  (%d blob(s), %d object(s), %s)%n", pool.getName(), blobs.size(),
                     stats.objects(), ShellTable.humanSize(stats.bytes())));
             if (!blobs.isEmpty()) {
-                sb.append(ShellTable.blobTableHeader());
-                for (BlobFileEntity b : blobs) {
-                    sb.append(ShellTable.blobRow(blobService, b));
-                    if (b.getKind() != BlobKind.CUCKOO) continue;
-                    CuckooHashTable.FillStats s = cache.get(b).getFillStats();
-                    if (s.fillPercent() >= props.getAutoResize().getThresholdPercent()) {
-                        sb.append(String.format(
-                                "    ⚠ Fill >= threshold (%d%%) — auto-resize will trigger%n",
-                                props.getAutoResize().getThresholdPercent()));
-                    }
+                sb.append(ShellTable.poolBlobTable(blobService, chunkRepo, blobs));
+                BlobService.PoolFill fill = blobService.poolFill(pool);
+                if (fill.fillPercent() >= props.getPool().getGrowThresholdPercent()) {
+                    sb.append(String.format(
+                            "    ⚠ Pool fill %.1f%% >= grow threshold (%d%%) — a blob is added%s%n",
+                            fill.fillPercent(), props.getPool().getGrowThresholdPercent(),
+                            fill.blobs() >= props.getPool().getMaxBlobs() ? " (max-blobs reached: raise it or 'resize')" : ""));
                 }
             }
             sb.append('\n');
@@ -84,9 +85,10 @@ public class StatusCommands {
                 "  default-num-buckets:            %d%n" +
                 "  max-evictions:                  %d%n" +
                 "  small-object.max-file-bytes:    %s%n" +
+                "  pool.initial-blobs:             %d%n" +
+                "  pool.max-blobs:                 %d%n" +
+                "  pool.grow-threshold-percent:    %d%%%n" +
                 "  auto-resize.enabled:            %s%n" +
-                "  auto-resize.threshold-percent:  %d%%%n" +
-                "  auto-resize.expand-percent:     %d%%%n" +
                 "  auto-resize.check-interval:     %s%n" +
                 "%n" +
                 "Edit application.properties and restart to change settings.",
@@ -94,9 +96,10 @@ public class StatusCommands {
                 props.getDefaultNumBuckets(),
                 props.getMaxEvictions(),
                 ShellTable.humanSize(props.getSmallObject().getMaxFileBytes()),
+                props.getPool().getInitialBlobs(),
+                props.getPool().getMaxBlobs(),
+                props.getPool().getGrowThresholdPercent(),
                 ar.isEnabled(),
-                ar.getThresholdPercent(),
-                ar.getExpandPercent(),
                 formatDuration(ar.getCheckIntervalMs()));
     }
 

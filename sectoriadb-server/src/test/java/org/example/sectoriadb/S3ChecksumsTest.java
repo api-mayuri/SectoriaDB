@@ -60,6 +60,8 @@ class S3ChecksumsTest {
 
     @LocalServerPort int port;
     @Autowired ManifestRepository manifestRepo;
+    @Autowired org.example.sectoriadb.repository.ChunkRepository chunkRepo;
+    @Autowired org.example.sectoriadb.repository.BlobFileRepository blobRepo;
     private final HttpClient http = HttpClient.newHttpClient();
     private static final String B = "ckbkt";
     private boolean bucketMade;
@@ -489,7 +491,8 @@ class S3ChecksumsTest {
         byte[] body = random(100_000, 63);
         assertEquals(200, put("disk-corrupt", body).statusCode());
         ManifestEntity m = manifest("disk-corrupt");
-        String blobPath = m.getBlobFile().getFilePath();
+        String blobId = chunkRepo.find(m.getPoolId(), m.chunkKeyArray()[0]).orElseThrow().blobId();
+        String blobPath = blobRepo.findById(blobId).orElseThrow().getFilePath();
         byte[] file = Files.readAllBytes(Path.of(blobPath));
         byte[] needle = Arrays.copyOfRange(body, 90_000, 90_032);   // late chunk: earlier bytes are already on the wire
         int at = indexOf(file, needle);

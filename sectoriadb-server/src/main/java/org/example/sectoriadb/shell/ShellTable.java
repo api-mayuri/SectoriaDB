@@ -2,10 +2,12 @@ package org.example.sectoriadb.shell;
 
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobKind;
+import org.example.sectoriadb.repository.ChunkRepository;
 import org.example.sectoriadb.service.BlobService;
 import org.example.sectoriadb.service.impl.SmallObjectBlob;
 
 import java.io.IOException;
+import java.util.List;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 
@@ -13,28 +15,43 @@ import org.example.sectoriadb.service.impl.CuckooHashTable;
 class ShellTable {
 
     static String blobTableHeader() {
-        return String.format("  %-36s  %-6s  %-24s  %8s  %8s  %s%n",
-                "Blob ID", "Kind", "File", "Buckets", "Fill %", "Size") +
-               "  " + "─".repeat(100) + "\n";
+        return String.format("  %-36s  %-6s  %-24s  %8s  %8s  %9s  %7s  %s%n",
+                "Blob ID", "Kind", "File", "Buckets", "Fill %", "Chunks", "HRW %", "Size") +
+               "  " + "─".repeat(120) + "\n";
     }
 
-    /** One table row for a blob of either kind. */
-    static String blobRow(BlobService blobService, BlobFileEntity b) throws IOException {
-        if (b.getKind() == BlobKind.SMALL) {
-            SmallObjectBlob.Stats s = blobService.getSmallStats(b);
-            return String.format("  %-36s  %-6s  %-24s  %8s  %8s  %s  (live %s, dead %s%s)%n",
-                    b.getId(), "SMALL", truncate(b.getFileName(), 24), "-", "-",
-                    humanSize(s.fileBytes()), humanSize(s.liveBytes()), humanSize(s.deadBytes()),
-                    s.writable() ? "" : ", READ-ONLY");
+    /**
+     * The blobs of a pool as a table: for cuckoo blobs the fill, the number of chunks the chunk index holds in the
+     * blob and the share of new chunks the weighted rendezvous placement currently gives it (HRW %); for
+     * small-object blobs the live / dead bytes.
+     */
+    static String poolBlobTable(BlobService blobService, ChunkRepository chunks, List<BlobFileEntity> blobs)
+            throws IOException {
+        java.util.Map<String, Double> weight = new java.util.HashMap<>();
+        double sum = 0;
+        for (BlobFileEntity b : blobs) {
+            if (b.getKind() != BlobKind.CUCKOO) continue;
+            double w = blobService.placementWeight(b);
+            weight.put(b.getId(), w);
+            sum += w;
         }
-        return blobTableRow(b, blobService.getFillStats(b));
-    }
-
-    static String blobTableRow(BlobFileEntity b, CuckooHashTable.FillStats stats) {
-        return String.format("  %-36s  %-6s  %-24s  %8d  %6.1f%%  %s%n",
-                b.getId(), "CUCKOO", truncate(b.getFileName(), 24),
-                b.getNumBuckets(), stats.fillPercent(),
-                humanSize(b.getTotalBytes()));
+        StringBuilder sb = new StringBuilder(blobTableHeader());
+        for (BlobFileEntity b : blobs) {
+            if (b.getKind() == BlobKind.SMALL) {
+                SmallObjectBlob.Stats s = blobService.getSmallStats(b);
+                sb.append(String.format("  %-36s  %-6s  %-24s  %8s  %8s  %9s  %7s  %s  (live %s, dead %s%s)%n",
+                        b.getId(), "SMALL", truncate(b.getFileName(), 24), "-", "-", "-", "-",
+                        humanSize(s.fileBytes()), humanSize(s.liveBytes()), humanSize(s.deadBytes()),
+                        s.writable() ? "" : ", READ-ONLY"));
+                continue;
+            }
+            CuckooHashTable.FillStats st = blobService.getFillStats(b);
+            double share = sum > 0 ? 100.0 * weight.get(b.getId()) / sum : 0;
+            sb.append(String.format("  %-36s  %-6s  %-24s  %8d  %6.1f%%  %9d  %6.1f%%  %s%n",
+                    b.getId(), "CUCKOO", truncate(b.getFileName(), 24), b.getNumBuckets(), st.fillPercent(),
+                    chunks.countByBlob(b.getId()), share, humanSize(b.getTotalBytes())));
+        }
+        return sb.toString();
     }
 
     static String fileTableHeader() {

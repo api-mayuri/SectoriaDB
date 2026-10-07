@@ -43,6 +43,7 @@ class SectoriaDBIntegrationTest {
     @Autowired BlobService blobService;
     @Autowired FileStorageService fileService;
     @Autowired ResizeService resizeService;
+    @Autowired org.example.sectoriadb.repository.ChunkRepository chunkRepo;
 
     private PoolEntity newPool(String name) throws IOException {
         Path base = tempRoot.resolve(name);
@@ -145,7 +146,7 @@ class SectoriaDBIntegrationTest {
         Files.write(src, original);
 
         ManifestEntity m = fileService.store(src, pool);
-        String blobId = m.getBlobFileId();
+        String blobId = chunkRepo.find(pool.getId(), m.chunkKeyArray()[0]).orElseThrow().blobId();
 
         // Resize blob from 32 → 64 buckets
         resizeService.resizeBlobFile(blobId, 64);
@@ -156,5 +157,8 @@ class SectoriaDBIntegrationTest {
 
         assertArrayEquals(original, Files.readAllBytes(restored),
                 "After blob resize, full restore must still be byte-identical");
+        // the chunk index now points at the replacement blob
+        String after = chunkRepo.find(pool.getId(), m.chunkKeyArray()[0]).orElseThrow().blobId();
+        assertNotEquals(blobId, after);
     }
 }

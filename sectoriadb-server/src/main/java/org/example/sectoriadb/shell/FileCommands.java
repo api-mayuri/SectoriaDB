@@ -2,6 +2,7 @@ package org.example.sectoriadb.shell;
 
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
+import org.example.sectoriadb.repository.ChunkRepository;
 import org.example.sectoriadb.service.FileStorageService;
 import org.example.sectoriadb.service.ObjectVerificationService;
 import org.example.sectoriadb.service.PoolService;
@@ -20,8 +21,11 @@ public class FileCommands {
     private final FileStorageService fileService;
     private final PoolService poolService;
     private final ObjectVerificationService verifier;
+    private final ChunkRepository chunkRepo;
 
-    public FileCommands(FileStorageService fileService, PoolService poolService, ObjectVerificationService verifier) {
+    public FileCommands(FileStorageService fileService, PoolService poolService, ObjectVerificationService verifier,
+                        ChunkRepository chunkRepo) {
+        this.chunkRepo = chunkRepo;
         this.fileService = fileService;
         this.poolService = poolService;
         this.verifier = verifier;
@@ -64,9 +68,17 @@ public class FileCommands {
     public String info(@ShellOption(help = "File ID") String id) {
         ManifestEntity m = fileService.getActiveManifest(id);
         var phys = m.getPhysicalBlob();
-        String poolName = (phys != null && phys.getPool() != null)
-                ? phys.getPool().getName()
-                : phys != null ? phys.getPoolId() : m.getPoolId() != null ? m.getPoolId() : "?";
+        String poolName = m.getPoolId() == null ? "?"
+                : poolService.listAll().stream().filter(p -> p.getId().equals(m.getPoolId()))
+                        .map(PoolEntity::getName).findFirst().orElse(m.getPoolId());
+        String blobs = phys != null ? phys.getId() : "-";
+        if (m.getStorageKind() == org.example.sectoriadb.model.StorageKind.CHUNKED && m.getPoolId() != null) {
+            // the chunks of an object are spread over the pool's blobs: the chunk index says where
+            var entries = chunkRepo.findAll(m.getPoolId(), m.chunkKeyArray());
+            var distinct = new java.util.TreeSet<String>();
+            entries.values().forEach(e -> distinct.add(e.blobId()));
+            blobs = distinct.size() + " blob(s) via the chunk index" + (distinct.isEmpty() ? "" : ": " + String.join(", ", distinct));
+        }
         String stored = switch (m.getStorageKind()) {
             case EMPTY -> "empty object (no blob)";
             case SMALL -> String.format("1 record in small blob at offset %d (%d B)",
@@ -78,7 +90,7 @@ public class FileCommands {
                 "File: %s%n" +
                 "  ID:          %s%n" +
                 "  Kind:        %s%n" +
-                "  Blob:        %s%n" +
+                "  Blobs:       %s%n" +
                 "  Pool:        %s%n" +
                 "  Size:        %s%n" +
                 "  Stored as:   %s%n" +
@@ -86,7 +98,7 @@ public class FileCommands {
                 "  CRC32C:      %s%n" +
                 "  Checksum:    %s",
                 m.getSourceFileName(), m.getId(), m.getStorageKind(),
-                phys != null ? phys.getId() : "-", poolName,
+                blobs, poolName,
                 ShellTable.humanSize(m.getTotalBytes()),
                 stored,
                 m.getCreatedAt(),

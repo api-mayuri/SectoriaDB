@@ -5,6 +5,7 @@ import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.service.impl.SmallObjectBlob;
 import org.example.sectoriadb.model.PoolEntity;
+import org.example.sectoriadb.repository.ChunkRepository;
 import org.example.sectoriadb.service.BlobService;
 import org.example.sectoriadb.service.HashTableCache;
 import org.example.sectoriadb.service.PoolService;
@@ -25,9 +26,11 @@ public class BlobCommands {
     private final HashTableCache cache;
     private final ResizeService resizeService;
     private final StorageProperties props;
+    private final ChunkRepository chunkRepo;
 
     public BlobCommands(BlobService blobService, PoolService poolService, HashTableCache cache,
-                        ResizeService resizeService, StorageProperties props) {
+                        ResizeService resizeService, StorageProperties props, ChunkRepository chunkRepo) {
+        this.chunkRepo     = chunkRepo;
         this.blobService   = blobService;
         this.poolService   = poolService;
         this.cache         = cache;
@@ -61,12 +64,7 @@ public class BlobCommands {
         List<BlobFileEntity> list = blobService.listByPool(poolEntity);
         if (list.isEmpty()) return "Pool '" + pool + "' has no blobs. Use 'mkblob --pool " + pool + "' to create one.";
 
-        StringBuilder sb = new StringBuilder();
-        sb.append(ShellTable.blobTableHeader());
-        for (BlobFileEntity b : list) {
-            sb.append(ShellTable.blobRow(blobService, b));
-        }
-        return sb.toString().stripTrailing();
+        return ShellTable.poolBlobTable(blobService, chunkRepo, list).stripTrailing();
     }
 
     @ShellMethod(key = "blob", value = "Show detailed blob info and fill statistics  |  blob --id BLOB_ID")
@@ -103,7 +101,9 @@ public class BlobCommands {
                 "  Physical:    %s%n" +
                 "  Fill:        %d / %d slots  (%.1f%%)  quarantined: %d%n" +
                 "  Used:        %s%n" +
-                "  Free:        %s",
+                "  Free:        %s%n" +
+                "  Chunks:      %d indexed, %d referenced%n" +
+                "  Weight:      %s  (HRW placement weight, free capacity x fill factor)",
                 b.getId(),
                 b.getPool() != null ? b.getPool().getName() : b.getPoolId(),
                 b.getFilePath(),
@@ -113,11 +113,13 @@ public class BlobCommands {
                 ShellTable.humanSize(b.getTotalBytes()),
                 stats.activeSlots(), stats.totalSlots(), stats.fillPercent(), stats.quarantinedSlots(),
                 ShellTable.humanSize(stats.usedBytes(b.getChunkSize())),
-                ShellTable.humanSize(stats.freeBytes(b.getChunkSize())));
+                ShellTable.humanSize(stats.freeBytes(b.getChunkSize())),
+                chunkRepo.countByBlob(b.getId()), chunkRepo.countReferencedByBlob(b.getPoolId(), b.getId()),
+                ShellTable.humanSize((long) blobService.placementWeight(b)));
     }
 
     @ShellMethod(key = "resize",
-            value = "Resize a blob file via cuckoo migration  |  resize --id BLOB_ID --buckets N")
+            value = "Expand one blob in place via cuckoo migration (pools normally grow by adding blobs)  |  resize --id BLOB_ID --buckets N")
     public String resize(
             @ShellOption(help = "Blob file ID") String id,
             @ShellOption(help = "New number of buckets (must leave ≤70% fill after migration)") int buckets)

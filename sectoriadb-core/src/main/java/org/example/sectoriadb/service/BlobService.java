@@ -298,6 +298,17 @@ public class BlobService {
     }
 
     /**
+     * Placement weight of a cuckoo blob (see {@link RendezvousPlacement#weightOf}): its free capacity, scaled down
+     * steeply when it is nearly full. A frozen blob (being resized) and a damaged one (more than 5 % of its slots
+     * quarantined) get weight 0: they are used only after every other blob refused a chunk.
+     */
+    public double placementWeight(BlobFileEntity b) throws IOException {
+        CuckooHashTable.FillStats st = cache.get(b).getFillStats();
+        if (cache.isFrozen(b.getId()) || st.quarantinedSlots() * 20L > st.totalSlots()) return 0;
+        return RendezvousPlacement.weightOf(st.totalSlots(), st.activeSlots() + st.quarantinedSlots(), b.getChunkSize());
+    }
+
+    /**
      * The table of a blob by id (chunk index entries name blobs by id): from the cache without any metastore access
      * when it is loaded, else the blob record is read and the table loaded.
      */

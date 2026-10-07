@@ -3,6 +3,7 @@ package org.example.sectoriadb.shell;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.BlobFileRepository;
+import org.example.sectoriadb.repository.ChunkRepository;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.service.BlobService;
 import org.example.sectoriadb.service.HashTableCache;
@@ -23,9 +24,12 @@ public class PoolCommands {
     private final BlobService blobService;
     private final HashTableCache cache;
     private final ManifestRepository manifestRepo;
+    private final ChunkRepository chunkRepo;
 
     public PoolCommands(PoolService poolService, BlobFileRepository blobRepo,
-                        BlobService blobService, HashTableCache cache, ManifestRepository manifestRepo) {
+                        BlobService blobService, HashTableCache cache, ManifestRepository manifestRepo,
+                        ChunkRepository chunkRepo) {
+        this.chunkRepo = chunkRepo;
         this.manifestRepo = manifestRepo;
         this.poolService = poolService;
         this.blobRepo    = blobRepo;
@@ -72,10 +76,13 @@ public class PoolCommands {
         sb.append(String.format("  Objects: %d  (%s)%n", stats.objects(), ShellTable.humanSize(stats.bytes())));
 
         if (!blobs.isEmpty()) {
-            sb.append(ShellTable.blobTableHeader());
-            for (BlobFileEntity b : blobs) {
-                sb.append(ShellTable.blobRow(blobService, b));
-            }
+            sb.append(ShellTable.poolBlobTable(blobService, chunkRepo, blobs));
+            BlobService.PoolFill fill = blobService.poolFill(p);
+            sb.append(String.format("  Pool fill: %.1f%% of %d slot(s) in %d cuckoo blob(s)%n",
+                    fill.fillPercent(), fill.totalSlots(), fill.blobs()));
+            ChunkRepository.Stats cs = chunkRepo.stats();
+            sb.append(String.format("  Chunk index (all pools): %d chunk(s), %d reference(s), %d awaiting collection, %d orphan copy(ies)%n",
+                    cs.chunks(), cs.refs(), cs.gcQueue(), cs.orphans()));
         }
         return sb.toString().stripTrailing();
     }
