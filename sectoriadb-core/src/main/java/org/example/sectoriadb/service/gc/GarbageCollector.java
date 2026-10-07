@@ -167,31 +167,50 @@ public class GarbageCollector {
 
     private void collectChunks(String poolId, long cutoff, int max, RunReport r) {
         List<ChunkRef> due = gcRepo.dueChunks(poolId, cutoff, max);
+        // The upload gate is per pool: group the due chunks by pool and run every batch under its pool's gate.
+        java.util.Map<String, List<ChunkRef>> byPool = new java.util.LinkedHashMap<>();
+        for (ChunkRef c : due) byPool.computeIfAbsent(c.poolId(), k -> new java.util.ArrayList<>()).add(c);
         int batch = props.getGc().getBatchSize();
-        for (int i = 0; i < due.size(); i += batch) {
-            List<ChunkRef> part = due.subList(i, Math.min(due.size(), i + batch));
-            ChunkBatchResult res;
-            try {
-                res = gcRepo.collectChunks(part, cutoff, this::freeSlot);
-            } catch (RuntimeException e) {
-                r.error("chunk batch failed: " + e);
-                metrics.gcError();
-                return;
-            }
-            for (ChunkRef k : res.removed()) chunkStore.forget(k.poolId(), k.chunkKey());
-            r.chunksFreed += res.freed();
-            r.bytesFreed += res.bytes();
-            r.chunksAbsent += res.absent();
-            r.revived += res.revived();
-            r.gone += res.gone();
-            r.tooNew += res.tooNew();
-            r.deferred += res.deferred();
-            if (res.freed() > 0) metrics.gcChunksFreed(res.freed(), res.bytes());
-            if (res.deferred() > 0) metrics.gcDeferred(StorageMetrics.GcDeferral.BLOB_BUSY);
-            if (res.error() != null) {
-                r.error("freeing a slot failed: " + res.error());
-                metrics.gcError();
-                return;
+        for (java.util.Map.Entry<String, List<ChunkRef>> e : byPool.entrySet()) {
+            List<ChunkRef> list = e.getValue();
+            for (int i = 0; i < list.size(); i += batch) {
+                List<ChunkRef> part = list.subList(i, Math.min(list.size(), i + batch));
+                // Freeing a slot happens before the metadata commit. If the commit failed after the slot was freed, an
+                // upload that deduplicated against the chunk meanwhile could commit a reference to a freed slot. The
+                // gate drains such uploads and blocks new ones for the duration of the batch, so a failed commit
+                // leaves nothing that relies on the chunk (the next pass repairs the index entry via the ABSENT path).
+                UploadGate.Sweep gate = chunkStore.gate().tryBegin(e.getKey(),
+                        props.getGc().getSweepGateWait().toMillis(), props.getGc().getUploadTicketTtl().toMillis());
+                if (gate == null) {
+                    metrics.gcDeferred(StorageMetrics.GcDeferral.UPLOADS_IN_FLIGHT);
+                    r.deferred += list.size() - i;
+                    break;                                    // this pool's remaining chunks wait for the next pass
+                }
+                ChunkBatchResult res;
+                try {
+                    res = gcRepo.collectChunks(part, cutoff, this::freeSlot);
+                } catch (RuntimeException ex) {
+                    r.error("chunk batch failed: " + ex);
+                    metrics.gcError();
+                    return;
+                } finally {
+                    gate.close();
+                }
+                for (ChunkRef k : res.removed()) chunkStore.forget(k.poolId(), k.chunkKey());
+                r.chunksFreed += res.freed();
+                r.bytesFreed += res.bytes();
+                r.chunksAbsent += res.absent();
+                r.revived += res.revived();
+                r.gone += res.gone();
+                r.tooNew += res.tooNew();
+                r.deferred += res.deferred();
+                if (res.freed() > 0) metrics.gcChunksFreed(res.freed(), res.bytes());
+                if (res.deferred() > 0) metrics.gcDeferred(StorageMetrics.GcDeferral.BLOB_BUSY);
+                if (res.error() != null) {
+                    r.error("freeing a slot failed: " + res.error());
+                    metrics.gcError();
+                    return;
+                }
             }
         }
     }

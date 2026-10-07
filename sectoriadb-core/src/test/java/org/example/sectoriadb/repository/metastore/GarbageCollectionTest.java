@@ -302,7 +302,7 @@ class GarbageCollectionTest {
     }
 
     @Test
-    void anUploadThatDeduplicatedAgainstACollectedEntryIsToldToRetry() throws Exception {
+    void chunkCollectionWaitsForUploadsThatDeduplicatedAgainstZeroReferenceEntries() throws Exception {
         byte[] data = content(3, 23);
         put("a", data);
         rig.files.deleteObject("bkt", "a");
@@ -311,16 +311,14 @@ class GarbageCollectionTest {
         assertTrue(staged.getStagedChunks().stream().allMatch(p -> p.indexed()), "found in the index, nothing written");
         assertEquals(1, rig.chunkStore.gate().inFlight());
 
-        RunReport r = gc0();                                    // grace 0: collects them under the upload's feet
-        assertEquals(3, r.chunksFreed);
+        RunReport r = gc0();                                    // grace 0, but the upload in flight holds the gate
+        assertEquals(0, r.chunksFreed, "slots are not freed under an upload that relies on them");
+        assertEquals(3, r.deferred);
 
-        ChunkRepository.ChunkPlacementException e = assertThrows(ChunkRepository.ChunkPlacementException.class,
-                () -> rig.files.commitObject(staged));
-        assertEquals(ChunkRepository.ChunkPlacementException.Reason.COLLECTED, e.reason());
-        assertEquals(0, rig.chunkStore.gate().inFlight(), "the hold is released after a failed commit");
-        assertTrue(rig.files.findObject("bkt", "b").isEmpty(), "nothing was committed");
-
-        put("b", data);                                         // the retry stages afresh
+        rig.files.commitObject(staged);                         // the upload commits against intact chunks
+        assertEquals(0, rig.chunkStore.gate().inFlight());
+        assertArrayEquals(data, get("b"));
+        assertEquals(0, gc0().chunksFreed, "referenced again");
         assertArrayEquals(data, get("b"));
     }
 

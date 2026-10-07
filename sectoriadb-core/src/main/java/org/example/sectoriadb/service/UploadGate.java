@@ -35,8 +35,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * Correctness argument: with the gate held, no upload is between "wrote" and "committed", and none can start, so a slot
  * whose key has no index entry (in the committed state, re-read under the exclusive writer slot) belongs to nobody.
  *
- * <p>Zero-reference chunks of the {@code chunk_gc} queue do not need the gate: they have an index entry, an upload that
- * relies on one is protected by the grace period and the {@code COLLECTED} check of the commit (doc 09).
+ * <p>Zero-reference chunks of the {@code chunk_gc} queue are also freed per batch under the gate: the slot is freed
+ * before the metadata commit, and without the gate a failed commit could leave an index entry whose slot is gone while
+ * an upload that deduplicated against it commits a reference to it. Under sustained upload load such a batch is
+ * deferred to the next pass.
  */
 public final class UploadGate {
 
