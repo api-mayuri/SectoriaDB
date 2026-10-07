@@ -214,7 +214,7 @@
 
 | Свойство | По умолчанию | Смысл |
 |---|---:|---|
-| `sectoriadb.gc.enabled` | `true` в `application.properties` (`false` в классе, в CLI-режиме и в тестах, где нужен ручной запуск) | фоновый планировщик; команды консоли работают всегда |
+| `sectoriadb.gc.enabled` | `true` в `application.properties` (`false` по умолчанию в `StorageProperties` и в CLI-режиме) | фоновый планировщик; команды консоли работают всегда |
 | `sectoriadb.gc.grace` | `15m` | период ожидания G |
 | `sectoriadb.gc.interval` | `1m` | пауза между проходами (очередь чанков, сироты, надгробия) |
 | `sectoriadb.gc.max-chunks-per-run` | `10000` | лимит скорости: слотов за проход |
