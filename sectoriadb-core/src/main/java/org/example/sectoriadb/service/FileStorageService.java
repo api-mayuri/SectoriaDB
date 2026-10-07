@@ -423,6 +423,13 @@ public class FileStorageService {
                         "The upload waited too long between writing its data and committing: the garbage collector"
                                 + " revoked its hold and may have freed the data, the upload must be retried");
             }
+            // data before metadata: the chunks of this upload are forced (they were written without an fsync, doc 10)
+            // before the transaction that first references them
+            try {
+                chunkStore.barrier(entity.getStagedChunks());
+            } catch (IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
             return commit.get();
         } finally {
             if (hold != null) {

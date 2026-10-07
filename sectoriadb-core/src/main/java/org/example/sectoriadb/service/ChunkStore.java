@@ -412,6 +412,25 @@ public class ChunkStore {
         throw new IOException("Could not place a chunk in pool " + pool.getName() + ": the pool kept changing");
     }
 
+    /**
+     * Durability barrier of an upload: makes every chunk it wrote (or found already stored in a table, which an upload
+     * that has not committed yet may have written without forcing) durable. The metastore transaction that first
+     * references the chunks must not be started before this returns. One fsync per blob covers all writers (group force,
+     * {@link CuckooHashTable#barrier}). A blob that a resize replaced was forced by the migration; one that is not
+     * resident has no pending writes (a table with unforced writes is never evicted).
+     */
+    public void barrier(List<PlacedChunk> placed) throws IOException {
+        Set<String> blobIds = new java.util.LinkedHashSet<>();
+        for (PlacedChunk p : placed) blobIds.add(cache.resolveRedirect(p.blobId()));
+        for (String id : blobIds) {
+            try (ResidentHandle<CuckooHashTable> h = cache.acquireResident(id)) {
+                if (h != null) h.get().barrier();
+            } catch (ClosedChannelException gone) {
+                // closed because the blob was replaced or deleted: nothing of ours is pending there
+            }
+        }
+    }
+
     // ── Read ──────────────────────────────────────────────────────────────────
 
     /**

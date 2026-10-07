@@ -59,6 +59,8 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     private final Timer gcCompactionOk;
     private final Timer gcCompactionFailed;
     private final Counter tablesEvicted;
+    private final Timer barrierWait;
+    private final DistributionSummary barrierCovered;
     private final Counter metaRecoveryOk;
     private final Counter metaRecoveryFailed;
     private final Counter gcReclaimed;
@@ -102,6 +104,10 @@ public class MicrometerStorageMetrics implements StorageMetrics {
         groupQueueWait = timer(r, "sectoriadb.metastore.group.queue.wait", "Time a write body waited in the group commit queue before it started to run", Buckets.LOCK_WAIT);
         groupRollbacks = Counter.builder("sectoriadb.metastore.group.body.rollbacks")
                 .description("Grouped write bodies that threw and were rolled back without affecting their batch").register(r);
+        barrierWait = timer(r, "sectoriadb.cuckoo.barrier.wait", "Time an upload spent in the durability barrier of a cuckoo table before its commit (fsync it led or waited for)", Buckets.FSYNC);
+        barrierCovered = DistributionSummary.builder("sectoriadb.cuckoo.barrier.inserts")
+                .description("Chunk inserts made durable by one fsync of a cuckoo table (group force)")
+                .serviceLevelObjectives(Buckets.GROUP_BATCH_SIZE).register(r);
         tablesEvicted = Counter.builder("sectoriadb.cuckoo.tables.evicted")
                 .description("Cuckoo tables evicted from memory by the LRU policy (sectoriadb.cache.max-resident-tables)").register(r);
         metaRecoveryOk = Counter.builder("sectoriadb.metastore.recoveries")
@@ -188,6 +194,11 @@ public class MicrometerStorageMetrics implements StorageMetrics {
 
     @Override public void metaGroupQueueWait(long nanos) { groupQueueWait.record(nanos, TimeUnit.NANOSECONDS); }
     @Override public void metaGroupBodyRollback() { groupRollbacks.increment(); }
+    @Override public void cuckooBarrier(long nanos, boolean led, long coveredInserts) {
+        barrierWait.record(nanos, TimeUnit.NANOSECONDS);
+        if (led) barrierCovered.record(coveredInserts);
+    }
+
     @Override public void tableEvicted() { tablesEvicted.increment(); }
     @Override public void metaRecovery(boolean success) { (success ? metaRecoveryOk : metaRecoveryFailed).increment(); }
 

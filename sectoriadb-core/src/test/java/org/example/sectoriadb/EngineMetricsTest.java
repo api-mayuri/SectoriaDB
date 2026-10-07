@@ -54,7 +54,9 @@ class EngineMetricsTest {
     void insertReportsFsyncWriteAndEvictionPath() throws IOException {
         CuckooHashTable t = table("a.raw", 8, 16, true);
         t.insert(1L, ByteBuffer.wrap(bytes(1, CHUNK)));
-        assertTrue(m.get(m.fsyncs, Target.CUCKOO) >= 2, "data force + meta force");
+        assertEquals(0, m.get(m.fsyncs, Target.CUCKOO), "a new chunk is forced by the barrier, not by the insert");
+        t.barrier();
+        assertEquals(1, m.get(m.fsyncs, Target.CUCKOO), "one fsync covers data and meta");
         assertTrue(m.get(m.writes, Target.CUCKOO) >= 2);
         assertEquals(CHUNK + 32, m.get(m.writeBytes, Target.CUCKOO), "slot meta entry (32 B) + chunk data");
         assertEquals(1, m.evictionPaths.size());

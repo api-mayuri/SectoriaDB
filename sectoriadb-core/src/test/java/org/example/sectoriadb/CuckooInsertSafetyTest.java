@@ -289,7 +289,7 @@ class CuckooInsertSafetyTest {
     // ── C5 ───────────────────────────────────────────────────────────────────
 
     @Test
-    void directInsert_ordersDataForceMetaForce() throws IOException {
+    void directInsert_writesDataThenMetaWithoutFsyncAndTheBarrierForces() throws IOException {
         int buckets = 4;
         Path p = newBlob("order.raw", buckets);
         List<String> ops = new ArrayList<>();
@@ -308,7 +308,14 @@ class CuckooInsertSafetyTest {
         };
         CuckooHashTable t = open(p, buckets, 8, recording);
         t.insert(42L, ByteBuffer.wrap(payload(42L)));
-        assertEquals(List.of("DATA", "FORCE", "META", "FORCE"), ops);
+        // doc 10, part B: a new chunk in a free slot costs no fsync under the table lock; the writer's barrier forces
+        assertEquals(List.of("DATA", "META"), ops);
+        assertTrue(t.hasUnforcedWrites());
+        t.barrier();
+        assertEquals(List.of("DATA", "META", "FORCE"), ops);
+        assertFalse(t.hasUnforcedWrites());
+        t.barrier();
+        assertEquals(List.of("DATA", "META", "FORCE"), ops, "nothing pending: no second fsync");
     }
 
     @Test

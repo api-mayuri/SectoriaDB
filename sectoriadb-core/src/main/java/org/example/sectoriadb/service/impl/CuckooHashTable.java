@@ -20,6 +20,8 @@ import java.util.BitSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.zip.CRC32C;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
@@ -41,6 +43,15 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * is thrown and nothing has been modified. Otherwise the chunks along the path are moved starting from the
  * free end of the path, so at every instant (including a crash) each stored chunk is present in at least
  * one ACTIVE slot with correct data. See docs/architecture/01-engine-safety.md.
+ *
+ * <h3>Durability of a new chunk (doc 10, part B)</h3>
+ * A chunk that goes into a free slot is written (data, then meta) WITHOUT an fsync and without waiting for one: the table
+ * lock is not held across fsyncs, so concurrent writers do not queue behind two fsyncs per chunk. The writer calls
+ * {@link #barrier()} before the metastore commit that first references its chunks; one fsync of the file (a leader, with
+ * the others waiting for it) covers every write issued up to that moment. Until then such a slot is not referenced by
+ * anything durable: after a crash it may hold stale or partial bytes under an ACTIVE meta entry, which the CRC of the
+ * data detects, a repeated upload heals, and the collector's sweep frees. The moves of an eviction path protect chunks
+ * that ARE referenced already and keep their ordered fsyncs. See docs/architecture/10-gc-and-resize.md.
  *
  * <h3>Concurrency</h3>
  * The table owns a {@link ReentrantReadWriteLock}. Mutations take the write lock, lookups, reads, statistics
@@ -90,6 +101,13 @@ public class CuckooHashTable implements AutoCloseable {
     private final long tableBOffset;
 
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
+
+    // durability barrier: writes issued but not yet forced (see barrier())
+    private volatile long writeSeq;                 // inserts whose data and meta were written (advanced under the write lock)
+    private volatile long forcedSeq;                // every insert up to this one is covered by a completed fsync
+    private final ReentrantLock forceLock = new ReentrantLock();
+    private final Condition forceDone = forceLock.newCondition();
+    private boolean forcing;                        // a leader is inside fsync (guarded by forceLock)
 
     /** Callback for iterating active chunks. Can throw IOException. */
     @FunctionalInterface
@@ -284,10 +302,12 @@ public class CuckooHashTable implements AutoCloseable {
                 writeMeta(src0, movedKey, RESERVED, 0, 0);                  // src may now be overwritten
             }
 
+            // The new chunk itself is not referenced by anything durable yet: no fsync under the lock, the writer calls
+            // barrier() before the commit that references it (see the class comment).
             int target = path[0];
             ioEngine.writeChunk(blobFile, dataOffset(target), ByteBuffer.wrap(payload));
-            ioEngine.force(blobFile);
-            writeMeta(target, key, ACTIVE, len, crc);
+            writeMeta(target, key, ACTIVE, len, crc, false);
+            writeSeq++;
             return new InsertResult(key, locationOf(target), false);
         } finally {
             lock.writeLock().unlock();
@@ -605,25 +625,75 @@ public class CuckooHashTable implements AutoCloseable {
     public void close() throws IOException {
         lock.writeLock().lock();
         try {
+            if (hasUnforcedWrites()) {
+                try {
+                    ioEngine.force(blobFile);   // best effort: nobody will ask for the barrier of a closed table
+                } catch (IOException e) {
+                    log.warn("Blob {}: could not force the writes pending at close: {}", blobFile.id(), e.getMessage());
+                }
+            }
             ioEngine.close();
         } finally {
             lock.writeLock().unlock();
         }
     }
 
-    /** Makes every write done so far durable (one fsync of the blob file). */
+    /**
+     * Durability barrier: returns when every chunk inserted into this table before the call is on disk (data and meta
+     * entry). Group force: the first caller that finds no fsync running becomes the leader and forces the file once for
+     * everything written so far, the others wait and return when a force that started after their insert has
+     * completed. A failed force fails the leader's call only; a waiter then forces by itself.
+     *
+     * <p>Call it before the metastore commit that first references chunks written by {@link #insert} /
+     * {@link #insertPreservingKey}, including chunks that were found already stored (they may come from an
+     * upload that has not committed and not forced yet). Cheap when nothing is pending.
+     */
     public void barrier() throws IOException {
-        ioEngine.force(blobFile);
+        final long target = writeSeq;
+        if (forcedSeq >= target) return;
+        long t0 = System.nanoTime();
+        boolean led = false;
+        long covered = 0;
+        forceLock.lock();
+        try {
+            while (forcedSeq < target) {
+                if (forcing) {
+                    forceDone.awaitUninterruptibly();
+                    continue;
+                }
+                forcing = true;
+                long upTo = writeSeq;          // every insert issued so far wrote before it advanced the counter
+                long before = forcedSeq;
+                forceLock.unlock();
+                boolean ok = false;
+                try {
+                    ioEngine.force(blobFile);
+                    ok = true;
+                } finally {
+                    forceLock.lock();
+                    forcing = false;
+                    if (ok) {
+                        if (upTo > forcedSeq) forcedSeq = upTo;
+                        led = true;
+                        covered += upTo - before;
+                    }
+                    forceDone.signalAll();
+                }
+            }
+        } finally {
+            forceLock.unlock();
+        }
+        metrics.cuckooBarrier(System.nanoTime() - t0, led, covered);
+    }
+
+    /** True if inserted chunks were written but not forced to disk yet (such a table is not evicted from the cache). */
+    public boolean hasUnforcedWrites() {
+        return writeSeq > forcedSeq;
     }
 
     /** Memory held by the in-memory slot metadata, in bytes (the weight of a resident table in the cache budget). */
     public long memoryBytes() {
         return (long) totalSlots * (8 + 1 + 4 + 4);
-    }
-
-    /** True if inserted chunks were written but not forced to disk yet (such a table is not evicted). */
-    public boolean hasUnforcedWrites() {
-        return false;
     }
 
     /** Number of slots of the table (both halves). */
@@ -757,6 +827,11 @@ public class CuckooHashTable implements AutoCloseable {
 
     /** Writes the meta entry, makes it durable, then updates the in-memory copy. */
     private void writeMeta(int idx, long chunkKey, byte state, int dataLength, int dataCrc) throws IOException {
+        writeMeta(idx, chunkKey, state, dataLength, dataCrc, true);
+    }
+
+    /** As above; with {@code sync == false} the fsync is left to {@link #barrier()}. */
+    private void writeMeta(int idx, long chunkKey, byte state, int dataLength, int dataCrc, boolean sync) throws IOException {
         ByteBuffer buf = ByteBuffer.allocate(META_ENTRY_BYTES);
         buf.putLong(chunkKey);
         buf.put(state);
@@ -768,7 +843,7 @@ public class CuckooHashTable implements AutoCloseable {
         buf.putInt(crc32c(buf.array(), META_ENTRY_BYTES - 4));
         buf.flip();
         ioEngine.writeChunk(blobFile, BlobLayout.HEADER_SIZE + (long) idx * META_ENTRY_BYTES, buf);
-        ioEngine.force(blobFile);
+        if (sync) ioEngine.force(blobFile);
         if (stateMeta[idx] == ACTIVE) activeCount--;
         if (state == ACTIVE) activeCount++;
         chunkIdMeta[idx] = chunkKey;

@@ -190,4 +190,29 @@ class TableResidencyTest {
             assertArrayEquals(e.getValue(), out.toByteArray(), e.getKey());
         }
     }
+
+    /** A table with writes that no fsync has covered is not evicted (a reloaded table would not know it owes a barrier). */
+    @Test
+    void aTableWithUnforcedWritesStaysResidentUntilItsBarrier() throws Exception {
+        List<BlobFileEntity> blobs = new ArrayList<>();
+        for (int i = 0; i < 4; i++) blobs.add(rig.blobService.create(pool, 64, CHUNK));
+        CuckooHashTable dirty;
+        try (var h = rig.cache.acquire(blobs.get(0))) {
+            dirty = h.get();
+            dirty.insertPreservingKey(1L, java.nio.ByteBuffer.wrap(bytes(CHUNK, 1)));
+            assertTrue(dirty.hasUnforcedWrites());
+        }
+        for (int round = 0; round < 3; round++) {
+            for (int i = 1; i < 4; i++) rig.cache.acquire(blobs.get(i)).close();   // pressure: the limit is two
+        }
+        try (var h = rig.cache.acquireResident(blobs.get(0).getId())) {
+            assertNotNull(h, "still resident");
+            assertSame(dirty, h.get(), "the same table");
+        }
+        dirty.barrier();
+        for (int i = 1; i < 4; i++) rig.cache.acquire(blobs.get(i)).close();
+        for (int i = 1; i < 4; i++) rig.cache.acquire(blobs.get(i)).close();
+        assertNull(rig.cache.acquireResident(blobs.get(0).getId()), "evictable once it has been forced");
+        assertEquals(1, rig.cache.fillStats(blobs.get(0)).activeSlots(), "its statistics were remembered");
+    }
 }

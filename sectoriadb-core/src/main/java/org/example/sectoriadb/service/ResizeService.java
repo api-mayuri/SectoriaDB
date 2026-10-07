@@ -196,7 +196,7 @@ public class ResizeService {
             }
 
             newTable = new CuckooHashTable(
-                    new BlobFile(newId, newPath, newSize), new FileChannelStorageIOEngine(props.isFsync(), cache.metrics()),
+                    new BlobFile(newId, newPath, newSize), cache.newEngine(),
                     new XxHash64BytesHasher(), newNumBuckets, chunkSize, props.getMaxEvictions(), cache.metrics());
             int migrated = migrate(oldTable, newTable, activeNow);
             newTable.barrier();   // the new file is durable before the metastore names it

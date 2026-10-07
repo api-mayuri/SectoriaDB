@@ -41,6 +41,7 @@ public class HashTableCache {
     private final ConcurrentHashMap<String, CuckooHashTable.FillStats> evictedStats = new ConcurrentHashMap<>();
     private final StorageProperties props;
     private final StorageMetrics metrics;
+    private volatile java.util.function.Supplier<StorageIOEngine> engineFactory;
 
     public HashTableCache(StorageProperties props) {
         this(props, StorageMetrics.NOOP);
@@ -80,6 +81,17 @@ public class HashTableCache {
     /** Tables evicted by the LRU policy since the start of the process. */
     public long evictions() {
         return cache.evictions();
+    }
+
+    /** Test hook: the IO engine given to every table loaded or built from now on (default: a file channel engine). */
+    public void setEngineFactory(java.util.function.Supplier<StorageIOEngine> factory) {
+        this.engineFactory = factory;
+    }
+
+    /** A new IO engine for a table of this cache (also used by {@code ResizeService} for the table it builds). */
+    public StorageIOEngine newEngine() {
+        var f = engineFactory;
+        return f != null ? f.get() : new FileChannelStorageIOEngine(props.isFsync(), metrics);
     }
 
     /** Metrics receiver given to every table this cache creates (also used by ResizeService for its new tables). */
@@ -225,7 +237,7 @@ public class HashTableCache {
         log.info("Loading CuckooHashTable: blobId={} path={}", e.getId(), e.getFilePath());
         BlobFile bf = new BlobFile(e.getId(), Path.of(e.getFilePath()), e.getTotalBytes());
         CuckooHashTable table = new CuckooHashTable(
-                bf, new FileChannelStorageIOEngine(props.isFsync(), metrics), new XxHash64BytesHasher(),
+                bf, newEngine(), new XxHash64BytesHasher(),
                 e.getNumBuckets(), e.getChunkSize(), props.getMaxEvictions(), metrics);
         try {
             table.loadMetadataFromDisk();

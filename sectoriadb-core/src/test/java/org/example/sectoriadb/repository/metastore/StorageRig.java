@@ -43,6 +43,8 @@ public final class StorageRig implements AutoCloseable {
     public ChunkStore chunkStore;
     public HashTableCache cache;
     public SmallBlobCache smallCache;
+    /** IO engine of the cuckoo tables (null: the file channel engine); applied by every {@link #open()} / {@link #reopen()}. */
+    public java.util.function.Supplier<org.example.sectoriadb.service.StorageIOEngine> engineFactory;
 
     /** The table of a blob, pinned for the rest of the test (tests do not release it: nothing is evicted in a rig). */
     public org.example.sectoriadb.service.impl.CuckooHashTable table(org.example.sectoriadb.model.BlobFileEntity b) throws java.io.IOException {
@@ -84,6 +86,7 @@ public final class StorageRig implements AutoCloseable {
         manifests = new MetaStoreManifestRepository(stores);
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
         cache = new HashTableCache(props, metrics);
+        if (engineFactory != null) cache.setEngineFactory(engineFactory);
         smallCache = new SmallBlobCache(props);
         opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         blobService = new BlobService(blobs, cache, smallCache, props, opLog);

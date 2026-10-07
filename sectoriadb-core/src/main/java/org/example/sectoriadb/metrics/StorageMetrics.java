@@ -106,6 +106,12 @@ public interface StorageMetrics {
     /** An upload found the chunk in the pool-wide chunk index and verified it byte for byte: nothing was written. */
     default void poolDedupHit() { }
 
+    /**
+     * A durability barrier of a cuckoo table returned after {@code nanos}: {@code led} is true if this call performed the
+     * fsync (as the leader of a group), {@code coveredInserts} the inserts that fsync made durable.
+     */
+    default void cuckooBarrier(long nanos, boolean led, long coveredInserts) { }
+
     /** A cuckoo table was evicted from memory by the LRU policy of the table cache (doc 10, part B). */
     default void tableEvicted() { }
 
