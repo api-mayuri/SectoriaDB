@@ -184,6 +184,30 @@ public class HashTableCache {
         });
     }
 
+    /**
+     * Makes a table that the caller built itself (a resize migrates into one) the resident table of its blob, so the first
+     * reader of the new blob does not have to load it from disk. If the blob is resident already the given table is closed.
+     */
+    public void install(BlobFileEntity entity, CuckooHashTable table) {
+        boolean[] used = {false};
+        try (ResidentHandle<CuckooHashTable> ignored = cache.acquire(entity.getId(), id -> {
+            used[0] = true;
+            evictedStats.remove(id);
+            return table;
+        })) {
+            // pinned only to put it into the cache; the LRU policy takes it from here
+        } catch (IOException e) {
+            throw new IllegalStateException(e);   // the loader above cannot fail
+        }
+        if (!used[0]) {
+            try {
+                table.close();
+            } catch (IOException e) {
+                log.warn("Could not close the table of blob {}: {}", entity.getId(), e.getMessage());
+            }
+        }
+    }
+
     /** Removes a blob file from the cache (call before deleting or replacing it); the table closes when its last handle is released. */
     public void evict(String blobId) {
         evictedStats.remove(blobId);

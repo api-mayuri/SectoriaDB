@@ -17,6 +17,7 @@ import org.example.sectoriadb.repository.GcRepository.StrayBatchResult;
 import org.example.sectoriadb.repository.GcRepository.Tombstone;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.PoolRepository;
+import org.example.sectoriadb.service.BlobFileReaper;
 import org.example.sectoriadb.service.BlobService;
 import org.example.sectoriadb.service.ChunkStore;
 import org.example.sectoriadb.service.ResidentHandle;
@@ -75,6 +76,7 @@ public class GarbageCollector {
     private final SmallBlobCache smallCache;
     private final ChunkStore chunkStore;
     private final SmallBlobCompactor compactor;
+    private final BlobFileReaper reaper;
     private final StorageProperties props;
     private final StorageMetrics metrics;
 
@@ -89,7 +91,7 @@ public class GarbageCollector {
     public GarbageCollector(GcRepository gcRepo, ChunkRepository chunkRepo, ManifestRepository manifestRepo,
                             BlobFileRepository blobRepo, PoolRepository poolRepo, BlobService blobs, HashTableCache cache,
                             SmallBlobCache smallCache, ChunkStore chunkStore, SmallBlobCompactor compactor,
-                            StorageProperties props, StorageMetrics metrics) {
+                            BlobFileReaper reaper, StorageProperties props, StorageMetrics metrics) {
         this.gcRepo = gcRepo;
         this.chunkRepo = chunkRepo;
         this.manifestRepo = manifestRepo;
@@ -100,6 +102,7 @@ public class GarbageCollector {
         this.smallCache = smallCache;
         this.chunkStore = chunkStore;
         this.compactor = compactor;
+        this.reaper = reaper;
         this.props = props;
         this.metrics = metrics;
     }
@@ -122,7 +125,7 @@ public class GarbageCollector {
         ChunkRepository.Stats cs = chunkRepo.stats();
         long tombstones = manifestRepo.gcQueueSize();
         return new Status(cs.gcQueue(), gcRepo.dueChunks(null, cutoff, 100_000).size(), cs.orphans(), tombstones,
-                gcRepo.dueTombstones(cutoff, 100_000).size(), chunkStore.gate().inFlight(), compactor.pendingFiles(),
+                gcRepo.dueTombstones(cutoff, 100_000).size(), chunkStore.gate().inFlight(), compactor.pendingFiles() + reaper.pending(),
                 grace, lastRunEpochMillis, lastRun, lastSweep, lastCompaction);
     }
 
@@ -142,7 +145,9 @@ public class GarbageCollector {
             collectChunks(o.poolId(), cutoff, max, r);
             collectOrphans(o.poolId(), max, r);
             collectTombstones(o.poolId(), cutoff, max, r);
-            r.filesDeleted += compactor.releaseOldFiles(o.graceMillis() != null ? Long.MAX_VALUE : now);
+            long releaseAt = o.graceMillis() != null ? Long.MAX_VALUE : now;
+            r.filesDeleted += compactor.releaseOldFiles(releaseAt);
+            r.filesDeleted += reaper.releaseDue(releaseAt);
         } catch (RuntimeException e) {
             r.error("pass failed: " + e);
             metrics.gcError();
@@ -352,6 +357,7 @@ public class GarbageCollector {
                 if (cr.compacted()) rep.smallBlobsCompacted++;
             }
             compactor.deleteUnregisteredFiles(props.getGc().getGrace().toMillis());
+            reaper.deleteUnregistered(props.getGc().getGrace().toMillis());
         } catch (RuntimeException e) {
             rep.errors++;
             rep.messages.add("sweep failed: " + e);

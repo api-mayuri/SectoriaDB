@@ -314,7 +314,12 @@ public class BlobService {
                     return new Growth(Growth.Kind.USABLE_EXISTS, null);
                 }
             }
-            if (blobs.size() >= props.getPool().getMaxBlobs()) {
+            // A frozen blob (being resized) takes no chunks and is about to be replaced by one: it does not count against
+            // max-blobs, otherwise a pool at its limit (or a single-blob pool with max-blobs=1) could not take writes
+            // while one of its blobs is being resized. The pool exceeds the limit by the number of frozen blobs until
+            // the replacements are in.
+            long frozen = blobs.stream().filter(b -> cache.isFrozen(b.getId())).count();
+            if (blobs.size() - frozen >= props.getPool().getMaxBlobs()) {
                 return new Growth(Growth.Kind.AT_MAX, null);
             }
             log.warn("Pool '{}': none of its {} blob(s) accepts a chunk, adding one", pool.getName(), blobs.size());

@@ -465,6 +465,35 @@ public class CuckooHashTable implements AutoCloseable {
     }
 
     /**
+     * As {@link #forEachActiveChunk} but the lock is held for one batch of {@code batchSlots} slots at a time and the
+     * consumer runs with NO lock held (it may do slow IO, and readers, scrubs and a writer that queues up are not
+     * stalled for the whole table). The iteration is only consistent if nothing is inserted or freed meanwhile: a
+     * concurrent insert may move a chunk from a slot not visited yet to one already passed. {@code ResizeService} calls it
+     * on a blob it has frozen (no inserts, no frees); anybody else must hold the same guarantee.
+     */
+    public void forEachActiveChunkInBatches(int batchSlots, ChunkConsumer consumer) throws IOException {
+        int batch = Math.max(1, batchSlots);
+        for (int from = 0; from < totalSlots; from += batch) {
+            List<long[]> keys = new ArrayList<>();
+            List<byte[]> datas = new ArrayList<>();
+            lock.readLock().lock();
+            try {
+                for (int idx = from; idx < Math.min(totalSlots, from + batch); idx++) {
+                    if (stateMeta[idx] == ACTIVE) {
+                        byte[] data = readRaw(idx, lengthMeta[idx]);
+                        verify(idx, data);
+                        keys.add(new long[]{chunkIdMeta[idx]});
+                        datas.add(data);
+                    }
+                }
+            } finally {
+                lock.readLock().unlock();
+            }
+            for (int i = 0; i < keys.size(); i++) consumer.accept(keys.get(i)[0], ByteBuffer.wrap(datas.get(i)));
+        }
+    }
+
+    /**
      * Frees the slot that holds {@code chunkKey} (garbage collection, doc 10): ACTIVE becomes DELETED, the change is
      * forced to disk, the active counter drops (fill statistics and placement weights see the space at once). The data
      * bytes stay where they are and are overwritten by whatever chunk takes the slot next. DELETED slots are free for
@@ -580,6 +609,11 @@ public class CuckooHashTable implements AutoCloseable {
         } finally {
             lock.writeLock().unlock();
         }
+    }
+
+    /** Makes every write done so far durable (one fsync of the blob file). */
+    public void barrier() throws IOException {
+        ioEngine.force(blobFile);
     }
 
     /** Memory held by the in-memory slot metadata, in bytes (the weight of a resident table in the cache budget). */

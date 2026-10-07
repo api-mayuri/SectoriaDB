@@ -33,6 +33,7 @@ public final class StorageRig implements AutoCloseable {
     public final StorageProperties props = new StorageProperties();
     public final org.example.sectoriadb.RecordingMetrics metrics = new org.example.sectoriadb.RecordingMetrics();
     public ResizeService resizeService;
+    public org.example.sectoriadb.service.BlobFileReaper reaper;
     public MetaStore store;
     public org.example.sectoriadb.service.OperationLogService opLog;
     public PoolRepository pools;
@@ -90,19 +91,24 @@ public final class StorageRig implements AutoCloseable {
         chunks = new MetaStoreChunkRepository(stores);
         chunkStore = new ChunkStore(chunks, blobService, cache);
         files = new FileStorageService(manifests, blobService, cache, smallCache, chunkStore, opLog, props);
-        resizeService = new ResizeService(blobs, pools, cache, props, opLog);
+        reaper = new org.example.sectoriadb.service.BlobFileReaper(blobs, pools, cache);
+        resizeService = new ResizeService(blobs, pools, cache, props, opLog, reaper);
         verifier = new ObjectVerificationService(files);
         gcRepo = new MetaStoreGcRepository(stores);
         compactor = new org.example.sectoriadb.service.gc.SmallBlobCompactor(blobs, manifests, pools, gcRepo, blobService,
                 smallCache, chunkStore, props, metrics);
         gc = new org.example.sectoriadb.service.gc.GarbageCollector(gcRepo, chunks, manifests, blobs, pools, blobService,
-                cache, smallCache, chunkStore, compactor, props, metrics);
+                cache, smallCache, chunkStore, compactor, reaper, props, metrics);
     }
 
-    /** Closes everything and builds a new graph over the same files, as after a process restart. */
+    /**
+     * Closes everything and builds a new graph over the same files, as after a process restart (including the startup
+     * reconciliation of leftover blob files that the application performs).
+     */
     public void reopen() {
         close();
         open();
+        reaper.reconcileAtStartup();
     }
 
     public PoolEntity bucket(String name) {
