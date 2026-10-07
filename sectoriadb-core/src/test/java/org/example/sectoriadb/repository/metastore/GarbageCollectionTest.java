@@ -584,6 +584,18 @@ class GarbageCollectionTest {
     }
 
     @Test
+    void theLocationCacheForgetsFreedChunks() throws Exception {
+        put("a", content(4, 82));
+        put("b", content(3, 83));
+        get("a");
+        assertEquals(7, rig.chunkStore.cachedLocations(), "stage and reads fill the hint cache");
+        rig.files.deleteObject("bkt", "a");
+        gc0();
+        assertEquals(3, rig.chunkStore.cachedLocations(), "the hints of the freed chunks are dropped, the live ones stay");
+        assertArrayEquals(content(3, 83), get("b"));
+    }
+
+    @Test
     void statusReportsTheQueues() throws Exception {
         put("a", content(4, 81));
         rig.files.deleteObject("bkt", "a");

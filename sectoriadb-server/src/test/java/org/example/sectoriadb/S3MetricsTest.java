@@ -71,6 +71,7 @@ class S3MetricsTest {
     @LocalServerPort int port;
     @LocalManagementPort int mgmtPort;
     @Autowired PoolService poolService;
+    @Autowired org.example.sectoriadb.service.gc.GarbageCollector gc;
     @Autowired CredentialService credentials;
 
     final HttpClient http = HttpClient.newHttpClient();
@@ -286,6 +287,8 @@ class S3MetricsTest {
     @Order(3)
     void storageEngineAndStateMetricsAreExposed() throws Exception {
         System.gc();   // a GC pause histogram only exists after the first collection
+        // a deleted small object stays ACTIVE in its file until the collector marks it, after the grace period: ignore it here
+        gc.run(org.example.sectoriadb.service.gc.GcReports.Options.defaults().withGrace(0));
         String text = scrape();
         for (int i = 0; i < 50 && !text.contains("jvm_gc_pause_seconds_bucket"); i++) {
             Thread.sleep(100);
@@ -322,7 +325,25 @@ class S3MetricsTest {
         assertEquals(3, sample(text, "sectoriadb_cuckoo_slots_active"), "10 000 bytes = 3 chunks of 4096");
         assertEquals(2 * 256 * 4, sample(text, "sectoriadb_cuckoo_slots_capacity"));
         assertEquals(0, sample(text, "sectoriadb_cuckoo_slots_quarantined"));
-        assertTrue(sample(text, "sectoriadb_small_dead_bytes") > 0, "the deleted small object is dead space");
+        assertTrue(sample(text, "sectoriadb_small_dead_bytes") > 0, "the deleted small object is dead space (marked by the collector)");
+        // garbage collection series (doc 10)
+        assertTrue(sampleOr0(text, "sectoriadb_gc_run_seconds_count", "result=success") >= 1);
+        assertFalse(Double.isNaN(sample(text, "sectoriadb_gc_run_seconds_count", "result=failure")));
+        assertTrue(sampleOr0(text, "sectoriadb_gc_tombstones_collected_total") >= 1);
+        assertTrue(sampleOr0(text, "sectoriadb_gc_small_records_marked_total") >= 1);
+        assertTrue(sampleOr0(text, "sectoriadb_gc_last_run_timestamp_seconds") > 1.6e9);
+        for (String kind : new String[]{"queue", "orphan", "sweep"}) {
+            assertFalse(Double.isNaN(sample(text, "sectoriadb_gc_freed_chunks_total", "kind=" + kind)), kind);
+            assertFalse(Double.isNaN(sample(text, "sectoriadb_gc_freed_bytes_total", "kind=" + kind)), kind);
+        }
+        for (String reason : new String[]{"blob_busy", "uploads_in_flight", "not_eligible"}) {
+            assertFalse(Double.isNaN(sample(text, "sectoriadb_gc_deferred_total", "reason=" + reason)), reason);
+        }
+        for (String name : new String[]{"sectoriadb_gc_errors_total", "sectoriadb_gc_sweep_strays_found_total",
+                "sectoriadb_gc_sweep_slots_scanned_total", "sectoriadb_gc_compaction_reclaimed_bytes_total",
+                "sectoriadb_gc_upload_holds", "sectoriadb_gc_old_small_files_pending"}) {
+            assertFalse(Double.isNaN(sample(text, name)), name);
+        }
         assertTrue(sample(text, "sectoriadb_metastore_file_bytes") > 0);
         assertTrue(sample(text, "sectoriadb_metastore_pages") > 2);
         assertTrue(sample(text, "sectoriadb_metastore_last_txid") >= 3);

@@ -275,8 +275,37 @@ def server():
         desc="Pool-wide chunk index (chunks tree). refs / chunks is the average sharing factor; a chunk shared by many objects is stored once."), 8, 8)
     d.add(ts("Chunk collection queue and orphans", [
         pq("sectoriadb_chunks_gc_queue_length", "chunks with zero references (chunk_gc)", "A"),
-        pq("sectoriadb_chunks_orphans", "orphan copies (written twice by concurrent uploads)", "B")], "short", minv=0,
-        desc="Both grow until the garbage collector of stage 10 runs; nothing frees chunk slots yet."), 8, 8)
+        pq("sectoriadb_chunks_orphans", "orphan copies (written twice by concurrent uploads)", "B"),
+        pq("sectoriadb_gc_upload_holds", "uploads holding the gate", "C")], "short", minv=0,
+        desc="The collector frees chunk_gc entries older than the grace period and the orphan copies; the queue should stay near the delete rate times the grace period. Uploads holding the gate keep sweeps away from stray copies."), 8, 8)
+    d.row("Garbage collection")
+    d.add(ts("GC: slots freed", [
+        pq(f"sum by (kind) (rate(sectoriadb_gc_freed_chunks_total[{R}]))", "{{kind}} chunks/s")], "short", minv=0,
+        desc="Chunk slots given back: kind=queue (unreferenced chunks after the grace period), orphan (second copies written by racing uploads), sweep (stray copies of crashed or aborted uploads)."), 8, 8)
+    d.add(ts("GC: bytes freed", [
+        pq(f"sum by (kind) (rate(sectoriadb_gc_freed_bytes_total[{R}]))", "{{kind}} bytes/s", "A"),
+        pq(f"rate(sectoriadb_gc_compaction_reclaimed_bytes_total[{R}])", "small-object compaction bytes/s", "B")], "Bps", minv=0,
+        desc="Space returned: chunk bytes of freed slots, and file bytes reclaimed by small-object blob compactions."), 8, 8)
+    d.add(ts("GC pass duration", [
+        pq(q_hist("sectoriadb_gc_run_seconds", 0.5, by="result"), "p50 {{result}}", "A"),
+        pq(q_hist("sectoriadb_gc_run_seconds", 0.99, by="result"), "p99 {{result}}", "B"),
+        pq(f"increase(sectoriadb_gc_run_seconds_count[{R}])", "passes {{result}}", "C")], "s",
+        desc="One pass over the chunk queue, orphan records and tombstones. Each batch holds the single metastore writer slot while it frees slots."), 8, 8)
+    d.add(ts("GC: sweeps, strays, compactions", [
+        pq(f"increase(sectoriadb_gc_sweep_seconds_count[{R}])", "sweeps", "A"),
+        pq(f"increase(sectoriadb_gc_sweep_strays_found_total[{R}])", "stray copies found", "B"),
+        pq(f"rate(sectoriadb_gc_sweep_slots_scanned_total[{R}])", "slots scanned/s", "C"),
+        pq(f"increase(sectoriadb_gc_compaction_seconds_count[{R}])", "compactions {{result}}", "D")], "short", minv=0,
+        desc="A sweep walks the blobs of a pool for copies that no index entry points at; strays are freed under the upload gate."), 8, 8)
+    d.add(ts("GC: tombstones, deferred, errors", [
+        pq(f"increase(sectoriadb_gc_tombstones_collected_total[{R}])", "tombstones removed", "A"),
+        pq(f"increase(sectoriadb_gc_small_records_marked_total[{R}])", "small records marked DELETED", "B"),
+        pq(f"sum by (reason) (increase(sectoriadb_gc_deferred_total[{R}]))", "deferred: {{reason}}", "C"),
+        pq(f"increase(sectoriadb_gc_errors_total[{R}])", "errors", "D")], "short", minv=0,
+        desc="Deferred work (blob frozen by a resize, uploads in flight) is retried by the next pass. Errors are IO failures; any sustained value needs a look at the log."), 8, 8)
+    d.add(stat("Last GC pass", [pq("time() - sectoriadb_gc_last_run_timestamp_seconds", "age", instant=True)], "s",
+               thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 300}, {"color": "red", "value": 3600}],
+               desc="Seconds since the last finished collector pass. Large when sectoriadb.gc.enabled=false or the scheduler is stuck."), 4, 8)
     d.add(ts("Pool placement: dedup, fallbacks, growth", [
         pq(f"rate(sectoriadb_pool_dedup_hits_total[{R}])", "pool-wide dedup hits/s", "A"),
         pq(f"increase(sectoriadb_pool_placement_fallbacks_total[{R}])", "placement fallbacks (top choice refused)", "B"),

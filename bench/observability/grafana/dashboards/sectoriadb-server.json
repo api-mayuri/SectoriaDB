@@ -3000,7 +3000,7 @@
     {
       "type": "timeseries",
       "title": "Chunk collection queue and orphans",
-      "description": "Both grow until the garbage collector of stage 10 runs; nothing frees chunk slots yet.",
+      "description": "The collector frees chunk_gc entries older than the grace period and the orphan copies; the queue should stay near the delete rate times the grace period. Uploads holding the gate keep sweeps away from stray copies.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -3026,6 +3026,18 @@
           "expr": "sectoriadb_chunks_orphans",
           "legendFormat": "orphan copies (written twice by concurrent uploads)",
           "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sectoriadb_gc_upload_holds",
+          "legendFormat": "uploads holding the gate",
+          "refId": "C",
           "editorMode": "code",
           "range": true,
           "instant": false
@@ -3066,6 +3078,489 @@
         "w": 8,
         "x": 8,
         "y": 104
+      }
+    },
+    {
+      "id": 48,
+      "type": "row",
+      "title": "Garbage collection",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 112
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "GC: slots freed",
+      "description": "Chunk slots given back: kind=queue (unreferenced chunks after the grace period), orphan (second copies written by racing uploads), sweep (stray copies of crashed or aborted uploads).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (kind) (rate(sectoriadb_gc_freed_chunks_total[$__rate_interval]))",
+          "legendFormat": "{{kind}} chunks/s",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 49,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 113
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "GC: bytes freed",
+      "description": "Space returned: chunk bytes of freed slots, and file bytes reclaimed by small-object blob compactions.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (kind) (rate(sectoriadb_gc_freed_bytes_total[$__rate_interval]))",
+          "legendFormat": "{{kind}} bytes/s",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(sectoriadb_gc_compaction_reclaimed_bytes_total[$__rate_interval])",
+          "legendFormat": "small-object compaction bytes/s",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 50,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 113
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "GC pass duration",
+      "description": "One pass over the chunk queue, orphan records and tombstones. Each batch holds the single metastore writer slot while it frees slots.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le, result) (rate(sectoriadb_gc_run_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50 {{result}}",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, result) (rate(sectoriadb_gc_run_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99 {{result}}",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "increase(sectoriadb_gc_run_seconds_count[$__rate_interval])",
+          "legendFormat": "passes {{result}}",
+          "refId": "C",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 51,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 113
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "GC: sweeps, strays, compactions",
+      "description": "A sweep walks the blobs of a pool for copies that no index entry points at; strays are freed under the upload gate.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "increase(sectoriadb_gc_sweep_seconds_count[$__rate_interval])",
+          "legendFormat": "sweeps",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "increase(sectoriadb_gc_sweep_strays_found_total[$__rate_interval])",
+          "legendFormat": "stray copies found",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(sectoriadb_gc_sweep_slots_scanned_total[$__rate_interval])",
+          "legendFormat": "slots scanned/s",
+          "refId": "C",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "increase(sectoriadb_gc_compaction_seconds_count[$__rate_interval])",
+          "legendFormat": "compactions {{result}}",
+          "refId": "D",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 52,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 121
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "GC: tombstones, deferred, errors",
+      "description": "Deferred work (blob frozen by a resize, uploads in flight) is retried by the next pass. Errors are IO failures; any sustained value needs a look at the log.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "increase(sectoriadb_gc_tombstones_collected_total[$__rate_interval])",
+          "legendFormat": "tombstones removed",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "increase(sectoriadb_gc_small_records_marked_total[$__rate_interval])",
+          "legendFormat": "small records marked DELETED",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (reason) (increase(sectoriadb_gc_deferred_total[$__rate_interval]))",
+          "legendFormat": "deferred: {{reason}}",
+          "refId": "C",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "increase(sectoriadb_gc_errors_total[$__rate_interval])",
+          "legendFormat": "errors",
+          "refId": "D",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 53,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 121
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Last GC pass",
+      "description": "Seconds since the last finished collector pass. Large when sectoriadb.gc.enabled=false or the scheduler is stuck.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "time() - sectoriadb_gc_last_run_timestamp_seconds",
+          "legendFormat": "age",
+          "refId": "A",
+          "editorMode": "code",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 300
+              },
+              {
+                "color": "red",
+                "value": 3600
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "id": 54,
+      "gridPos": {
+        "h": 8,
+        "w": 4,
+        "x": 16,
+        "y": 121
       }
     },
     {
@@ -3154,12 +3649,12 @@
           "sort": "desc"
         }
       },
-      "id": 48,
+      "id": 55,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 104
+        "x": 0,
+        "y": 129
       }
     },
     {
@@ -3236,12 +3731,12 @@
           "sort": "desc"
         }
       },
-      "id": 49,
+      "id": 56,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
-        "y": 112
+        "x": 8,
+        "y": 129
       }
     },
     {
@@ -3306,12 +3801,12 @@
           "sort": "desc"
         }
       },
-      "id": 50,
+      "id": 57,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
-        "y": 112
+        "x": 16,
+        "y": 129
       }
     },
     {
@@ -3388,16 +3883,16 @@
           "sort": "desc"
         }
       },
-      "id": 51,
+      "id": 58,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 112
+        "x": 0,
+        "y": 137
       }
     },
     {
-      "id": 52,
+      "id": 59,
       "type": "row",
       "title": "Capacity",
       "collapsed": false,
@@ -3405,7 +3900,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 120
+        "y": 145
       },
       "panels": []
     },
@@ -3481,12 +3976,12 @@
           "sort": "desc"
         }
       },
-      "id": 53,
+      "id": 60,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 121
+        "y": 146
       }
     },
     {
@@ -3561,12 +4056,12 @@
           "sort": "desc"
         }
       },
-      "id": 54,
+      "id": 61,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 121
+        "y": 146
       }
     },
     {
@@ -3620,12 +4115,12 @@
           "sort": "desc"
         }
       },
-      "id": 55,
+      "id": 62,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 121
+        "y": 146
       }
     },
     {
@@ -3678,12 +4173,12 @@
           "sort": "desc"
         }
       },
-      "id": 56,
+      "id": 63,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 129
+        "y": 154
       }
     },
     {
@@ -3760,12 +4255,12 @@
           "sort": "desc"
         }
       },
-      "id": 57,
+      "id": 64,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 129
+        "y": 154
       }
     },
     {
@@ -3830,12 +4325,12 @@
           "sort": "desc"
         }
       },
-      "id": 58,
+      "id": 65,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 129
+        "y": 154
       }
     },
     {
@@ -3900,12 +4395,12 @@
           "sort": "desc"
         }
       },
-      "id": 59,
+      "id": 66,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 129
+        "y": 154
       }
     },
     {
@@ -3982,16 +4477,16 @@
           "sort": "desc"
         }
       },
-      "id": 60,
+      "id": 67,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 137
+        "y": 162
       }
     },
     {
-      "id": 61,
+      "id": 68,
       "type": "row",
       "title": "Host (node_exporter)",
       "collapsed": false,
@@ -3999,7 +4494,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 145
+        "y": 170
       },
       "panels": []
     },
@@ -4055,12 +4550,12 @@
           "sort": "desc"
         }
       },
-      "id": 62,
+      "id": 69,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 146
+        "y": 171
       }
     },
     {
@@ -4115,12 +4610,12 @@
           "sort": "desc"
         }
       },
-      "id": 63,
+      "id": 70,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 146
+        "y": 171
       }
     },
     {
@@ -4197,12 +4692,12 @@
           "sort": "desc"
         }
       },
-      "id": 64,
+      "id": 71,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 146
+        "y": 171
       }
     },
     {
@@ -4267,12 +4762,12 @@
           "sort": "desc"
         }
       },
-      "id": 65,
+      "id": 72,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 154
+        "y": 179
       }
     },
     {
@@ -4337,12 +4832,12 @@
           "sort": "desc"
         }
       },
-      "id": 66,
+      "id": 73,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 154
+        "y": 179
       }
     },
     {
@@ -4407,12 +4902,12 @@
           "sort": "desc"
         }
       },
-      "id": 67,
+      "id": 74,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 154
+        "y": 179
       }
     },
     {
@@ -4477,12 +4972,12 @@
           "sort": "desc"
         }
       },
-      "id": 68,
+      "id": 75,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 162
+        "y": 187
       }
     },
     {
@@ -4559,12 +5054,12 @@
           "sort": "desc"
         }
       },
-      "id": 69,
+      "id": 76,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 162
+        "y": 187
       }
     }
   ],
