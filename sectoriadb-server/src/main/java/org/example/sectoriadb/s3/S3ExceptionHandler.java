@@ -127,14 +127,25 @@ public class S3ExceptionHandler {
     }
 
     /**
-     * Handle IllegalStateException, typically from bucket deletion conflicts.
+     * IllegalStateException: BucketNotEmpty from a bucket deletion conflict; anything else is a server-side state
+     * problem (for example the metadata store refusing work after a failed commit, "must be reopened"), which is a
+     * 503, not a bucket conflict: reads of existing objects used to answer 409 BucketNotEmpty in that state.
      */
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<S3Error> handleIllegalState(IllegalStateException ex) {
         String msg = ex.getMessage() != null ? ex.getMessage() : "";
         String requestId = S3Support.requestId();
+        boolean notEmpty = msg.contains("BucketNotEmpty") || msg.contains("still has") || msg.contains("not empty");
+        if (!notEmpty) {
+            log.error("S3 request failed, the storage engine is in an unusable state [{}]: {}", requestId, msg, ex);
+            ObservabilityAttributes.noteErrorCode("ServiceUnavailable");
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .contentType(MediaType.APPLICATION_XML)
+                    .body(new S3Error("ServiceUnavailable",
+                            "The storage engine cannot serve this request right now. Please try again later.",
+                            null, requestId));
+        }
         log.debug("S3 conflict (IllegalStateException): {}", msg);
-
         String code = "BucketNotEmpty";
         ObservabilityAttributes.noteErrorCode(code);
         return ResponseEntity.status(HttpStatus.CONFLICT)

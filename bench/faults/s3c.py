@@ -9,6 +9,8 @@ FAULT_SECRET_KEY. Prints machine-readable lines; exit 0 unless the operation its
   s3c.py mpu-resume BUCKET KEY FILE PARTMIB UPLOADID      list parts, upload the missing ones, complete
   s3c.py mpu-complete-only BUCKET KEY FILE PARTMIB        whole multipart upload, prints "COMPLETING" before Complete
   s3c.py list-uploads BUCKET
+  s3c.py fill BUCKET COUNT SIZE_BYTES SHA_FILE   PUT COUNT random objects o1..oN until the first error;
+                                          prints "FILL ok N" or "FILL error K STATUS CODE MESSAGE"; SHA_FILE gets "key sha256"
 """
 import hashlib, os, sys
 import boto3
@@ -102,6 +104,21 @@ def main():
             print("COMPLETE error", err(e))
         except Exception as e:
             print("COMPLETE exception", type(e).__name__)
+    elif cmd == "fill":
+        bucket, count, size, shafile = a[0], int(a[1]), int(a[2]), a[3]
+        done = 0
+        with open(shafile, "w") as sf:
+            for i in range(1, count + 1):
+                data = os.urandom(size)
+                try:
+                    c.put_object(Bucket=bucket, Key=f"o{i}", Body=data)
+                except ClientError as e:
+                    print("FILL error", i, err(e), e.response["Error"].get("Message", "")[:160]); return
+                except Exception as e:
+                    print("FILL exception", i, type(e).__name__); return
+                sf.write(f"o{i} {hashlib.sha256(data).hexdigest()}\n"); sf.flush()
+                done = i
+        print("FILL ok", done)
     elif cmd == "list-uploads":
         r = c.list_multipart_uploads(Bucket=a[0])
         for u in r.get("Uploads", []):
