@@ -32,6 +32,7 @@ import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -593,6 +594,89 @@ class GarbageCollectionTest {
         gc0();
         assertEquals(3, rig.chunkStore.cachedLocations(), "the hints of the freed chunks are dropped, the live ones stay");
         assertArrayEquals(content(3, 83), get("b"));
+    }
+
+    /**
+     * Writers with heavily shared chunk content (overwrites, deletes, revivals) against collector passes that ignore the grace
+     * period and sweeps: every key is owned by one thread, so what it wrote last must read back, whatever the collector does
+     * to the garbage around it. A PUT that finds a chunk collected under it retries (503 at the S3 level).
+     */
+    @Test
+    void randomizedSharedContentWritersAgainstAGraceFreeCollectorAndSweeps() throws Exception {
+        rig.props.getGc().setSweepGateWait(Duration.ofSeconds(2));
+        byte[][] blocks = new byte[10][];
+        for (int i = 0; i < blocks.length; i++) blocks[i] = bytes(CHUNK, 5000 + i);
+        int threads = 4, rounds = 60;
+        java.util.concurrent.ExecutorService exec = java.util.concurrent.Executors.newFixedThreadPool(threads + 2);
+        AtomicBoolean stop = new AtomicBoolean();
+        var collector = exec.submit(() -> {
+            while (!stop.get()) gc0();
+            return null;
+        });
+        var sweeper = exec.submit(() -> {
+            while (!stop.get()) rig.gc.sweep(pool);
+            return null;
+        });
+        var retries = new java.util.concurrent.atomic.AtomicInteger();
+        List<java.util.concurrent.Future<java.util.Map<String, byte[]>>> writers = new ArrayList<>();
+        for (int t = 0; t < threads; t++) {
+            final int id = t;
+            writers.add(exec.submit(() -> {
+                Random rnd = new Random(id);
+                java.util.Map<String, byte[]> mine = new java.util.HashMap<>();
+                for (int i = 0; i < rounds; i++) {
+                    String key = "t" + id + "-k" + rnd.nextInt(6);
+                    int op = rnd.nextInt(10);
+                    if (op < 2 && mine.containsKey(key)) {
+                        rig.files.deleteObject("bkt", key);
+                        mine.remove(key);
+                        continue;
+                    }
+                    byte[] data;
+                    if (op == 2) {
+                        data = bytes(1 + rnd.nextInt(CHUNK - 1), rnd.nextLong());          // small object
+                    } else {
+                        ByteArrayOutputStream o = new ByteArrayOutputStream();
+                        int n = 2 + rnd.nextInt(4);
+                        for (int b = 0; b < n; b++) o.writeBytes(blocks[rnd.nextInt(blocks.length)]);
+                        data = o.toByteArray();
+                    }
+                    for (int attempt = 0; ; attempt++) {
+                        try {
+                            put(key, data);
+                            break;
+                        } catch (ChunkRepository.ChunkPlacementException collected) {
+                            retries.incrementAndGet();
+                            if (attempt > 100) throw collected;
+                        }
+                    }
+                    mine.put(key, data);
+                    assertArrayEquals(data, get(key), key + " reads back right after its PUT");
+                }
+                return mine;
+            }));
+        }
+        java.util.Map<String, byte[]> expected = new java.util.HashMap<>();
+        for (var w : writers) expected.putAll(w.get(120, TimeUnit.SECONDS));
+        stop.set(true);
+        collector.get(30, TimeUnit.SECONDS);
+        sweeper.get(30, TimeUnit.SECONDS);
+        exec.shutdown();
+
+        for (var e : expected.entrySet()) assertArrayEquals(e.getValue(), get(e.getKey()), e.getKey());
+        gc0();
+        rig.gc.sweep(pool);
+        long distinct = new HashSet<Long>() {{
+            for (String k : expected.keySet()) {
+                for (long c : rig.manifests.findCurrent("bkt", k).orElseThrow().chunkKeyArray()) add(c);
+            }
+        }}.size();
+        assertEquals(distinct, physical(), "after a final pass exactly the chunks of the live objects occupy slots");
+        assertEquals(distinct, stats().chunks());
+        assertEquals(0, stats().gcQueue());
+        assertEquals(0, stats().orphans());
+        for (var e : expected.entrySet()) assertArrayEquals(e.getValue(), get(e.getKey()), "after the last pass: " + e.getKey());
+        System.out.println("randomized GC test: live objects=" + expected.size() + " chunks=" + distinct + " retries(COLLECTED)=" + retries.get());
     }
 
     @Test
