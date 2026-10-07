@@ -347,6 +347,15 @@ public class SmallBlobCompactor {
      * compaction or of a swap whose process died before the old file was removed. After a restart no reader exists,
      * so nothing needs to be waited for.
      */
+    /** Paths of the blobs of ALL pools: a file registered by a pool sharing the directory is not garbage. */
+    private Set<Path> registeredPaths() {
+        Set<Path> registered = new HashSet<>();
+        for (BlobFileEntity b : blobRepo.findAll()) {
+            registered.add(Path.of(b.getFilePath()).toAbsolutePath().normalize());
+        }
+        return registered;
+    }
+
     public int deleteUnregisteredFiles(long minAgeMillis) {
         int n = 0;
         Set<Path> open = new HashSet<>();
@@ -354,10 +363,7 @@ public class SmallBlobCompactor {
         for (PendingFile f : pending) open.add(f.path().toAbsolutePath().normalize());
         long cutoff = System.currentTimeMillis() - Math.max(minAgeMillis, MIN_FILE_AGE_MILLIS);
         for (PoolEntity pool : poolRepo.findAll()) {
-            Set<Path> registered = new HashSet<>();
-            for (BlobFileEntity b : blobRepo.findByPoolId(pool.getId())) {
-                registered.add(Path.of(b.getFilePath()).toAbsolutePath().normalize());
-            }
+            Set<Path> registered = registeredPaths();
             Path dir = Path.of(pool.getBasePath());
             if (!Files.isDirectory(dir)) continue;
             try (DirectoryStream<Path> files = Files.newDirectoryStream(dir, "small_*.sob")) {
@@ -366,9 +372,7 @@ public class SmallBlobCompactor {
                     if (registered.contains(p) || open.contains(p)) continue;
                     if (Files.getLastModifiedTime(f).toMillis() > cutoff) continue;
                     // re-check the registry: a blob registered after the listing must survive
-                    boolean nowRegistered = blobRepo.findByPoolId(pool.getId()).stream()
-                            .anyMatch(b -> Path.of(b.getFilePath()).toAbsolutePath().normalize().equals(p));
-                    if (nowRegistered) continue;
+                    if (registeredPaths().contains(p)) continue;
                     if (Files.deleteIfExists(f)) {
                         n++;
                         log.info("Deleted unreferenced small-object file {}", f);

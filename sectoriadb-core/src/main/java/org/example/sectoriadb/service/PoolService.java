@@ -48,6 +48,7 @@ public class PoolService {
             throw new IllegalArgumentException("Pool already exists: " + name);
         }
         Path dir = Path.of(basePath).toAbsolutePath();
+        rejectSharedPath(dir);
         Files.createDirectories(dir);
 
         PoolEntity pool = new PoolEntity(UUID.randomUUID().toString(), name, dir.toString(), Instant.now());
@@ -58,6 +59,18 @@ public class PoolService {
                 System.currentTimeMillis() - t0);
         log.info("Pool created: id={} name={} path={}", pool.getId(), name, dir);
         return pool;
+    }
+
+    /** A pool's directory must not equal or nest into another pool's directory (the cleaners work per directory). */
+    private void rejectSharedPath(Path dir) {
+        Path d = dir.toAbsolutePath().normalize();
+        for (PoolEntity other : poolRepo.findAll()) {
+            Path o = Path.of(other.getBasePath()).toAbsolutePath().normalize();
+            if (d.startsWith(o) || o.startsWith(d)) {
+                throw new IllegalArgumentException("Base path " + d + " overlaps the base path " + o
+                        + " of pool '" + other.getName() + "'");
+            }
+        }
     }
 
     public List<PoolEntity> listAll() {

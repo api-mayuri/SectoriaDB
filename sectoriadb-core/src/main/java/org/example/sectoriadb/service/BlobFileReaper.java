@@ -113,7 +113,7 @@ public class BlobFileReaper {
         for (Pending f : pending) keep.add(f.path());
         long cutoff = startup ? Long.MAX_VALUE : System.currentTimeMillis() - Math.max(minAgeMillis, MIN_FILE_AGE_MILLIS);
         for (PoolEntity pool : poolRepo.findAll()) {
-            Set<String> registered = registeredNames(pool);
+            Set<String> registered = registeredNames();
             Path dir = Path.of(pool.getBasePath());
             if (!Files.isDirectory(dir)) continue;
             try (DirectoryStream<Path> files = Files.newDirectoryStream(dir, "blob_*.raw")) {
@@ -123,7 +123,7 @@ public class BlobFileReaper {
                     if (!startup && Files.getLastModifiedTime(f).toMillis() > cutoff) continue;
                     if (isResident(p)) continue;
                     // re-check the registry: a blob registered after the listing must survive
-                    if (registeredNames(pool).contains(f.getFileName().toString()) || building.contains(p)) continue;
+                    if (registeredNames().contains(f.getFileName().toString()) || building.contains(p)) continue;
                     if (Files.deleteIfExists(f)) {
                         n++;
                         log.warn("Deleted the unregistered blob file {} (leftover of a resize that did not finish)", f);
@@ -137,12 +137,13 @@ public class BlobFileReaper {
     }
 
     /**
-     * File names of the pool's registered cuckoo blobs. Names, not paths: if the data directory was moved or mounted
+     * File names of the registered cuckoo blobs of ALL pools: pools may (by operator mistake or legacy data) share a
+     * directory, and a file registered by another pool must never be taken for garbage. Names, not paths: if the data directory was moved or mounted
      * elsewhere the recorded absolute paths are stale, and a file must never be taken for garbage because of that.
      */
-    private Set<String> registeredNames(PoolEntity pool) {
+    private Set<String> registeredNames() {
         Set<String> registered = new HashSet<>();
-        for (BlobFileEntity b : blobRepo.findByPoolId(pool.getId())) {
+        for (BlobFileEntity b : blobRepo.findAll()) {
             if (b.getKind() == BlobKind.CUCKOO) {
                 registered.add(b.getFileName());
                 registered.add(Path.of(b.getFilePath()).getFileName().toString());
