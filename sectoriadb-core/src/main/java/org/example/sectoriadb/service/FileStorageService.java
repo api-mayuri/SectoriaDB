@@ -91,8 +91,7 @@ public class FileStorageService {
             in.transferTo(java.io.OutputStream.nullOutputStream());
         }
         ManifestEntity entity = stage(filePath, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
-        redirectStagedChunks(entity);
-        manifestRepo.saveNew(entity);
+        withRedirects(entity, () -> manifestRepo.saveNew(entity));
         logStored(entity);
         return entity;
     }
@@ -381,8 +380,7 @@ public class FileStorageService {
      * @throws org.example.sectoriadb.repository.ManifestRepository.PoolNotFoundException if the bucket vanished
      */
     public ManifestEntity commitObject(ManifestEntity entity) {
-        redirectStagedChunks(entity);
-        ManifestRepository.CommitResult r = manifestRepo.commitObject(entity);
+        ManifestRepository.CommitResult r = withRedirects(entity, () -> manifestRepo.commitObject(entity));
         r.superseded().ifPresent(old -> releaseData(old, "PUT"));
         logStored(r.current());
         return r.current();
@@ -392,6 +390,27 @@ public class FileStorageService {
      * A resize may have replaced a blob between the moment this upload placed chunks into it and now: the data was
      * migrated with the rest of the blob, so the placement is re-pointed at the replacement.
      */
+    private <T> T withRedirects(ManifestEntity entity, java.util.function.Supplier<T> commit) {
+        for (int attempt = 0; ; attempt++) {
+            redirectStagedChunks(entity);
+            try {
+                return commit.get();
+            } catch (org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException e) {
+                // BLOB_GONE right after a resize committed: the replacement is registered a moment later, look again
+                if (e.reason() != org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException.Reason.BLOB_GONE
+                        || attempt >= 50) {
+                    throw e;
+                }
+                try {
+                    Thread.sleep(20);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw e;
+                }
+            }
+        }
+    }
+
     private void redirectStagedChunks(ManifestEntity entity) {
         List<PlacedChunk> staged = entity.getStagedChunks();
         if (staged.isEmpty()) return;

@@ -214,8 +214,12 @@ public class ChunkStore {
             List<Candidate> candidates = new ArrayList<>();
             for (BlobFileEntity b : pb) {
                 if (cache.isFrozen(b.getId())) continue;
-                byId.put(b.getId(), b);
-                candidates.add(Candidate.of(b.getId(), blobs.placementWeight(b)));
+                try {
+                    candidates.add(Candidate.of(b.getId(), blobs.placementWeight(b)));
+                    byId.put(b.getId(), b);
+                } catch (BlobService.BlobGoneException replacedMeanwhile) {
+                    // a resize replaced it after the listing: it is not a candidate any more
+                }
             }
             List<Candidate> ranked = RendezvousPlacement.rank(key, candidates);
             boolean first = true;

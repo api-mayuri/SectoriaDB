@@ -108,7 +108,7 @@ final class Chunks {
             if (found.isPresent()) {
                 ChunkEntry e = found.get();
                 if (p != null && (p.dataLength() != e.dataLength() || p.crc32c() != e.crc32c())) {
-                    throw new ChunkRepository.ChunkPlacementException("Chunk 0x" + Long.toHexString(k) + " of pool "
+                    throw new ChunkRepository.ChunkPlacementException(ChunkRepository.ChunkPlacementException.Reason.COLLISION, "Chunk 0x" + Long.toHexString(k) + " of pool "
                             + poolId + " is indexed with length " + e.dataLength() + "/crc " + e.crc32c()
                             + " but this upload wrote length " + p.dataLength() + "/crc " + p.crc32c()
                             + " under the same key (hash collision between uncommitted uploads)");
@@ -122,16 +122,16 @@ final class Chunks {
                 }
             } else {
                 if (p == null) {
-                    throw new ChunkRepository.ChunkPlacementException("Chunk 0x" + Long.toHexString(k) + " of pool "
+                    throw new ChunkRepository.ChunkPlacementException(ChunkRepository.ChunkPlacementException.Reason.UNKNOWN_CHUNK, "Chunk 0x" + Long.toHexString(k) + " of pool "
                             + poolId + " is not in the chunk index and the commit carries no placement for it");
                 }
                 if (p.indexed()) {
-                    throw new ChunkRepository.ChunkPlacementException("Chunk 0x" + Long.toHexString(k) + " of pool "
+                    throw new ChunkRepository.ChunkPlacementException(ChunkRepository.ChunkPlacementException.Reason.COLLECTED, "Chunk 0x" + Long.toHexString(k) + " of pool "
                             + poolId + " was in the chunk index when the upload started but is gone: it was collected"
                             + " meanwhile, the upload must be retried");
                 }
                 if (!tx.tree(Trees.BLOBS).containsKey(Trees.idKey(p.blobId()))) {
-                    throw new ChunkRepository.ChunkPlacementException("Blob " + p.blobId() + " that received chunk 0x"
+                    throw new ChunkRepository.ChunkPlacementException(ChunkRepository.ChunkPlacementException.Reason.BLOB_GONE, "Blob " + p.blobId() + " that received chunk 0x"
                             + Long.toHexString(k) + " no longer exists (replaced or deleted during the upload)");
                 }
                 chunks.put(ck, ChunkCodec.encode(new ChunkEntry(p.blobId(), p.dataLength(), p.crc32c(), n)));

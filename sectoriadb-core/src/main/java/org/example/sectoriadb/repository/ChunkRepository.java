@@ -59,8 +59,27 @@ public interface ChunkRepository {
      * written; the upload can be retried (it is not a data error).
      */
     class ChunkPlacementException extends IllegalStateException {
-        public ChunkPlacementException(String message) {
+
+        public enum Reason {
+            /** the chunk is not in the index and the commit carries no placement for it */
+            UNKNOWN_CHUNK,
+            /** the upload deduplicated against an entry that has been collected since */
+            COLLECTED,
+            /** the blob that received the chunk was replaced by a resize or deleted: re-pointing may fix it */
+            BLOB_GONE,
+            /** the same key already names a chunk with another length / CRC */
+            COLLISION
+        }
+
+        private final Reason reason;
+
+        public ChunkPlacementException(Reason reason, String message) {
             super(message);
+            this.reason = reason;
+        }
+
+        public Reason reason() {
+            return reason;
         }
     }
 }

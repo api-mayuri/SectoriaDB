@@ -16,6 +16,7 @@ import org.example.sectoriadb.service.HashTableCache;
 import org.example.sectoriadb.service.ObjectVerificationService;
 import org.example.sectoriadb.service.OperationLogService;
 import org.example.sectoriadb.service.PoolService;
+import org.example.sectoriadb.service.ResizeService;
 import org.example.sectoriadb.service.SmallBlobCache;
 
 import java.io.IOException;
@@ -30,7 +31,10 @@ public final class StorageRig implements AutoCloseable {
 
     public final Path root;
     public final StorageProperties props = new StorageProperties();
+    public final org.example.sectoriadb.RecordingMetrics metrics = new org.example.sectoriadb.RecordingMetrics();
+    public ResizeService resizeService;
     public MetaStore store;
+    public org.example.sectoriadb.service.OperationLogService opLog;
     public PoolRepository pools;
     public BlobFileRepository blobs;
     public ManifestRepository manifests;
@@ -65,14 +69,15 @@ public final class StorageRig implements AutoCloseable {
         blobs = new MetaStoreBlobFileRepository(stores);
         manifests = new MetaStoreManifestRepository(stores);
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
-        cache = new HashTableCache(props);
+        cache = new HashTableCache(props, metrics);
         smallCache = new SmallBlobCache(props);
-        OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
+        opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         blobService = new BlobService(blobs, cache, smallCache, props, opLog);
         poolService = new PoolService(pools, blobs, opLog, props, cache, smallCache);
         chunks = new MetaStoreChunkRepository(stores);
         chunkStore = new ChunkStore(chunks, blobService, cache);
         files = new FileStorageService(manifests, blobService, cache, smallCache, chunkStore, opLog, props);
+        resizeService = new ResizeService(blobs, pools, cache, props, opLog);
         verifier = new ObjectVerificationService(files);
     }
 

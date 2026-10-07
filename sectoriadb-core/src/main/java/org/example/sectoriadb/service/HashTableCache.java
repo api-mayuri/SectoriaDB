@@ -103,6 +103,11 @@ public class HashTableCache {
         redirects.put(oldBlobId, newBlobId);
     }
 
+    /** True once a resize has replaced the blob (it must never be loaded again: its file is about to disappear). */
+    public boolean isReplaced(String blobId) {
+        return redirects.containsKey(blobId);
+    }
+
     /** Follows the replacement chain of a blob id (the id itself if it was never replaced). */
     public String resolveRedirect(String blobId) {
         String id = blobId;
@@ -119,6 +124,9 @@ public class HashTableCache {
         if (entity.getKind() != org.example.sectoriadb.model.BlobKind.CUCKOO) {
             throw new IllegalArgumentException("Blob " + entity.getId() + " is a " + entity.getKind()
                     + " blob, not a cuckoo table");
+        }
+        if (isReplaced(entity.getId())) {
+            throw new BlobService.BlobGoneException(entity.getId());
         }
         try {
             return cache.computeIfAbsent(entity.getId(), id -> {

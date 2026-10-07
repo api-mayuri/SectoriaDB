@@ -188,18 +188,26 @@ public class BlobService {
 
     /** The cuckoo blobs of the pool (small-object blobs are not part of chunk placement). */
     public List<BlobFileEntity> cuckooBlobsOf(PoolEntity pool) {
-        return blobRepo.findByPoolId(pool.getId()).stream().filter(b -> b.getKind() == BlobKind.CUCKOO).toList();
+        return blobRepo.findByPoolId(pool.getId()).stream()
+                .filter(b -> b.getKind() == BlobKind.CUCKOO && !cache.isReplaced(b.getId())).toList();
     }
 
     public PoolFill poolFill(PoolEntity pool) throws IOException {
         long used = 0, total = 0;
         List<BlobFileEntity> blobs = cuckooBlobsOf(pool);
+        int counted = 0;
         for (BlobFileEntity b : blobs) {
-            CuckooHashTable.FillStats st = cache.get(b).getFillStats();
+            CuckooHashTable.FillStats st;
+            try {
+                st = cache.get(b).getFillStats();
+            } catch (BlobGoneException replacedMeanwhile) {
+                continue;   // a resize replaced it after the listing; the next look sees the replacement
+            }
             used += st.activeSlots() + st.quarantinedSlots();
             total += st.totalSlots();
+            counted++;
         }
-        return new PoolFill(blobs.size(), used, total);
+        return new PoolFill(counted, used, total);
     }
 
     /**
@@ -257,7 +265,12 @@ public class BlobService {
             List<BlobFileEntity> blobs = cuckooBlobsOf(pool);
             for (BlobFileEntity b : blobs) {
                 if (refused.contains(b.getId()) || cache.isFrozen(b.getId())) continue;
-                CuckooHashTable.FillStats st = cache.get(b).getFillStats();
+                CuckooHashTable.FillStats st;
+                try {
+                    st = cache.get(b).getFillStats();
+                } catch (BlobGoneException replacedMeanwhile) {
+                    continue;
+                }
                 if (RendezvousPlacement.weightOf(st.totalSlots(), st.activeSlots() + st.quarantinedSlots(),
                         b.getChunkSize()) > 0) {
                     return new Growth(Growth.Kind.USABLE_EXISTS, null);

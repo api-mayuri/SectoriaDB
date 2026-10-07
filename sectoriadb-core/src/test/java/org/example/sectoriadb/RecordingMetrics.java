@@ -23,6 +23,9 @@ public class RecordingMetrics implements StorageMetrics {
     public final AtomicLong rekeys = new AtomicLong();
     public final AtomicLong cuckooLockWaits = new AtomicLong();
     public final AtomicLong smallLockWaits = new AtomicLong();
+    public final AtomicLong placementFallbacks = new AtomicLong();
+    public final AtomicLong poolDedupHits = new AtomicLong();
+    public final AtomicLong poolGrown = new AtomicLong();
     public final AtomicLong smallForces = new AtomicLong();
     public final AtomicLong smallForcedRecords = new AtomicLong();
     public final AtomicLong metaWriterLockWaits = new AtomicLong();
@@ -55,6 +58,9 @@ public class RecordingMetrics implements StorageMetrics {
     @Override public void cuckooLockWait(long nanos) { cuckooLockWaits.incrementAndGet(); }
     @Override public void crcFailure(CrcKind kind) { inc(crcFailures, kind, 1); }
     @Override public void smallAppendLockWait(long nanos) { smallLockWaits.incrementAndGet(); }
+    @Override public void placementFallback() { placementFallbacks.incrementAndGet(); }
+    @Override public void poolDedupHit() { poolDedupHits.incrementAndGet(); }
+    @Override public void poolGrown() { poolGrown.incrementAndGet(); }
     @Override public void smallGroupFsync(int records) { smallForces.incrementAndGet(); smallForcedRecords.addAndGet(records); }
     @Override public void metaWriterLockWait(long nanos) { metaWriterLockWaits.incrementAndGet(); }
     @Override public void metaCommit(long nanos) { metaCommits.incrementAndGet(); }
