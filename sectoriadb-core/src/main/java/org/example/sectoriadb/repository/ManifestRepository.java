@@ -22,6 +22,14 @@ public interface ManifestRepository {
      */
     ManifestEntity save(ManifestEntity entity);
 
+    /**
+     * Creates a manifest that is not an S3 object (shell {@code store}) in one transaction. A CHUNKED manifest adds
+     * its chunk references like {@link #commitObject} does; the manifest must not exist yet.
+     *
+     * @throws ChunkRepository.ChunkPlacementException if a chunk of the manifest cannot be indexed
+     */
+    ManifestEntity saveNew(ManifestEntity entity);
+
     /** The manifest with resolved blob references; also finds superseded / deleted manifests until they are collected. */
     Optional<ManifestEntity> findById(String id);
 
@@ -38,11 +46,14 @@ public interface ManifestRepository {
     boolean existsCurrent(String bucketName, String objectKey);
 
     /**
-     * Atomic object commit. In one transaction: saves the complete manifest, makes {@code objects[(bucket, key)]}
-     * point at it, and retires the version it replaces (marked deleted and put on the GC queue). Two concurrent
-     * commits of one key are serialized, the last one wins, and the loser's manifest ends up on the GC queue.
+     * Atomic object commit. In one transaction: adds the chunk references of a CHUNKED manifest (creating index
+     * entries for the chunks the upload wrote, {@link ManifestEntity#getStagedChunks()}), saves the complete manifest,
+     * makes {@code objects[(bucket, key)]} point at it, and retires the version it replaces (marked deleted, its chunk
+     * references released, put on the GC queue). Two concurrent commits of one key are serialized, the last one wins,
+     * and the loser's manifest ends up on the GC queue.
      *
      * @throws PoolNotFoundException if the pool was deleted meanwhile
+     * @throws ChunkRepository.ChunkPlacementException if a chunk of the manifest cannot be indexed; nothing is written
      */
     CommitResult commitObject(ManifestEntity entity);
 

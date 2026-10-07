@@ -5,7 +5,7 @@ import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.WriteTxn;
 import org.example.sectoriadb.model.BlobFileEntity;
-import org.example.sectoriadb.model.ManifestEntity;
+import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.repository.BlobFileRepository;
 import org.springframework.stereotype.Repository;
 
@@ -90,12 +90,17 @@ public class MetaStoreBlobFileRepository implements BlobFileRepository {
             Optional<BlobFileEntity> blob = Trees.blob(tx, blobId, false);
             if (blob.isEmpty()) return;
             long live = 0;
+            if (blob.get().getKind() == BlobKind.CUCKOO) {
+                // chunks referenced by at least one live manifest (zero-reference entries are garbage and go with the blob)
+                live = Chunks.referencedChunksOfBlob(tx, blob.get().getPoolId(), blobId);
+            }
             for (String mid : Trees.manifestIdsOfBlob(tx, blobId)) {
                 if (Trees.manifest(tx, mid).map(m -> !m.isDeleted()).orElse(false)) live++;
             }
             if (live > 0) throw new BlobInUseException(blobId, live);
             Trees.deleteBlobRecord(tx, blob.get());
             Trees.purgeManifests(tx, List.of(blobId), null);
+            if (blob.get().getKind() == BlobKind.CUCKOO) Chunks.purgeBlob(tx, blob.get().getPoolId(), blobId);
             tx.commit();
         }
     }
@@ -107,12 +112,9 @@ public class MetaStoreBlobFileRepository implements BlobFileRepository {
                     .orElseThrow(() -> new IllegalStateException("Blob not found: " + oldBlobId));
             Trees.putBlob(tx, replacement);
             int moved = 0;
-            for (String mid : Trees.manifestIdsOfBlob(tx, oldBlobId)) {
-                ManifestEntity m = Trees.manifest(tx, mid).orElse(null);
-                if (m == null || !oldBlobId.equals(m.getBlobFileId())) continue;
-                m.setBlobFileId(replacement.getId());
-                Trees.putManifest(tx, m);   // moves its manifests_by_blob entry from the old blob to the new one
-                moved++;
+            if (old.getKind() == BlobKind.CUCKOO) {
+                // chunks_by_blob: every chunk index entry (and orphan record) of the old blob now points at the new one
+                moved = Chunks.moveBlob(tx, old.getPoolId(), oldBlobId, replacement.getId());
             }
             Trees.deleteBlobRecord(tx, old);
             tx.commit();

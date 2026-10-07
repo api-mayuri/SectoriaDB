@@ -17,7 +17,6 @@ import java.util.Map;
 public class ManifestEntity {
 
     private String id;
-    private String blobFileId;       // stored in JSON
     private String sourceFileName;
     private int chunkSize;
     private int totalChunks;
@@ -36,7 +35,7 @@ public class ManifestEntity {
 
     /** Absent in old manifests: CHUNKED. */
     private StorageKind storageKind = StorageKind.CHUNKED;
-    /** Pool the object lives in (needed for EMPTY objects, which reference no blob). */
+    /** Pool the object lives in: scope of its chunk keys in the chunk index, and the home of EMPTY objects. */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String poolId;
     // SMALL objects: one record of a small-object blob
@@ -81,9 +80,12 @@ public class ManifestEntity {
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String contentLanguage;
 
-    /** Resolved reference — not stored in JSON, populated by the repository. */
+    /**
+     * Chunks written by the upload that produced this manifest, handed to the commit transaction (which creates or
+     * references their index entries). Never stored; empty for manifests read back from the metastore.
+     */
     @JsonIgnore
-    private BlobFileEntity blobFile;
+    private List<PlacedChunk> stagedChunks = List.of();
 
     /** Resolved small-object blob (SMALL manifests only) — not stored in JSON. */
     @JsonIgnore
@@ -91,9 +93,20 @@ public class ManifestEntity {
 
     public ManifestEntity() {}
 
-    /** The blob file physically holding the bytes (cuckoo or small-object), or null for EMPTY objects. */
+    /**
+     * The small-object blob holding the bytes of a SMALL object, null otherwise. Chunks of CHUNKED objects are not
+     * tied to one blob: they are located through the chunk index (pool, chunk key) -> blob.
+     */
     @JsonIgnore
-    public BlobFileEntity getPhysicalBlob() { return blobFile != null ? blobFile : smallBlob; }
+    public BlobFileEntity getPhysicalBlob() { return smallBlob; }
+
+    @JsonIgnore
+    public List<PlacedChunk> getStagedChunks() { return stagedChunks; }
+
+    @JsonIgnore
+    public void setStagedChunks(List<PlacedChunk> stagedChunks) {
+        this.stagedChunks = stagedChunks == null ? List.of() : stagedChunks;
+    }
 
     // ── Chunk-key helpers ────────────────────────────────────────────────────
 
@@ -121,15 +134,6 @@ public class ManifestEntity {
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
-
-    public String getBlobFileId() { return blobFileId; }
-    public void setBlobFileId(String blobFileId) { this.blobFileId = blobFileId; }
-
-    public BlobFileEntity getBlobFile() { return blobFile; }
-    public void setBlobFile(BlobFileEntity blobFile) {
-        this.blobFile = blobFile;
-        if (blobFile != null) this.blobFileId = blobFile.getId();
-    }
 
     public StorageKind getStorageKind() { return storageKind; }
     public void setStorageKind(StorageKind k) { this.storageKind = k != null ? k : StorageKind.CHUNKED; }

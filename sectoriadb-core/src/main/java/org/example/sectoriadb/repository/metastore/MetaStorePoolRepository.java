@@ -109,6 +109,7 @@ public class MetaStorePoolRepository implements PoolRepository {
                 });
             }
             Trees.purgeManifests(tx, blobIds, poolId);
+            Chunks.purgePool(tx, poolId, blobIds);
             Trees.deletePoolRecord(tx, pool);
             tx.commit();
             return removed;

@@ -83,7 +83,8 @@ class SmallObjectStorageTest {
         smallCache = new SmallBlobCache(props);
         OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         blobService = new BlobService(blobRepo, cache, smallCache, props, opLog);
-        files = new FileStorageService(manifestRepo, blobService, cache, smallCache, opLog, props);
+        var chunkStore = new org.example.sectoriadb.service.ChunkStore(new org.example.sectoriadb.repository.metastore.MetaStoreChunkRepository(stores), blobService, cache);
+        files = new FileStorageService(manifestRepo, blobService, cache, smallCache, chunkStore, opLog, props);
     }
 
     private static byte[] bytes(int n) {
@@ -120,12 +121,10 @@ class SmallObjectStorageTest {
     @Test
     void emptyObjectReferencesNoBlobAndSmallOnesNeverTouchCuckooTables() throws Exception {
         ManifestEntity empty = put(new byte[0]);
-        assertNull(empty.getBlobFileId());
         assertNull(empty.getSmallBlobId());
         assertEquals(0, blobRepo.findByPoolId(pool.getId()).size(), "no blob needed for empty objects");
 
         ManifestEntity small = put(bytes(100));
-        assertNull(small.getBlobFileId());
         assertNotNull(small.getSmallBlobId());
         assertEquals(1, small.getTotalBytes() / 100);
         var blobs = blobRepo.findByPoolId(pool.getId());
@@ -231,7 +230,7 @@ class SmallObjectStorageTest {
         // a record that carries only the fields every manifest has: the optional ones default (storage kind CHUNKED)
         ManifestEntity bare = new ManifestEntity();
         bare.setId("x");
-        bare.setBlobFileId("b");
+        bare.setPoolId("p");
         bare.setChunkKeys(java.util.List.of(1L));
         bare.setTotalChunks(1);
         bare.setTotalBytes(10);

@@ -8,6 +8,7 @@ import org.example.sectoriadb.metastore.WriteTxn;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
+import org.example.sectoriadb.model.StorageKind;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -38,6 +39,8 @@ final class Trees {
     static final String OBJECTS = "objects";
     /** (blobId, manifestId) -> empty */
     static final String MANIFESTS_BY_BLOB = "manifests_by_blob";
+    /** (poolId, manifestId) -> empty: manifests that are not S3 objects (shell-stored files), so deleting a pool finds them */
+    static final String MANIFESTS_BY_POOL = "manifests_by_pool";
     /** (deletingTxId u64, manifestId) -> empty: superseded / deleted manifests waiting for the garbage collector */
     static final String DELETED_MANIFESTS = "deleted_manifests";
 
@@ -162,16 +165,15 @@ final class Trees {
         return tx.tree(MANIFESTS).get(idKey(id)).map(ManifestCodec::decode);
     }
 
-    /** Fills in {@code blobFile} / {@code smallBlob} (and their pools) from the blobs tree. */
+    /** Fills in {@code smallBlob} (and its pool) from the blobs tree. */
     static ManifestEntity resolve(ReadTxn tx, ManifestEntity m) {
-        if (m.getBlobFileId() != null) blob(tx, m.getBlobFileId(), true).ifPresent(m::setBlobFile);
         if (m.getSmallBlobId() != null) blob(tx, m.getSmallBlobId(), true).ifPresent(m::setSmallBlob);
         return m;
     }
 
+    /** Blobs a manifest is indexed under in {@code manifests_by_blob}: only the small-object blob of a SMALL object. */
     private static Set<String> blobsOf(ManifestEntity m) {
-        Set<String> s = new HashSet<>(2);
-        if (m.getBlobFileId() != null) s.add(m.getBlobFileId());
+        Set<String> s = new HashSet<>(1);
         if (m.getSmallBlobId() != null) s.add(m.getSmallBlobId());
         return s;
     }
@@ -188,10 +190,16 @@ final class Trees {
         for (String b : after) {
             if (!before.contains(b)) byBlob.put(pairKey(b, m.getId()), EMPTY);
         }
+        if (isShellManifest(m)) tx.tree(MANIFESTS_BY_POOL).put(pairKey(m.getPoolId(), m.getId()), EMPTY);
         tx.tree(MANIFESTS).put(idKey(m.getId()), ManifestCodec.encode(m));
     }
 
+    private static boolean isShellManifest(ManifestEntity m) {
+        return m.getBucketName() == null && m.getPoolId() != null;
+    }
+
     static void deleteManifestRecord(WriteTxn tx, ManifestEntity m) {
+        if (isShellManifest(m)) tx.tree(MANIFESTS_BY_POOL).delete(pairKey(m.getPoolId(), m.getId()));
         tx.tree(MANIFESTS).delete(idKey(m.getId()));
         BTree byBlob = tx.tree(MANIFESTS_BY_BLOB);
         for (String b : blobsOf(m)) byBlob.delete(pairKey(b, m.getId()));
@@ -202,14 +210,20 @@ final class Trees {
     }
 
     /**
-     * Marks a live manifest as no longer current: sets {@code deleted} and puts it on the GC queue. Returns the
-     * manifest with resolved blobs, or empty if it does not exist or is already retired.
+     * Marks a live manifest as no longer current: sets {@code deleted} and puts it on the GC queue. A CHUNKED manifest
+     * releases its chunk references in the same transaction and becomes a tombstone without its chunk list (the
+     * references are gone, so keeping the list would only invite a second release; a 1 GiB object is 512 KiB of keys).
+     * Returns the manifest with resolved blobs, or empty if it does not exist or is already retired.
      */
     static Optional<ManifestEntity> retire(WriteTxn tx, String manifestId) {
         Optional<ManifestEntity> found = manifest(tx, manifestId);
         if (found.isEmpty() || found.get().isDeleted()) return Optional.empty();
         ManifestEntity m = found.get();
         m.setDeleted(true);
+        if (m.getStorageKind() == StorageKind.CHUNKED && m.getPoolId() != null && m.chunkKeyArray().length > 0) {
+            Chunks.releaseRefs(tx, m.getPoolId(), m.chunkKeyArray());
+            m.setChunkKeyArray(new long[0]);
+        }
         putManifest(tx, m);
         enqueueDeleted(tx, manifestId);
         return Optional.of(resolve(tx, m));
@@ -230,6 +244,11 @@ final class Trees {
     static void purgeManifests(WriteTxn tx, Collection<String> blobIds, String poolId) {
         Set<String> doomed = new HashSet<>();
         for (String blobId : blobIds) doomed.addAll(manifestIdsOfBlob(tx, blobId));
+        if (poolId != null) {
+            try (Cursor c = tx.tree(MANIFESTS_BY_POOL).scanPrefix(Keys.of(poolId))) {
+                while (c.next()) doomed.add(secondOf(c.key()));
+            }
+        }
 
         BTree queue = tx.tree(DELETED_MANIFESTS);
         List<byte[]> queueKeys = new ArrayList<>();

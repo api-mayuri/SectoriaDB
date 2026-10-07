@@ -42,6 +42,7 @@ class ObjectChecksumStorageTest {
 
     StorageProperties props;
     BlobFileRepository blobRepo;
+    org.example.sectoriadb.repository.ChunkRepository chunkRepo;
     ManifestRepository manifestRepo;
     PoolRepository poolRepo;
     FileStorageService files;
@@ -74,7 +75,9 @@ class ObjectChecksumStorageTest {
         var smallCache = new SmallBlobCache(props);
         OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         BlobService blobService = new BlobService(blobRepo, cache, smallCache, props, opLog);
-        files = new FileStorageService(manifestRepo, blobService, cache, smallCache, opLog, props);
+        chunkRepo = new org.example.sectoriadb.repository.metastore.MetaStoreChunkRepository(stores);
+        var chunkStore = new org.example.sectoriadb.service.ChunkStore(chunkRepo, blobService, cache);
+        files = new FileStorageService(manifestRepo, blobService, cache, smallCache, chunkStore, opLog, props);
         verifier = new ObjectVerificationService(files);
         pool = new PoolEntity("pool-1", "bkt", root.resolve("data/bkt").toString(), java.time.Instant.now());
         Files.createDirectories(Path.of(pool.getBasePath()));
@@ -233,6 +236,10 @@ class ObjectChecksumStorageTest {
 
     private void flipDataByte(ManifestEntity m, byte[] data) throws Exception {
         BlobFileEntity blob = m.getPhysicalBlob();
+        if (blob == null) {   // CHUNKED: the chunk index names the blob of the first chunk
+            String blobId = chunkRepo.find(m.getPoolId(), m.chunkKeyArray()[0]).orElseThrow().blobId();
+            blob = blobRepo.findById(blobId).orElseThrow();
+        }
         byte[] file = Files.readAllBytes(Path.of(blob.getFilePath()));
         byte[] needle = Arrays.copyOfRange(data, 0, 32);
         int at = -1;

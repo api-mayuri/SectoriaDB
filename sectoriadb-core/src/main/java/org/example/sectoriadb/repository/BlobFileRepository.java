@@ -26,26 +26,29 @@ public interface BlobFileRepository {
     long countByPoolId(String poolId);
 
     /**
-     * Removes the blob record and the (dead) manifests that still refer to it, if no live manifest does.
+     * Removes the blob record, if nothing live is stored in it: a cuckoo blob must hold no chunk with a reference, a
+     * small-object blob no live manifest. In the same transaction the dead manifests that still point at it and, for a
+     * cuckoo blob, its zero-reference index entries, collection rows and orphan records are dropped.
      *
-     * @throws BlobInUseException if live manifests reference the blob
+     * @throws BlobInUseException if live manifests / referenced chunks are in the blob
      */
     void deleteUnreferenced(String blobId);
 
     /**
-     * Resize commit in ONE transaction: registers {@code replacement}, repoints every manifest of {@code oldBlobId}
-     * (live and dead) to it through the {@code manifests_by_blob} index, and removes the old blob record.
+     * Resize commit in ONE transaction: registers {@code replacement}, repoints every chunk index entry (and orphan
+     * record) of {@code oldBlobId} to it through the {@code chunks_by_blob} index, and removes the old blob record.
+     * Manifests are not touched: they reference chunks, not blobs.
      *
-     * @return the number of manifests moved
+     * @return the number of chunk index entries moved
      */
     int replaceBlob(String oldBlobId, BlobFileEntity replacement);
 
-    /** Live manifests still reference the blob. */
+    /** Live manifests (small-object blob) or referenced chunks (cuckoo blob) are still in the blob. */
     class BlobInUseException extends IllegalStateException {
         private final long liveManifests;
 
         public BlobInUseException(String blobId, long liveManifests) {
-            super(liveManifests + " live manifest(s) reference blob " + blobId);
+            super(liveManifests + " live manifest(s) / referenced chunk(s) in blob " + blobId);
             this.liveManifests = liveManifests;
         }
 

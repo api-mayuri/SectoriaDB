@@ -40,7 +40,8 @@ public interface PoolRepository {
 
     /**
      * S3 DeleteBucket in one transaction: verifies that the bucket has no objects, then removes the pool, its blob
-     * records and every manifest (live shell-stored, superseded or deleted) of those blobs and of the pool.
+     * records, every manifest (live shell-stored, superseded or deleted) of those blobs and of the pool, and the pool's
+     * whole chunk index (entries, collection queue, orphan records).
      * The caller deletes the blob files after the commit.
      *
      * @return the removed blob records

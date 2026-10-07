@@ -28,6 +28,9 @@ public class ResizeService {
 
     private static final Logger log = LoggerFactory.getLogger(ResizeService.class);
 
+    /** Guard: a table reaches >90% fill before an insert fails (doc 03), but insert cost grows steeply near the limit. */
+    private static final double MAX_SAFE_FILL = 0.70;
+
     private final BlobFileRepository blobRepo;
     private final PoolRepository poolRepo;
     private final HashTableCache cache;
@@ -84,7 +87,6 @@ public class ResizeService {
 
         // Guard: a table reaches >90% fill before an insert fails (see docs/architecture/03-chunk-integrity.md),
         // but insert cost (BFS path length) grows steeply near the limit — keep 70% as headroom after migration.
-        final double MAX_SAFE_FILL = 0.70;
         int newTotalSlots  = 2 * newNumBuckets * CuckooHashTable.SLOTS_PER_BUCKET;
         int minSlotsNeeded = (int) Math.ceil(activeSlots / MAX_SAFE_FILL);
         if (newTotalSlots < minSlotsNeeded) {
@@ -112,6 +114,35 @@ public class ResizeService {
                 String.format("%.2f", newSize / 1_073_741_824.0));
 
         BlobLayout.createFile(newPath, newNumBuckets, chunkSize);
+
+        // Stop placing new chunks into the old blob and wait for the inserts in flight: what the migration copies is
+        // then everything the blob will ever hold. Writers of a multi-blob pool rank the other blobs meanwhile (a
+        // single-blob pool grows by one blob). The blob stays frozen for good once replaced: a stale handle can
+        // never write into the dead file.
+        cache.freeze(blobId);
+        boolean replaced = false;
+        try {
+            int activeNow = oldTable.getFillStats().activeSlots();   // writers were still active before the freeze
+            if (activeNow > activeSlots && activeNow > newTotalSlots * MAX_SAFE_FILL) {
+                Files.deleteIfExists(newPath);
+                throw new IllegalArgumentException(String.format(
+                        "The blob received chunks while the resize started: %d active chunks would fill %.0f%% of the"
+                        + " new blob (max safe: %.0f%%); retry with more buckets",
+                        activeNow, 100.0 * activeNow / newTotalSlots, MAX_SAFE_FILL * 100));
+            }
+            BlobFileEntity result = migrateAndCommit(oldEntity, oldTable, newId, newName, newPath, poolId,
+                    newNumBuckets, chunkSize, newSize, activeSlots, t0);
+            replaced = true;
+            return result;
+        } finally {
+            if (!replaced) cache.unfreeze(blobId);
+        }
+    }
+
+    private BlobFileEntity migrateAndCommit(BlobFileEntity oldEntity, CuckooHashTable oldTable, String newId,
+                                            String newName, Path newPath, String poolId, int newNumBuckets,
+                                            int chunkSize, long newSize, int activeSlots, long t0) throws IOException {
+        String blobId = oldEntity.getId();
 
         BlobFile newBlobFile = new BlobFile(newId, newPath, newSize);
         CuckooHashTable newTable = new CuckooHashTable(
@@ -153,6 +184,7 @@ public class ResizeService {
         BlobFileEntity newEntity = commitResize(oldEntity, newId, newName, newPath.toString(),
                 poolId, newNumBuckets, chunkSize, newSize);
 
+        cache.redirect(blobId, newId);   // uploads that placed chunks into the old blob are re-pointed at commit
         cache.evict(blobId);
         try {
             Files.deleteIfExists(Path.of(oldEntity.getFilePath()));
@@ -171,10 +203,10 @@ public class ResizeService {
     }
 
     /**
-     * ONE metastore transaction: registers the new blob, repoints every manifest of the old blob (live and dead,
-     * found through {@code manifests_by_blob}) to it, and removes the old blob record. A reader sees either the old
-     * blob with all its manifests or the new one with all of them, never a mix. The caller deletes the old file after
-     * the commit; a crash before that leaves an unreferenced file.
+     * ONE metastore transaction: registers the new blob, repoints every chunk index entry of the old blob (found
+     * through {@code chunks_by_blob}) to it, and removes the old blob record. A reader sees either the old blob
+     * with all its chunks or the new one with all of them, never a mix. Manifests are untouched: they name chunks,
+     * not blobs. The caller deletes the old file after the commit; a crash before that leaves an unreferenced file.
      */
     private BlobFileEntity commitResize(BlobFileEntity old, String newId, String newName,
                                          String newPath, String poolId, int newBuckets,
@@ -191,7 +223,7 @@ public class ResizeService {
         newEntity.setCreatedAt(Instant.now());
 
         int moved = blobRepo.replaceBlob(old.getId(), newEntity);
-        log.debug("Committed resize in the metastore: oldId={} newId={} manifestsMoved={}", old.getId(), newId, moved);
+        log.debug("Committed resize in the metastore: oldId={} newId={} chunkEntriesMoved={}", old.getId(), newId, moved);
         return newEntity;
     }
 

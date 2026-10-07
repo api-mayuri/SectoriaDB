@@ -62,7 +62,7 @@ public final class MetaInvariants {
             try (Cursor c = tx.tree(Trees.MANIFESTS).scan()) {
                 while (c.next()) {
                     ManifestEntity m = ManifestCodec.decode(c.value());
-                    for (String b : new String[]{m.getBlobFileId(), m.getSmallBlobId()}) {
+                    for (String b : new String[]{m.getSmallBlobId()}) {
                         if (b == null) continue;
                         blobRefs++;
                         assertTrue(tx.tree(Trees.MANIFESTS_BY_BLOB).containsKey(Trees.pairKey(b, m.getId())),
@@ -105,5 +105,6 @@ public final class MetaInvariants {
             }
             assertEquals(liveS3, pointedAt, "every live S3 manifest is the current version of its key");
         }
+        ChunkInvariants.check(store);
     }
 }

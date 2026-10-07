@@ -42,6 +42,11 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     private final Timer resizeOk;
     private final Timer resizeFailed;
     private final Counter autoResizeRuns;
+    private final Counter placementFallbacks;
+    private final Counter poolDedupHits;
+    private final Counter poolGrown;
+    private final DistributionSummary smallForceRecords;
+    private final Timer smallDurabilityWait;
 
     public MicrometerStorageMetrics(MeterRegistry r) {
         for (Target t : Target.values()) {
@@ -83,6 +88,16 @@ public class MicrometerStorageMetrics implements StorageMetrics {
         resizeFailed = timer(r, "sectoriadb.resize", "Blob resize duration", Buckets.RESIZE, "result", "failure");
         autoResizeRuns = Counter.builder("sectoriadb.auto.resize.runs")
                 .description("Passes of the auto-resize scheduler").register(r);
+        placementFallbacks = Counter.builder("sectoriadb.pool.placement.fallbacks")
+                .description("Chunks whose first rendezvous choice could not take them (full or frozen) and went to a later blob").register(r);
+        poolDedupHits = Counter.builder("sectoriadb.pool.dedup.hits")
+                .description("Chunks found in the pool-wide chunk index and verified byte for byte (nothing written)").register(r);
+        poolGrown = Counter.builder("sectoriadb.pool.grown")
+                .description("Cuckoo blobs added to a pool because it reached the grow threshold or no blob accepted a chunk").register(r);
+        smallForceRecords = DistributionSummary.builder("sectoriadb.small.group.fsync.records")
+                .description("Small-object records made durable by one fsync (group fsync)")
+                .serviceLevelObjectives(Buckets.GROUP_BATCH_SIZE).register(r);
+        smallDurabilityWait = timer(r, "sectoriadb.small.durability.wait", "Time a small-object append waited from taking the lock until its record was durable", Buckets.FSYNC);
     }
 
     private static Timer timer(MeterRegistry r, String name, String description, Duration[] slo, String... tags) {
@@ -121,6 +136,12 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     @Override public void resize(long nanos, boolean success) {
         (success ? resizeOk : resizeFailed).record(nanos, TimeUnit.NANOSECONDS);
     }
+
+    @Override public void placementFallback() { placementFallbacks.increment(); }
+    @Override public void poolDedupHit() { poolDedupHits.increment(); }
+    @Override public void poolGrown() { poolGrown.increment(); }
+    @Override public void smallGroupFsync(int records) { smallForceRecords.record(records); }
+    @Override public void smallDurabilityWait(long nanos) { smallDurabilityWait.record(nanos, TimeUnit.NANOSECONDS); }
 
     @Override public void autoResizeRun() { autoResizeRuns.increment(); }
 }

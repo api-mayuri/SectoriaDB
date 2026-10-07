@@ -98,6 +98,17 @@ public interface StorageMetrics {
     /** An append waited {@code nanos} from taking the lock until its record was durable (lock wait + write + force). */
     default void smallDurabilityWait(long nanos) { }
 
+    // ---- pool placement and chunk index ------------------------------------------------------------------------
+
+    /** The best-ranked blob of the rendezvous order could not take a chunk (full, frozen for resize) and a later one was used. */
+    default void placementFallback() { }
+
+    /** An upload found the chunk in the pool-wide chunk index and verified it byte for byte: nothing was written. */
+    default void poolDedupHit() { }
+
+    /** A cuckoo blob was added to a pool (it reached the grow threshold, or no blob accepted a chunk). */
+    default void poolGrown() { }
+
     // ---- metastore ---------------------------------------------------------------------------------------------
 
     /** Time a write transaction waited for the single-writer slot. */

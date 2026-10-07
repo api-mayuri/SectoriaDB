@@ -11,6 +11,7 @@ import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.StorageKind;
 import org.example.sectoriadb.service.impl.SmallObjectBlob;
 import org.example.sectoriadb.model.ManifestEntity;
+import org.example.sectoriadb.model.PlacedChunk;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.model.FileManifest;
 import org.example.sectoriadb.repository.ManifestRepository;
@@ -50,20 +51,22 @@ public class FileStorageService {
     private final BlobService blobService;
     private final HashTableCache cache;
     private final SmallBlobCache smallCache;
+    private final ChunkStore chunkStore;
     private final OperationLogService opLog;
     private final StorageProperties props;
     private final StorageMetrics metrics;
 
     public FileStorageService(ManifestRepository manifestRepo, BlobService blobService,
-                               HashTableCache cache, SmallBlobCache smallCache,
+                               HashTableCache cache, SmallBlobCache smallCache, ChunkStore chunkStore,
                                OperationLogService opLog, StorageProperties props) {
-        this(manifestRepo, blobService, cache, smallCache, opLog, props, StorageMetrics.NOOP);
+        this(manifestRepo, blobService, cache, smallCache, chunkStore, opLog, props, StorageMetrics.NOOP);
     }
 
     @Autowired
     public FileStorageService(ManifestRepository manifestRepo, BlobService blobService,
-                               HashTableCache cache, SmallBlobCache smallCache,
+                               HashTableCache cache, SmallBlobCache smallCache, ChunkStore chunkStore,
                                OperationLogService opLog, StorageProperties props, StorageMetrics metrics) {
+        this.chunkStore   = chunkStore;
         this.metrics      = metrics;
         this.manifestRepo = manifestRepo;
         this.blobService  = blobService;
@@ -88,7 +91,8 @@ public class FileStorageService {
             in.transferTo(java.io.OutputStream.nullOutputStream());
         }
         ManifestEntity entity = stage(filePath, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
-        manifestRepo.save(entity);
+        redirectStagedChunks(entity);
+        manifestRepo.saveNew(entity);
         logStored(entity);
         return entity;
     }
@@ -154,36 +158,22 @@ public class FileStorageService {
     }
 
     private ManifestEntity stageChunked(Path filePath, PoolEntity pool, String crc32c, long t0) throws IOException {
-        BlobFileEntity blobEntity = blobService.chooseBlobFileForWrite(pool);
-        CuckooHashTable table = cache.get(blobEntity);
-        BlobFileWriteService writer = new BlobFileWriteService(
-                table, new DefaultChunkingService(), new XxHash64BytesHasher());
-
-        FileManifest manifest;
+        ChunkStore.Staged staged;
         try {
-            manifest = writer.writeFile(filePath);
+            staged = chunkStore.stage(filePath, pool);
         } catch (IOException e) {
             opLog.failure("STORE", null, filePath.getFileName().toString(), e,
                     System.currentTimeMillis() - t0);
             throw e;
         }
-
-        long totalBytes;
-        if (manifest.chunkKeys().isEmpty()) {
-            totalBytes = 0;
-        } else {
-            totalBytes = (long)(manifest.chunkKeys().size() - 1) * manifest.chunkSize()
-                    + manifest.lastChunkActualSize();
-        }
-
         ManifestEntity entity = newManifest(filePath, pool, StorageKind.CHUNKED, crc32c);
-        entity.setBlobFile(blobEntity);       // also sets blobFileId
-        entity.setSourceFileName(manifest.sourceFileName());
-        entity.setChunkSize(manifest.chunkSize());
-        entity.setTotalChunks(manifest.chunkKeys().size());
-        entity.setTotalBytes(totalBytes);
-        entity.setChunkKeys(manifest.chunkKeys());
-        entity.setLastChunkSize(manifest.lastChunkActualSize());
+        entity.setSourceFileName(filePath.getFileName().toString());
+        entity.setChunkSize(staged.chunkSize());
+        entity.setTotalChunks(staged.keys().length);
+        entity.setTotalBytes(staged.totalBytes());
+        entity.setChunkKeyArray(staged.keys());
+        entity.setLastChunkSize(staged.lastChunkSize());
+        entity.setStagedChunks(staged.placed());
         return entity;
     }
 
@@ -194,7 +184,7 @@ public class FileStorageService {
         details.put("poolId", entity.getPoolId());
         details.put("totalBytes", entity.getTotalBytes());
         details.put("storageKind", entity.getStorageKind().name());
-        String blobId = entity.getBlobFileId() != null ? entity.getBlobFileId() : entity.getSmallBlobId();
+        String blobId = entity.getSmallBlobId();
         if (blobId != null) details.put("blobFileId", blobId);
         if (entity.getStorageKind() == StorageKind.SMALL) details.put("offset", entity.getSmallOffset());
         if (entity.getStorageKind() == StorageKind.CHUNKED) {
@@ -226,21 +216,19 @@ public class FileStorageService {
             log.info("Restored: id={} → {}", manifestId, outputPath);
             return;
         }
-        CuckooHashTable table = cache.get(entity.getBlobFile());
-        List<Long> keys = entity.parseChunkKeys();
+        long[] keys = entity.chunkKeyArray();
+        ChunkStore.Reader chunks = readerOf(entity);
 
         boolean ok = false;
         try (FileChannel out = FileChannel.open(outputPath,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
             CRC32C crc = new CRC32C();
-            int total = keys.size();
+            int total = keys.length;
             int lastDecile = -1;
             for (int i = 0; i < total; i++) {
-                long key = keys.get(i);
                 boolean isLast = (i == total - 1);
-                int readSize = isLast ? entity.getLastChunkSize() : entity.getChunkSize();
-                ByteBuffer chunk = table.readChunkByKey(key, readSize).orElseThrow(() -> new ChunkNotFoundException(key));
+                ByteBuffer chunk = chunks.read(i);
                 crc.update(chunk.duplicate());
                 if (isLast) checkWholeObjectCrc(entity, crc);
                 out.write(chunk);
@@ -295,12 +283,11 @@ public class FileStorageService {
             return;
         }
 
-        List<Long> keys  = entity.parseChunkKeys();
         int chunkSize    = entity.getChunkSize();
         int totalChunks  = entity.getTotalChunks();
         int firstIdx     = (int)(startByte / chunkSize);
         int lastIdx      = (int)((startByte + lengthBytes - 1) / chunkSize);
-        CuckooHashTable table = cache.get(entity.getBlobFile());
+        ChunkStore.Reader chunks = readerOf(entity);
 
         log.info("Restoring range: id={} [{}, +{}] chunks [{},{}]",
                 manifestId, startByte, lengthBytes, firstIdx, lastIdx);
@@ -310,12 +297,10 @@ public class FileStorageService {
                 StandardOpenOption.TRUNCATE_EXISTING)) {
             long written = 0;
             for (int idx = firstIdx; idx <= lastIdx; idx++) {
-                long key = keys.get(idx);
                 boolean isFileLast = (idx == totalChunks - 1);
                 int actualSize = isFileLast ? entity.getLastChunkSize() : chunkSize;
 
-                ByteBuffer chunk = table.readChunkByKey(key, actualSize).orElseThrow(() ->
-                        new ChunkNotFoundException(key));
+                ByteBuffer chunk = chunks.read(idx);
                 int trimStart = (idx == firstIdx) ? (int)(startByte % chunkSize) : 0;
                 long remaining = lengthBytes - written;
                 int trimLen    = (int) Math.min(actualSize - trimStart, remaining);
@@ -396,10 +381,26 @@ public class FileStorageService {
      * @throws org.example.sectoriadb.repository.ManifestRepository.PoolNotFoundException if the bucket vanished
      */
     public ManifestEntity commitObject(ManifestEntity entity) {
+        redirectStagedChunks(entity);
         ManifestRepository.CommitResult r = manifestRepo.commitObject(entity);
         r.superseded().ifPresent(old -> releaseData(old, "PUT"));
         logStored(r.current());
         return r.current();
+    }
+
+    /**
+     * A resize may have replaced a blob between the moment this upload placed chunks into it and now: the data was
+     * migrated with the rest of the blob, so the placement is re-pointed at the replacement.
+     */
+    private void redirectStagedChunks(ManifestEntity entity) {
+        List<PlacedChunk> staged = entity.getStagedChunks();
+        if (staged.isEmpty()) return;
+        List<PlacedChunk> fixed = new java.util.ArrayList<>(staged.size());
+        for (PlacedChunk p : staged) {
+            String now = cache.resolveRedirect(p.blobId());
+            fixed.add(now.equals(p.blobId()) ? p : p.withBlob(now));
+        }
+        entity.setStagedChunks(fixed);
     }
 
     /** Result of an S3 PUT as seen by a later read, used by tests and the shell. */
@@ -445,20 +446,18 @@ public class FileStorageService {
             out.write(data);
             return;
         }
-        List<Long> keys = entity.parseChunkKeys();
-        if (keys.isEmpty()) {
+        long[] keys = entity.chunkKeyArray();
+        if (keys.length == 0) {
             // Empty file, nothing to stream
             return;
         }
 
-        CuckooHashTable table = cache.get(entity.getBlobFile());
+        ChunkStore.Reader chunks = readerOf(entity);
         CRC32C crc = new CRC32C();
-        int total = keys.size();
+        int total = keys.length;
         for (int i = 0; i < total; i++) {
-            long key = keys.get(i);
             boolean isLast = (i == total - 1);
-            int readSize = isLast ? entity.getLastChunkSize() : entity.getChunkSize();
-            ByteBuffer chunk = table.readChunkByKey(key, readSize).orElseThrow(() -> new ChunkNotFoundException(key));
+            ByteBuffer chunk = chunks.read(i);
             byte[] arr = chunk.array();
             int off = chunk.arrayOffset() + chunk.position();
             int len = chunk.remaining();
@@ -497,8 +496,7 @@ public class FileStorageService {
             out.write(readSmall(entity), (int) startByte, (int) lengthBytes);   // a slice of the one record
             return;
         }
-        List<Long> keys     = entity.parseChunkKeys();
-        if (keys.isEmpty()) {
+        if (entity.chunkKeyArray().length == 0) {
             // Empty file, can't stream any range
             return;
         }
@@ -507,16 +505,14 @@ public class FileStorageService {
         int totalChunks     = entity.getTotalChunks();
         int firstIdx        = (int)(startByte / chunkSize);
         int lastIdx         = (int)((startByte + lengthBytes - 1) / chunkSize);
-        CuckooHashTable table = cache.get(entity.getBlobFile());
+        ChunkStore.Reader chunks = readerOf(entity);
 
         long written = 0;
         for (int idx = firstIdx; idx <= lastIdx; idx++) {
-            long key = keys.get(idx);
             boolean isFileLast = (idx == totalChunks - 1);
             int actualSize = isFileLast ? entity.getLastChunkSize() : chunkSize;
 
-            ByteBuffer chunk = table.readChunkByKey(key, actualSize).orElseThrow(() ->
-                    new ChunkNotFoundException(key));
+            ByteBuffer chunk = chunks.read(idx);
             int trimStart = (idx == firstIdx) ? (int)(startByte % chunkSize) : 0;
             long remaining = lengthBytes - written;
             int trimLen    = (int) Math.min(actualSize - trimStart, remaining);
@@ -524,6 +520,14 @@ public class FileStorageService {
             out.write(chunk.array(), chunk.arrayOffset() + chunk.position() + trimStart, trimLen);
             written += trimLen;
         }
+    }
+
+    /** Chunk reader of a CHUNKED manifest: positions are resolved through the pool's chunk index. */
+    private ChunkStore.Reader readerOf(ManifestEntity entity) {
+        if (entity.getPoolId() == null) {
+            throw new IllegalStateException("Manifest " + entity.getId() + " has no pool: its chunks cannot be located");
+        }
+        return chunkStore.reader(entity.getPoolId(), entity.chunkKeyArray(), entity.getChunkSize(), entity.getLastChunkSize());
     }
 
     /** Reads and verifies the single record of a SMALL object. */

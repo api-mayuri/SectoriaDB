@@ -10,6 +10,7 @@ import org.example.sectoriadb.repository.JsonOperationLogRepository;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.PoolRepository;
 import org.example.sectoriadb.service.BlobService;
+import org.example.sectoriadb.service.ChunkStore;
 import org.example.sectoriadb.service.FileStorageService;
 import org.example.sectoriadb.service.HashTableCache;
 import org.example.sectoriadb.service.ObjectVerificationService;
@@ -33,6 +34,8 @@ public final class StorageRig implements AutoCloseable {
     public PoolRepository pools;
     public BlobFileRepository blobs;
     public ManifestRepository manifests;
+    public org.example.sectoriadb.repository.ChunkRepository chunks;
+    public ChunkStore chunkStore;
     public HashTableCache cache;
     public SmallBlobCache smallCache;
     public BlobService blobService;
@@ -67,7 +70,9 @@ public final class StorageRig implements AutoCloseable {
         OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         blobService = new BlobService(blobs, cache, smallCache, props, opLog);
         poolService = new PoolService(pools, blobs, opLog, props, cache, smallCache);
-        files = new FileStorageService(manifests, blobService, cache, smallCache, opLog, props);
+        chunks = new MetaStoreChunkRepository(stores);
+        chunkStore = new ChunkStore(chunks, blobService, cache);
+        files = new FileStorageService(manifests, blobService, cache, smallCache, chunkStore, opLog, props);
         verifier = new ObjectVerificationService(files);
     }
 

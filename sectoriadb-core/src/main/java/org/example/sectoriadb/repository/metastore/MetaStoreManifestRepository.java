@@ -6,6 +6,7 @@ import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.ReadTxn;
 import org.example.sectoriadb.model.ManifestEntity;
+import org.example.sectoriadb.model.StorageKind;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.springframework.stereotype.Repository;
 
@@ -38,6 +39,21 @@ public class MetaStoreManifestRepository implements ManifestRepository {
     @Override
     public ManifestEntity save(ManifestEntity entity) {
         return store().writeGrouped(tx -> {
+            Trees.putManifest(tx, entity);
+            return entity;
+        });
+    }
+
+    @Override
+    public ManifestEntity saveNew(ManifestEntity entity) {
+        if (entity.getPoolId() == null) throw new IllegalArgumentException("poolId is required");
+        return store().writeGrouped(tx -> {
+            if (Trees.manifest(tx, entity.getId()).isPresent()) {
+                throw new IllegalArgumentException("Manifest already exists: " + entity.getId());
+            }
+            if (entity.getStorageKind() == StorageKind.CHUNKED) {
+                Chunks.addRefs(tx, entity.getPoolId(), entity.chunkKeyArray(), entity.getStagedChunks());
+            }
             Trees.putManifest(tx, entity);
             return entity;
         });
@@ -92,6 +108,12 @@ public class MetaStoreManifestRepository implements ManifestRepository {
             Optional<String> previous = objects.get(objectKey).map(Trees::str);
             long previousBytes = previous.flatMap(id -> Trees.manifest(tx, id)).map(ManifestEntity::getTotalBytes).orElse(0L);
             entity.setDeleted(false);
+            Optional<ManifestEntity> existing = Trees.manifest(tx, entity.getId());
+            if (entity.getStorageKind() == StorageKind.CHUNKED && (existing.isEmpty() || existing.get().isDeleted())) {
+                // references first, retirement of the replaced version after: a chunk both versions share never
+                // passes through zero and is never queued for collection
+                Chunks.addRefs(tx, entity.getPoolId(), entity.chunkKeyArray(), entity.getStagedChunks());
+            }
             Trees.putManifest(tx, entity);
             objects.put(objectKey, Trees.bytes(entity.getId()));
             Trees.adjustTotals(tx, previous.isPresent() ? 0 : 1, entity.getTotalBytes() - previousBytes);

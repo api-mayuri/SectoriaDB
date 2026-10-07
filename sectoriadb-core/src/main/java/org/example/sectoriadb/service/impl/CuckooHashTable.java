@@ -246,7 +246,7 @@ public class CuckooHashTable implements AutoCloseable {
                 }
                 // Same key, different content: a genuine 64-bit hash collision.
                 if (!mayRekey) {
-                    throw new IOException("Key 0x" + Long.toHexString(key) + " already holds a different chunk in blob "
+                    throw new KeyCollisionException("Key 0x" + Long.toHexString(key) + " already holds a different chunk in blob "
                             + blobFile.id() + " and re-keying is not allowed");
                 }
                 if (attempt + 1 >= MAX_KEY_ATTEMPTS) {

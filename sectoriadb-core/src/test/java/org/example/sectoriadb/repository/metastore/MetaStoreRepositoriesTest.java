@@ -8,6 +8,7 @@ import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.model.StorageKind;
 import org.example.sectoriadb.repository.BlobFileRepository;
+import org.example.sectoriadb.repository.ChunkRepository;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.PoolRepository;
 import org.junit.jupiter.api.AfterEach;
@@ -31,6 +32,7 @@ class MetaStoreRepositoriesTest {
 
     MetaStore store;
     PoolRepository pools;
+    ChunkRepository chunks;
     BlobFileRepository blobs;
     ManifestRepository manifests;
 
@@ -38,6 +40,7 @@ class MetaStoreRepositoriesTest {
     void open() {
         store = MetaStore.open(dir.resolve("t.db"), MetaStoreOptions.defaults().fsync(false));
         MetaStoreProvider p = MetaStoreProvider.of(store);
+        chunks = new MetaStoreChunkRepository(p);
         pools = new MetaStorePoolRepository(p);
         blobs = new MetaStoreBlobFileRepository(p);
         manifests = new MetaStoreManifestRepository(p);
@@ -68,12 +71,25 @@ class MetaStoreRepositoriesTest {
         return blobs.save(b);
     }
 
+    /**
+     * A CHUNKED manifest whose chunks "were written" into {@code blobId} (a cuckoo blob of the pool is created on
+     * demand when null): the commit creates the chunk index entries from these placements.
+     */
     private ManifestEntity manifest(String id, PoolEntity pool, String blobId, String key, long... chunkKeys) {
         ManifestEntity m = new ManifestEntity();
         m.setId(id);
         m.setPoolId(pool.getId());
-        m.setBlobFileId(blobId);
         m.setStorageKind(StorageKind.CHUNKED);
+        if (chunkKeys.length > 0) {
+            String target = blobId;
+            if (target == null) {
+                target = "auto-" + pool.getId();
+                if (!blobs.existsById(target)) blob(target, pool.getId(), BlobKind.CUCKOO);
+            }
+            List<org.example.sectoriadb.model.PlacedChunk> placed = new java.util.ArrayList<>();
+            for (long k : chunkKeys) placed.add(new org.example.sectoriadb.model.PlacedChunk(k, target, 4096, (int) (k * 31), false));
+            m.setStagedChunks(placed);
+        }
         m.setChunkSize(4096);
         m.setChunkKeyArray(chunkKeys);
         m.setTotalChunks(chunkKeys.length);
@@ -174,14 +190,14 @@ class MetaStoreRepositoriesTest {
         blob("blob", "p", BlobKind.CUCKOO);
         manifests.commitObject(manifest("m1", p, "blob", "k", 1, 2));
         var e = assertThrows(BlobFileRepository.BlobInUseException.class, () -> blobs.deleteUnreferenced("blob"));
-        assertEquals(1, e.liveManifests());
+        assertEquals(2, e.liveManifests(), "two referenced chunks are stored in it");
         assertTrue(blobs.existsById("blob"));
 
         manifests.deleteObject("bkt", "k");
-        blobs.deleteUnreferenced("blob");   // only a dead manifest is left: it is purged with the blob
+        blobs.deleteUnreferenced("blob");   // only unreferenced chunks are left: they are purged with the blob
         assertFalse(blobs.existsById("blob"));
-        assertTrue(manifests.findById("m1").isEmpty());
-        assertEquals(0, manifests.gcQueueSize());
+        assertEquals(new ChunkRepository.Stats(0, 0, 0, 0), chunks.stats());
+        assertEquals(1, manifests.gcQueueSize(), "the dead manifest (a tombstone) stays for the collector");
     }
 
     // ── manifests, objects, GC queue ─────────────────────────────────────────
@@ -217,8 +233,10 @@ class MetaStoreRepositoriesTest {
         assertEquals("abc", r.getChecksumValue());
         assertEquals(m.getEtag(), r.getEtag());
         assertEquals(Instant.parse("2026-02-03T04:05:06Z"), r.getCreatedAt());
-        assertEquals("blob", r.getBlobFile().getId(), "blob reference is resolved");
-        assertEquals("bkt", r.getBlobFile().getPool().getName(), "and so is its pool");
+        // the manifest names chunks, not a blob: the chunk index says where each one lives
+        for (long k : r.chunkKeyArray()) assertEquals("blob", chunks.find("p", k).orElseThrow().blobId());
+        assertEquals(4, chunks.stats().chunks());
+        assertEquals(4, chunks.stats().refs());
     }
 
     @Test
@@ -251,10 +269,14 @@ class MetaStoreRepositoriesTest {
         assertTrue(manifests.findById("v1").orElseThrow().isDeleted(), "old manifest is kept, flagged deleted");
         assertEquals(List.of("v1"), manifests.gcQueue(10).stream().map(ManifestRepository.GcEntry::manifestId).toList());
         assertEquals(List.of("v2"), manifests.findAllLive().stream().map(ManifestEntity::getId).toList());
-        assertEquals(1, manifests.countLiveByBlobId("blob"));
-        assertEquals(2, manifests.findByBlobId("blob", false).size(), "the manifests_by_blob index still has the dead one");
-        assertEquals(1, manifests.findByBlobId("blob", true).size());
         assertEquals(2, manifests.count());
+        // v1's chunk lost its only reference: it stays in the index (bytes are still in the blob), queued for the collector
+        assertEquals(0, chunks.find("p", 1).orElseThrow().refcount());
+        assertEquals(1, chunks.find("p", 2).orElseThrow().refcount());
+        assertEquals(List.of(1L), chunks.gcQueue(10).stream().map(ChunkRepository.GcRow::chunkKey).toList());
+        assertEquals(2, chunks.countByBlob("blob"));
+        assertEquals(1, chunks.countReferencedByBlob("p", "blob"));
+        assertTrue(manifests.findById("v1").orElseThrow().chunkKeyArray().length == 0, "the tombstone has no chunk list");
 
         // committing the same manifest again (e.g. a retry) neither queues it nor loses the entry
         manifests.commitObject(r.current());
@@ -284,7 +306,7 @@ class MetaStoreRepositoriesTest {
         PoolEntity p = pool("p", "bkt");
         blob("blob", "p", BlobKind.CUCKOO);
         manifests.commitObject(manifest("v1", p, "blob", "k", 1));
-        ManifestEntity shell = manifests.save(manifest("shell", p, "blob", null, 5));   // stored from the shell: no key
+        ManifestEntity shell = manifests.saveNew(manifest("shell", p, "blob", null, 5));   // stored from the shell: no key
 
         assertEquals(2, manifests.findAllLive().size());
         assertTrue(manifests.deleteManifest("v1").isPresent());
@@ -351,7 +373,7 @@ class MetaStoreRepositoriesTest {
         empty.setStorageKind(StorageKind.EMPTY);
         manifests.commitObject(empty);
         manifests.deleteObject("bkt", "empty");                   // dead, no blob, only the queue and pool id know it
-        manifests.save(manifest("shell", p, "s", null, 9));      // live, stored from the shell
+        manifests.saveNew(manifest("shell", p, "c", null, 9));      // live, stored from the shell
 
         var e = assertThrows(IllegalStateException.class, () -> pools.deleteBucket("p"));
         assertTrue(e.getMessage().startsWith("BucketNotEmpty"), e.getMessage());
@@ -369,6 +391,10 @@ class MetaStoreRepositoriesTest {
         assertTrue(manifests.findById("e").isEmpty());
         assertTrue(manifests.findById("shell").isEmpty());
         assertEquals(0, manifests.gcQueueSize());
+        // the chunk index of the deleted pool is gone, the other pool's chunk is untouched
+        assertEquals(new ChunkRepository.Stats(1, 1, 0, 0), chunks.stats());
+        assertTrue(chunks.find("p", 1).isEmpty());
+        assertTrue(chunks.find("q", 1).isPresent());
         // the other bucket is untouched
         assertEquals("keep", manifests.findCurrent("other", "k").orElseThrow().getId());
         assertEquals(1, blobs.countByPoolId("q"));
@@ -376,7 +402,7 @@ class MetaStoreRepositoriesTest {
     }
 
     @Test
-    void resizeCommitRepointsEveryManifestInOneTransaction() {
+    void resizeCommitRepointsEveryChunkIndexEntryInOneTransaction() {
         PoolEntity p = pool("p", "bkt");
         blob("old", "p", BlobKind.CUCKOO);
         blob("small", "p", BlobKind.SMALL);
@@ -395,14 +421,16 @@ class MetaStoreRepositoriesTest {
         replacement.setNumBuckets(128);
         replacement.setChunkSize(4096);
         replacement.setCreatedAt(Instant.now());
-        assertEquals(21, blobs.replaceBlob("old", replacement), "all 20 + m0b, live and dead");
+        assertEquals(21, blobs.replaceBlob("old", replacement), "20 chunks + the one of m0b, the zombie chunk of dead m0 included");
 
         assertFalse(blobs.existsById("old"));
         assertEquals("new", blobs.findById("new").orElseThrow().getId());
-        assertEquals(21, manifests.findByBlobId("new", false).size());
-        assertEquals(0, manifests.findByBlobId("old", false).size());
-        assertEquals("new", manifests.findCurrent("bkt", "k5").orElseThrow().getBlobFile().getId());
-        assertEquals("new", manifests.findById("m0").orElseThrow().getBlobFileId(), "dead manifests move too");
+        assertEquals(21, chunks.countByBlob("new"));
+        assertEquals(0, chunks.countByBlob("old"));
+        long k5 = manifests.findCurrent("bkt", "k5").orElseThrow().chunkKeyArray()[0];
+        assertEquals("new", chunks.find("p", k5).orElseThrow().blobId(), "the manifest is untouched, its chunk moved");
+        assertEquals("new", chunks.find("p", 1).orElseThrow().blobId(), "zombie chunks move too");
+        assertEquals(0, chunks.find("p", 1).orElseThrow().refcount());
         assertEquals("small", manifests.findCurrent("bkt", "small-key").orElseThrow().getSmallBlobId(), "other blobs untouched");
         assertEquals(1, manifests.gcQueueSize());
         assertEquals(List.of("new", "small"), blobs.findByPoolId("p").stream().map(BlobFileEntity::getId).sorted().toList());

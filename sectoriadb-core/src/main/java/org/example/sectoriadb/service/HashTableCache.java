@@ -18,6 +18,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * Cache of live CuckooHashTable instances keyed by blob file id.
@@ -53,6 +54,64 @@ public class HashTableCache {
     /** Metrics receiver given to every table this cache creates (also used by ResizeService for its new tables). */
     public StorageMetrics metrics() {
         return metrics;
+    }
+
+    /** The table if it is already loaded (no IO, no metastore access), else null. */
+    public CuckooHashTable getLoaded(String blobId) {
+        return cache.get(blobId);
+    }
+
+    // ── write gate and redirects (resize of one blob of a multi-blob pool, doc 09) ─────────────────────────
+
+    private final ConcurrentHashMap<String, ReentrantReadWriteLock> gates = new ConcurrentHashMap<>();
+    private final java.util.Set<String> frozen = ConcurrentHashMap.newKeySet();
+    private final ConcurrentHashMap<String, String> redirects = new ConcurrentHashMap<>();
+
+    private ReentrantReadWriteLock gate(String blobId) {
+        return gates.computeIfAbsent(blobId, k -> new ReentrantReadWriteLock());
+    }
+
+    /**
+     * Writers hold this read lock around "check {@link #isFrozen}, then insert into the table", so a resize that
+     * froze the blob knows that no insert is in flight and none can start.
+     */
+    public ReentrantReadWriteLock.ReadLock writerGate(String blobId) {
+        return gate(blobId).readLock();
+    }
+
+    public boolean isFrozen(String blobId) {
+        return frozen.contains(blobId);
+    }
+
+    /** Stops new chunks from being placed into the blob and waits for the inserts that are running. */
+    public void freeze(String blobId) {
+        ReentrantReadWriteLock.WriteLock w = gate(blobId).writeLock();
+        w.lock();
+        try {
+            frozen.add(blobId);
+        } finally {
+            w.unlock();
+        }
+    }
+
+    public void unfreeze(String blobId) {
+        frozen.remove(blobId);
+    }
+
+    /** Records that {@code oldBlobId} was replaced by {@code newBlobId}: uploads that placed chunks into the old blob are re-pointed at commit. */
+    public void redirect(String oldBlobId, String newBlobId) {
+        redirects.put(oldBlobId, newBlobId);
+    }
+
+    /** Follows the replacement chain of a blob id (the id itself if it was never replaced). */
+    public String resolveRedirect(String blobId) {
+        String id = blobId;
+        for (int i = 0; i < 16; i++) {
+            String next = redirects.get(id);
+            if (next == null) return id;
+            id = next;
+        }
+        return id;
     }
 
     /** Returns a cached or freshly-loaded CuckooHashTable. */

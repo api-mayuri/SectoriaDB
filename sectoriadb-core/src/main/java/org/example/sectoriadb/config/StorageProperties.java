@@ -15,6 +15,7 @@ public class StorageProperties {
     /** fsync data and metadata writes (data → force → meta → force). Disable only for tests/benchmarks. */
     private boolean fsync = true;
     private AutoResize autoResize = new AutoResize();
+    private Pool pool = new Pool();
     private S3 s3 = new S3();
     private SmallObject smallObject = new SmallObject();
 
@@ -39,11 +40,35 @@ public class StorageProperties {
     public AutoResize getAutoResize() { return autoResize; }
     public void setAutoResize(AutoResize v) { this.autoResize = v; }
 
+    public Pool getPool() { return pool; }
+    public void setPool(Pool v) { this.pool = v; }
+
     public SmallObject getSmallObject() { return smallObject; }
     public void setSmallObject(SmallObject v) { this.smallObject = v; }
 
     public S3 getS3() { return s3; }
     public void setS3(S3 v) { this.s3 = v; }
+
+    /**
+     * Several cuckoo blobs per pool (bucket): chunks are spread over them by weighted rendezvous hashing, see doc 09.
+     */
+    public static class Pool {
+        private int initialBlobs = 1;
+        private int maxBlobs = 16;
+        private int growThresholdPercent = 75;
+
+        /** Cuckoo blobs created when a pool receives its first chunked object. */
+        public int getInitialBlobs() { return initialBlobs; }
+        public void setInitialBlobs(int v) { this.initialBlobs = Math.max(1, v); }
+
+        /** A pool never grows beyond this many cuckoo blobs (each one keeps ~9 MiB of slot metadata in memory). */
+        public int getMaxBlobs() { return maxBlobs; }
+        public void setMaxBlobs(int v) { this.maxBlobs = Math.max(1, v); }
+
+        /** When the aggregate fill of the pool's blobs reaches this percent, a new blob is added (and when no blob accepts a chunk). */
+        public int getGrowThresholdPercent() { return growThresholdPercent; }
+        public void setGrowThresholdPercent(int v) { this.growThresholdPercent = Math.min(100, Math.max(1, v)); }
+    }
 
     /** Small-object blobs: objects smaller than {@code default-chunk-size} are stored whole in an append-only log. */
     public static class SmallObject {
