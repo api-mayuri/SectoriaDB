@@ -190,6 +190,17 @@ public class S3ExceptionHandler {
     @ExceptionHandler(Exception.class)
     public ResponseEntity<S3Error> handleGeneral(Exception ex) {
         String requestId = S3Support.requestId();
+        if (isNoSpaceLeft(ex)) {
+            // The data (or metadata) volume is full: nothing is half-written (the object was never committed), the
+            // operator must free space. 507 tells monitoring and clients apart from a transient 500.
+            log.error("S3 request failed, the disk is full [{}]: {}", requestId, ex.getMessage());
+            ObservabilityAttributes.noteErrorCode("InsufficientStorage");
+            return ResponseEntity.status(HttpStatus.INSUFFICIENT_STORAGE)
+                    .contentType(MediaType.APPLICATION_XML)
+                    .body(new S3Error("InsufficientStorage",
+                            "The server has run out of storage space. Try again after space has been freed.",
+                            null, requestId));
+        }
         log.error("S3 internal error [{}]: {}", requestId, ex.getMessage(), ex);
         ObservabilityAttributes.noteErrorCode("InternalError");
 
@@ -198,5 +209,16 @@ public class S3ExceptionHandler {
                 .body(new S3Error("InternalError",
                         "We encountered an internal error. Please try again.",
                         null, requestId));
+    }
+
+    /** java.io.IOException "No space left on device" (ENOSPC) anywhere in the cause chain. */
+    static boolean isNoSpaceLeft(Throwable t) {
+        for (int depth = 0; t != null && depth < 8; t = t.getCause(), depth++) {
+            if (t instanceof java.io.IOException && t.getMessage() != null
+                    && t.getMessage().contains("No space left on device")) {
+                return true;
+            }
+        }
+        return false;
     }
 }

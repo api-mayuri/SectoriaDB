@@ -20,10 +20,11 @@ info "device $SIZE_MB MiB for $TARGET, free: $(df -m "$MNT" | awk 'NR==2 {print 
 
 start_server || exit 2
 s3c mb diskb >/dev/null
-mkfile "$WORK/obj.bin" "$OBJ_MIB"; WANT="$(sha "$WORK/obj.bin")"
 ok=0; first_err=""
 for i in $(seq 1 60); do
-  r="$(s3c put diskb "o$i" "$WORK/obj.bin")"
+  # distinct content per object: identical chunks would be deduplicated and take no space
+  mkfile "$WORK/obj$i.bin" "$OBJ_MIB"
+  r="$(s3c put diskb "o$i" "$WORK/obj$i.bin")"
   case "$r" in
     "PUT ok") ok=$((ok + 1)) ;;
     *) first_err="$r"; failed_at=$i; break ;;
@@ -34,9 +35,10 @@ info "$ok PUTs of $OBJ_MIB MiB succeeded; first failure at #${failed_at:-none}: 
 echo "$first_err" | grep -qE "PUT error 5[0-9][0-9] " && pass "failure is a clean 5xx S3 error: ${first_err#PUT error }" || fail "failure is not a clean 5xx S3 error: $first_err"
 check "server process still running and healthy" curl -sf "http://localhost:$MGMT_PORT/actuator/health"
 bad=0; for i in 1 $(( ok > 2 ? ok / 2 : 1 )) "$ok"; do
-  [ "$ok" -ge 1 ] && [ "$(s3c get diskb "o$i")" != "GET ok $(( OBJ_MIB * 1048576 )) $WANT" ] && bad=$((bad + 1))
+  [ "$ok" -ge 1 ] && [ "$(s3c get diskb "o$i")" != "GET ok $(( OBJ_MIB * 1048576 )) $(sha "$WORK/obj$i.bin")" ] && bad=$((bad + 1))
 done
 [ "$bad" = 0 ] && pass "objects written before the disk filled are intact" || fail "$bad earlier objects unreadable/corrupt"
+mkfile "$WORK/obj.bin" "$OBJ_MIB"; WANT="$(sha "$WORK/obj.bin")"
 r2="$(s3c put diskb after-full "$WORK/obj.bin")"; info "another PUT while still full: $r2"
 info "errors by code: $(curl -s "http://localhost:$MGMT_PORT/actuator/prometheus" | grep '^sectoriadb_s3_errors_total' | sed 's/application="SectoriaDB",//' | tr '\n' ' ')"
 info "disk free metric: $(curl -s "http://localhost:$MGMT_PORT/actuator/prometheus" | grep '^sectoriadb_disk_free_bytes' | tr '\n' ' ')"
