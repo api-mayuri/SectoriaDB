@@ -22,6 +22,7 @@ final class Node {
     }
 
     long id;
+    int epoch;                     // savepoint epoch in which this txn created the node (see WriteTxn#mutable)
     final boolean leaf;
     ArrayList<byte[]> keys = new ArrayList<>();
     ArrayList<LeafVal> vals;       // leaf only

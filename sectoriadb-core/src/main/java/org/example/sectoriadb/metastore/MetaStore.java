@@ -15,6 +15,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.TreeMap;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -52,8 +54,9 @@ public final class MetaStore implements AutoCloseable {
     final Pager pager;
     private final FileChannel channel;
     private final FileLock fileLock;
-    private final Semaphore writer = new Semaphore(1);
+    private final Semaphore writer = new Semaphore(1, true);   // fair: the committer re-acquiring in a loop must not starve direct writers
     private final StorageMetrics metrics;
+    private final GroupCommitter committer;
     private final Object stateLock = new Object();
     private final TreeMap<Long, Integer> readers = new TreeMap<>();
     private volatile Snapshot committed;
@@ -69,8 +72,9 @@ public final class MetaStore implements AutoCloseable {
 
     volatile CommitHook commitHook;
 
-    private MetaStore(FileChannel channel, FileLock lock, Pager pager, Snapshot snap, StorageMetrics metrics) {
-        this.metrics = metrics;
+    private MetaStore(FileChannel channel, FileLock lock, Pager pager, Snapshot snap, MetaStoreOptions opts) {
+        this.metrics = opts.metrics();
+        this.committer = new GroupCommitter(this, opts);
         this.channel = channel;
         this.fileLock = lock;
         this.pager = pager;
@@ -102,7 +106,7 @@ public final class MetaStore implements AutoCloseable {
                 pager = new Pager(ch, (Integer) r[0], opts.fsync(), opts.metrics());
                 snap = (Snapshot) r[1];
             }
-            MetaStore s = new MetaStore(ch, lock, pager, snap, opts.metrics());
+            MetaStore s = new MetaStore(ch, lock, pager, snap, opts);
             s.loadFreelist();
             return s;
         } catch (IOException e) {
@@ -300,6 +304,58 @@ public final class MetaStore implements AutoCloseable {
         });
     }
 
+    /**
+     * Group commit: queues the body to run inside a write transaction shared with other queued bodies and returns
+     * a future that completes once the commit containing its changes is durable (meta page fsynced).
+     *
+     * <p>The single committer thread ({@code metastore-committer}) applies queued bodies in FIFO order inside ONE
+     * transaction, each in a savepoint, and commits once. Every body sees the effects of the bodies before it, so the
+     * result is equivalent to running them serially in submission order. A body that throws is rolled back alone and
+     * its future fails with that exception; the other bodies of the batch commit. If the commit fails all futures of
+     * the batch fail and the store is poisoned; later submits return failed futures carrying the poisoning cause.
+     *
+     * <p>The body must neither commit nor close the transaction, must not submit further grouped writes and should
+     * be short and free of blocking I/O: it runs on the committer thread while everybody else waits. Bodies are
+     * not retried, so they may have side effects outside the store, but those are not undone on rollback.
+     * Dependent stages of the returned future also run on the committer thread. Blocks while the queue is full.
+     * {@link #beginWrite()} keeps working and takes turns with the committer (they share the single writer slot).
+     */
+    public <T> CompletableFuture<T> submit(Function<WriteTxn, T> body) {
+        return committer.submit(body);
+    }
+
+    /**
+     * {@link #submit} and wait for the result (uninterruptibly: once queued the body runs and may commit, so the
+     * caller always learns the real outcome). A failure of the body is rethrown as is.
+     */
+    public <T> T writeGrouped(Function<WriteTxn, T> body) {
+        CompletableFuture<T> f = submit(body);
+        boolean interrupted = false;
+        try {
+            while (true) {
+                try {
+                    return f.get();
+                } catch (InterruptedException e) {
+                    interrupted = true;
+                } catch (ExecutionException e) {
+                    Throwable c = e.getCause();
+                    if (c instanceof RuntimeException r) throw r;
+                    if (c instanceof Error err) throw err;
+                    throw new IllegalStateException(c);
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt();
+        }
+    }
+
+    public void writeGroupedVoid(Consumer<WriteTxn> body) {
+        writeGrouped(tx -> {
+            body.accept(tx);
+            return null;
+        });
+    }
+
     public <T> T read(Function<ReadTxn, T> body) {
         try (ReadTxn tx = beginRead()) {
             return body.apply(tx);
@@ -436,6 +492,16 @@ public final class MetaStore implements AutoCloseable {
         return committed;
     }
 
+    /** Why writes cannot be accepted (closed or poisoned), or null. */
+    Throwable unusableCause() {
+        try {
+            checkUsable();
+            return null;
+        } catch (IllegalStateException e) {
+            return e;
+        }
+    }
+
     private void checkUsable() {
         if (closed) throw new IllegalStateException("store is closed");
         if (poisoned != null) {
@@ -446,6 +512,7 @@ public final class MetaStore implements AutoCloseable {
     @Override
     public void close() {
         if (closed) return;
+        committer.shutdown();              // commit what is queued, fail late submitters, stop the thread
         writer.acquireUninterruptibly();   // wait for a running write transaction
         try {
             if (closed) return;

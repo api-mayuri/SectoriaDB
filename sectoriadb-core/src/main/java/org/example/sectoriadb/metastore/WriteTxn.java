@@ -27,6 +27,12 @@ public final class WriteTxn extends ReadTxn {
     boolean broken;
     private boolean finished;
 
+    // --- group commit support (see MetaStore#submit): the txn is owned by the committer, bodies run in savepoints
+    boolean managed;
+    int epoch;                                          // bumped by every savepoint; nodes of older epochs are never mutated in place
+    private Set<Long> guard;                            // pages owned when the running body started: not reusable by it
+    private final List<Long> deferred = new ArrayList<>();
+
     WriteTxn(MetaStore store, MetaStore.Snapshot snap) {
         super(store, snap, false);
         this.newTxId = snap.txId() + 1;
@@ -85,6 +91,11 @@ public final class WriteTxn extends ReadTxn {
     }
 
     public void commit() {
+        if (managed) throw new IllegalStateException("this transaction belongs to the group committer; return normally to commit");
+        commitInternal();
+    }
+
+    void commitInternal() {
         ensureOpen();
         if (broken) throw new IllegalStateException("transaction failed earlier and must be aborted");
         try {
@@ -102,6 +113,12 @@ public final class WriteTxn extends ReadTxn {
 
     @Override
     public void close() {
+        if (managed) return;   // a body of a grouped write must not end the shared transaction
+        if (!finished) finish(false);
+    }
+
+    /** Discards the transaction and releases the writer slot (group committer only). */
+    void abortInternal() {
         if (!finished) finish(false);
     }
 
@@ -146,23 +163,99 @@ public final class WriteTxn extends ReadTxn {
 
     void free(long id) {
         dirty.remove(id);
-        if (owned.remove(id)) reusable.add(id);
-        else pendingFreed.add(id);
+        if (owned.remove(id)) {
+            // Inside a savepoint a page that existed before it may hold an overflow chain written straight to disk
+            // that the rolled-back state still references: it must not be overwritten by the same body.
+            if (guard != null && guard.contains(id)) deferred.add(id);
+            else reusable.add(id);
+        } else {
+            pendingFreed.add(id);
+        }
     }
 
     Node newNode(boolean leaf) {
         Node n = new Node(allocId(), leaf);
+        n.epoch = epoch;
         dirty.put(n.id, n);
         return n;
     }
 
-    /** Returns a node owned by this txn: the same object if already dirty, otherwise a copy on a fresh page. */
+    /**
+     * Returns a node this txn may mutate in place: the same object if it is dirty and was created in the current
+     * savepoint epoch, otherwise a copy on a fresh page (the original stays intact for a possible rollback).
+     */
     Node mutable(Node n) {
-        if (dirty.get(n.id) == n) return n;
+        if (n.epoch == epoch && dirty.get(n.id) == n) return n;
         Node c = n.copyWithId(allocId());
+        c.epoch = epoch;
         dirty.put(c.id, c);
         free(n.id);
         return c;
+    }
+
+    // ---------------------------------------------------------------- savepoints
+
+    /** State of the transaction to return to; every piece of mutable state is copied or recorded as a size. */
+    final class Savepoint {
+        private final Map<Long, Node> dirty0 = new HashMap<>(dirty);
+        private final Set<Long> owned0 = new HashSet<>(owned);
+        private final List<Long> reusable0 = new ArrayList<>(reusable);
+        private final int pendingFreed0 = pendingFreed.size();
+        private final int fromAvail0 = fromAvail.size();
+        private final Set<String> dropped0 = new HashSet<>(dropped);
+        private final long hwm0 = hwm;
+        private final boolean broken0 = broken;
+        private final Map<String, BTree> handles0 = new HashMap<>(handles);
+        private final Map<BTree, long[]> trees0 = new HashMap<>();
+
+        private Savepoint() {
+            for (BTree t : handles.values()) trees0.put(t, new long[]{t.root, t.count, t.dirty ? 1 : 0, t.invalid ? 1 : 0});
+        }
+    }
+
+    /** Starts a savepoint. Nodes dirtied so far are never mutated in place again, so they can be restored. */
+    Savepoint savepoint() {
+        ensureOpen();
+        Savepoint sp = new Savepoint();
+        epoch++;
+        guard = sp.owned0;
+        return sp;
+    }
+
+    /** Keeps everything done since the savepoint. */
+    void release(Savepoint sp) {
+        guard = null;
+        reusable.addAll(deferred);
+        deferred.clear();
+    }
+
+    /** Undoes everything done since the savepoint; the transaction is usable again. */
+    void rollbackTo(Savepoint sp) {
+        guard = null;
+        deferred.clear();
+        dirty.clear();
+        dirty.putAll(sp.dirty0);
+        owned.clear();
+        owned.addAll(sp.owned0);
+        reusable.clear();
+        reusable.addAll(sp.reusable0);
+        while (pendingFreed.size() > sp.pendingFreed0) pendingFreed.remove(pendingFreed.size() - 1);
+        while (fromAvail.size() > sp.fromAvail0) store.available.push(fromAvail.pop());
+        dropped.clear();
+        dropped.addAll(sp.dropped0);
+        hwm = sp.hwm0;
+        broken = sp.broken0;
+        handles.clear();
+        handles.putAll(sp.handles0);
+        for (Map.Entry<BTree, long[]> e : sp.trees0.entrySet()) {
+            BTree t = e.getKey();
+            long[] v = e.getValue();
+            t.root = v[0];
+            t.count = v[1];
+            t.dirty = v[2] != 0;
+            t.invalid = v[3] != 0;
+        }
+        modCount++;   // cursors opened before are invalid
     }
 
     /** Writes the value into a fresh overflow chain right away; the pages are unreachable until commit. */

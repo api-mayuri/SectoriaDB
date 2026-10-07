@@ -100,6 +100,15 @@ public interface StorageMetrics {
     /** A metastore commit (pages, fsync, meta page, fsync) took {@code nanos}. */
     void metaCommit(long nanos);
 
+    /** A group commit batch of {@code bodies} write bodies (rolled back ones included) wrote {@code pages} pages. */
+    default void metaGroupBatch(int bodies, int pages) { }
+
+    /** A grouped write body waited {@code nanos} in the queue before it started to run. */
+    default void metaGroupQueueWait(long nanos) { }
+
+    /** A grouped write body threw and was rolled back without affecting the rest of its batch. */
+    default void metaGroupBodyRollback() { }
+
     // ---- resize ------------------------------------------------------------------------------------------------
 
     /** A blob resize finished (successfully or not) after {@code nanos}. */
