@@ -17,7 +17,7 @@
   "timezone": "browser",
   "panels": [
     {
-      "id": 65,
+      "id": 70,
       "type": "row",
       "title": "Client-side throughput (warp writes cumulative totals; panels use derivative())",
       "collapsed": false,
@@ -78,7 +78,7 @@
           "sort": "desc"
         }
       },
-      "id": 66,
+      "id": 71,
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -135,7 +135,7 @@
           "sort": "desc"
         }
       },
-      "id": 67,
+      "id": 72,
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -206,7 +206,7 @@
           "sort": "desc"
         }
       },
-      "id": 68,
+      "id": 73,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -263,7 +263,7 @@
           "sort": "desc"
         }
       },
-      "id": 69,
+      "id": 74,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -317,7 +317,7 @@
           "sort": "desc"
         }
       },
-      "id": 70,
+      "id": 75,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -326,7 +326,7 @@
       }
     },
     {
-      "id": 71,
+      "id": 76,
       "type": "row",
       "title": "Totals",
       "collapsed": false,
@@ -384,7 +384,7 @@
           "sort": "desc"
         }
       },
-      "id": 72,
+      "id": 77,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -438,7 +438,7 @@
           "sort": "desc"
         }
       },
-      "id": 73,
+      "id": 78,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -492,7 +492,7 @@
           "sort": "desc"
         }
       },
-      "id": 74,
+      "id": 79,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -501,7 +501,7 @@
       }
     },
     {
-      "id": 75,
+      "id": 80,
       "type": "row",
       "title": "Run summaries (written by warp at the end of each run)",
       "collapsed": false,
@@ -538,7 +538,7 @@
       "options": {
         "showHeader": true
       },
-      "id": 76,
+      "id": 81,
       "gridPos": {
         "h": 9,
         "w": 24,

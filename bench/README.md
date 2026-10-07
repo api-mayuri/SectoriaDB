@@ -6,7 +6,8 @@
 ```
 bench/
   observability/   docker-compose: Prometheus, Grafana, InfluxDB v2, node_exporter (+ SectoriaDB под тестом)
-  warp/            run.sh, matrix.sh, compare.sh, preload.sh: нагрузка minio/warp и сохранение результатов
+  warp/            run.sh, matrix.sh, compare.sh, preload.sh: нагрузка minio/warp и сохранение результатов;
+                   validate_metrics.py (сверка с warp), window_metrics.py (p50/p99 серверных метрик за окно прогона)
   compat/          ceph/s3-tests и minio/mint: проверка совместимости с S3
   faults/          kill -9, полный диск, порча чанка, сетевые сбои, проверки безопасности
   results/         результаты прогонов (локально, не в git), см. results/README.md

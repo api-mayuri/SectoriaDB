@@ -1729,6 +1729,186 @@
     },
     {
       "type": "timeseries",
+      "title": "Small objects: group fsync",
+      "description": "Appends to small_*.sob share one fsync: the appender that finds no force in progress forces for every record written so far. 1 means no sharing (low concurrency).",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(sectoriadb_small_group_fsync_records_bucket[$__rate_interval])))",
+          "legendFormat": "records per fsync p50",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(sectoriadb_small_group_fsync_records_bucket[$__rate_interval])))",
+          "legendFormat": "records per fsync p99",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(sectoriadb_small_group_fsync_records_sum[$__rate_interval])) / sum(rate(sectoriadb_small_group_fsync_records_count[$__rate_interval]))",
+          "legendFormat": "records per fsync mean",
+          "refId": "C",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(sectoriadb_storage_fsync_seconds_count{target=\"small\"}[$__rate_interval]))",
+          "legendFormat": "small fsyncs/s",
+          "refId": "D",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 29,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 55
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Small objects: time to durability p50/p99",
+      "description": "From taking the append lock to the record being forced (lock wait + write + waiting for a force). The lock itself is held only for the write into the page cache.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(sectoriadb_small_durability_wait_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "append -> durable p50",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(sectoriadb_small_durability_wait_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "append -> durable p99",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(sectoriadb_small_append_lock_wait_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "append lock wait p99",
+          "refId": "C",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "scaleDistribution": {
+              "type": "log",
+              "log": 10
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 30,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 63
+      }
+    },
+    {
+      "type": "timeseries",
       "title": "Engine lock waits p99",
       "description": "",
       "datasource": {
@@ -1793,12 +1973,12 @@
           "sort": "desc"
         }
       },
-      "id": 29,
+      "id": 31,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 55
+        "x": 8,
+        "y": 63
       }
     },
     {
@@ -1875,11 +2055,11 @@
           "sort": "desc"
         }
       },
-      "id": 30,
+      "id": 32,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
+        "x": 16,
         "y": 63
       }
     },
@@ -1957,12 +2137,12 @@
           "sort": "desc"
         }
       },
-      "id": 31,
+      "id": 33,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
-        "y": 63
+        "x": 0,
+        "y": 71
       }
     },
     {
@@ -2043,12 +2223,12 @@
           "sort": "desc"
         }
       },
-      "id": 32,
+      "id": 34,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 63
+        "x": 8,
+        "y": 71
       }
     },
     {
@@ -2125,11 +2305,11 @@
           "sort": "desc"
         }
       },
-      "id": 33,
+      "id": 35,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
+        "x": 16,
         "y": 71
       }
     },
@@ -2197,12 +2377,12 @@
           "sort": "desc"
         }
       },
-      "id": 34,
+      "id": 36,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 8,
-        "y": 71
+        "x": 0,
+        "y": 79
       }
     },
     {
@@ -2267,12 +2447,12 @@
           "sort": "desc"
         }
       },
-      "id": 35,
+      "id": 37,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 16,
-        "y": 71
+        "x": 8,
+        "y": 79
       }
     },
     {
@@ -2337,16 +2517,16 @@
           "sort": "desc"
         }
       },
-      "id": 36,
+      "id": 38,
       "gridPos": {
         "h": 8,
         "w": 8,
-        "x": 0,
+        "x": 16,
         "y": 79
       }
     },
     {
-      "id": 37,
+      "id": 39,
       "type": "row",
       "title": "Engine internals",
       "collapsed": false,
@@ -2420,7 +2600,7 @@
           "sort": "desc"
         }
       },
-      "id": 38,
+      "id": 40,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -2480,7 +2660,7 @@
           "sort": "desc"
         }
       },
-      "id": 39,
+      "id": 41,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -2562,7 +2742,7 @@
           "sort": "desc"
         }
       },
-      "id": 40,
+      "id": 42,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -2621,7 +2801,7 @@
           "sort": "desc"
         }
       },
-      "id": 41,
+      "id": 43,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -2680,7 +2860,7 @@
           "sort": "desc"
         }
       },
-      "id": 42,
+      "id": 44,
       "gridPos": {
         "h": 8,
         "w": 8,
@@ -2739,12 +2919,247 @@
           "sort": "desc"
         }
       },
-      "id": 43,
+      "id": 45,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
         "y": 96
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Chunk index",
+      "description": "Pool-wide chunk index (chunks tree). refs / chunks is the average sharing factor; a chunk shared by many objects is stored once.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sectoriadb_chunks_indexed",
+          "legendFormat": "chunks indexed",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sectoriadb_chunks_refs",
+          "legendFormat": "references (chunk positions of live objects)",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 46,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 104
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Chunk collection queue and orphans",
+      "description": "Both grow until the garbage collector of stage 10 runs; nothing frees chunk slots yet.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sectoriadb_chunks_gc_queue_length",
+          "legendFormat": "chunks with zero references (chunk_gc)",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sectoriadb_chunks_orphans",
+          "legendFormat": "orphan copies (written twice by concurrent uploads)",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 47,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 104
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Pool placement: dedup, fallbacks, growth",
+      "description": "Chunks are ranked over the blobs of a pool by weighted rendezvous hashing; a fallback means the best-ranked blob was full and the next one took the chunk.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "rate(sectoriadb_pool_dedup_hits_total[$__rate_interval])",
+          "legendFormat": "pool-wide dedup hits/s",
+          "refId": "A",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "increase(sectoriadb_pool_placement_fallbacks_total[$__rate_interval])",
+          "legendFormat": "placement fallbacks (top choice refused)",
+          "refId": "B",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "increase(sectoriadb_pool_grown_total[$__rate_interval])",
+          "legendFormat": "blobs added to pools",
+          "refId": "C",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sectoriadb_pool_blobs_max",
+          "legendFormat": "most blobs in one pool",
+          "refId": "D",
+          "editorMode": "code",
+          "range": true,
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "calcs": []
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 48,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 104
       }
     },
     {
@@ -2821,12 +3236,12 @@
           "sort": "desc"
         }
       },
-      "id": 44,
+      "id": 49,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 104
+        "y": 112
       }
     },
     {
@@ -2891,12 +3306,12 @@
           "sort": "desc"
         }
       },
-      "id": 45,
+      "id": 50,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 104
+        "y": 112
       }
     },
     {
@@ -2973,16 +3388,16 @@
           "sort": "desc"
         }
       },
-      "id": 46,
+      "id": 51,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 104
+        "y": 112
       }
     },
     {
-      "id": 47,
+      "id": 52,
       "type": "row",
       "title": "Capacity",
       "collapsed": false,
@@ -2990,7 +3405,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 112
+        "y": 120
       },
       "panels": []
     },
@@ -3066,12 +3481,12 @@
           "sort": "desc"
         }
       },
-      "id": 48,
+      "id": 53,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 113
+        "y": 121
       }
     },
     {
@@ -3146,12 +3561,12 @@
           "sort": "desc"
         }
       },
-      "id": 49,
+      "id": 54,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 113
+        "y": 121
       }
     },
     {
@@ -3205,12 +3620,12 @@
           "sort": "desc"
         }
       },
-      "id": 50,
+      "id": 55,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 113
+        "y": 121
       }
     },
     {
@@ -3263,12 +3678,12 @@
           "sort": "desc"
         }
       },
-      "id": 51,
+      "id": 56,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 121
+        "y": 129
       }
     },
     {
@@ -3345,12 +3760,12 @@
           "sort": "desc"
         }
       },
-      "id": 52,
+      "id": 57,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 121
+        "y": 129
       }
     },
     {
@@ -3415,12 +3830,12 @@
           "sort": "desc"
         }
       },
-      "id": 53,
+      "id": 58,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 121
+        "y": 129
       }
     },
     {
@@ -3485,12 +3900,12 @@
           "sort": "desc"
         }
       },
-      "id": 54,
+      "id": 59,
       "gridPos": {
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 121
+        "y": 129
       }
     },
     {
@@ -3567,16 +3982,16 @@
           "sort": "desc"
         }
       },
-      "id": 55,
+      "id": 60,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 129
+        "y": 137
       }
     },
     {
-      "id": 56,
+      "id": 61,
       "type": "row",
       "title": "Host (node_exporter)",
       "collapsed": false,
@@ -3584,7 +3999,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 137
+        "y": 145
       },
       "panels": []
     },
@@ -3640,12 +4055,12 @@
           "sort": "desc"
         }
       },
-      "id": 57,
+      "id": 62,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 138
+        "y": 146
       }
     },
     {
@@ -3700,12 +4115,12 @@
           "sort": "desc"
         }
       },
-      "id": 58,
+      "id": 63,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 138
+        "y": 146
       }
     },
     {
@@ -3782,12 +4197,12 @@
           "sort": "desc"
         }
       },
-      "id": 59,
+      "id": 64,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 138
+        "y": 146
       }
     },
     {
@@ -3852,12 +4267,12 @@
           "sort": "desc"
         }
       },
-      "id": 60,
+      "id": 65,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 146
+        "y": 154
       }
     },
     {
@@ -3922,12 +4337,12 @@
           "sort": "desc"
         }
       },
-      "id": 61,
+      "id": 66,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 146
+        "y": 154
       }
     },
     {
@@ -3992,12 +4407,12 @@
           "sort": "desc"
         }
       },
-      "id": 62,
+      "id": 67,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 146
+        "y": 154
       }
     },
     {
@@ -4062,12 +4477,12 @@
           "sort": "desc"
         }
       },
-      "id": 63,
+      "id": 68,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 154
+        "y": 162
       }
     },
     {
@@ -4144,12 +4559,12 @@
           "sort": "desc"
         }
       },
-      "id": 64,
+      "id": 69,
       "gridPos": {
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 154
+        "y": 162
       }
     }
   ],

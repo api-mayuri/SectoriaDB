@@ -148,7 +148,7 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 | Группа | Команды |
 |---|---|
 | Пулы | `mkpool`, `pools`, `pool`, `rmpool` |
-| Блобы | `mkblob` (`--small` — файл малых объектов), `blobs`, `blob`, `resize`, `scrub`, `rmblob` |
+| Блобы | `mkblob` (`--small` — файл малых объектов), `blobs` (чанки и доля размещения HRW по блобам), `blob`, `resize` (расширить один блоб на месте), `scrub`, `rmblob` |
 | Файлы | `store`, `ls`, `info`, `get`, `rm`, `verify`, `verify-all` |
 | Ключи | `mk-key`, `keys`, `rm-key`, `enable-key`, `disable-key` |
 | Доступ | `bucket-acl`, `object-acl`, `public-list` |
@@ -167,9 +167,12 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 | `sectoriadb.max-evictions` | `32` | максимум вытеснений при вставке в таблицу |
 | `sectoriadb.small-object.max-file-bytes` | `1073741824` | размер файла малых объектов (1 ГиБ), после которого пул получает новый |
 | `sectoriadb.small-object.checkpoint-interval-bytes` | `16777216` | как часто (в байтах дозаписи) сдвигается контрольная точка восстановления в заголовке `.sob` |
-| `sectoriadb.auto-resize.enabled` | `true` | автоматическое расширение блоба |
-| `sectoriadb.auto-resize.threshold-percent` | `80` | заполненность, при которой блоб расширяется |
-| `sectoriadb.auto-resize.expand-percent` | `50` | на сколько процентов расширять |
+| `sectoriadb.pool.initial-blobs` | `1` | сколько кукушкиных блобов создаётся при первом чанковом объекте бакета (несколько блобов позволяют вставкам идти параллельно) |
+| `sectoriadb.pool.max-blobs` | `16` | предел кукушкиных блобов в бакете (таблица каждого занимает в памяти около 9 МиБ) |
+| `sectoriadb.pool.grow-threshold-percent` | `75` | при такой суммарной заполненности блобов бакета (и когда ни один блоб не принимает чанк) добавляется новый блоб |
+| `sectoriadb.pool.location-cache-entries` | `65536` | LRU подсказок «чанк → блоб», экономит поиски в индексе при чтении (`0` выключает) |
+| `sectoriadb.auto-resize.enabled` | `true` | фоновая проверка роста пулов (добавляет блоб по порогу выше) |
+| `sectoriadb.auto-resize.check-interval-ms` | `60000` | период этой проверки |
 | `sectoriadb.s3.region` | `us-east-1` | регион для подписи запросов |
 | `sectoriadb.s3.auth.enabled` | `true` | проверка подписи SigV4 |
 | `server.port` | `8080` | порт HTTP |
@@ -185,7 +188,7 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 |---|---|
 | Бакет | пул хранилища — отдельный каталог с блоб-файлами |
 | Объект | манифест в `sectoria.db` со списком ключей чанков, типом содержимого и ETag |
-| Данные | блоб: `blob_*.raw` — большой разрежённый файл с хэш-таблицей чанков, либо `small_*.sob` — журнал малых объектов |
+| Данные | блобы: несколько `blob_*.raw` — большие разрежённые файлы с хэш-таблицей чанков (чанк кладётся в блоб по взвешенному rendezvous-хэшированию, место записывается в индекс чанков) и `small_*.sob` — журналы малых объектов |
 
 Способ хранения выбирается по размеру объекта (поле `storageKind` манифеста):
 
@@ -193,11 +196,14 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 |---|---|---|
 | 0 байт | `EMPTY` | нигде: хватает манифеста |
 | меньше `default-chunk-size` (16 КиБ) | `SMALL` | целиком одной записью в `small_*.sob` (append-only журнал, CRC32C на запись) |
-| не меньше `default-chunk-size` | `CHUNKED` | чанки в кукушкиной таблице `blob_*.raw` |
+| не меньше `default-chunk-size` | `CHUNKED` | чанки в кукушкиных таблицах блобов `blob_*.raw` пула |
 
-Крупный файл режется на чанки фиксированного размера. Каждый чанк хэшируется (XXH64) и кладётся в кукушкину
-хэш-таблицу блоба. Манифест хранит только упорядоченный список ключей чанков. Благодаря этому `Range`-запросы
-читают лишь нужные чанки, а видео можно перематывать. Малый объект не режется и не участвует в кукушкином хэшировании:
+Крупный файл режется на чанки фиксированного размера. Каждый чанк хэшируется (XXH64). Если такой чанк уже есть в бакете
+(индекс чанков `chunks`), байты сравниваются и чанк не пишется второй раз (дедупликация по всему бакету, счётчик ссылок
+`refcount`). Новый чанк кладётся в один из блобов бакета: блобы ранжируются взвешенным rendezvous-хэшированием (вес — свободное
+место, у почти полного блоба вес падает), первый принявший получает чанк; когда бакет заполняется, добавляется новый блоб. Манифест
+хранит только упорядоченный список ключей чанков: где чанк лежит, говорит индекс `(бакет, ключ чанка) → блоб, длина, CRC, счётчик ссылок`.
+Благодаря этому `Range`-запросы читают лишь нужные чанки, а видео можно перематывать. Малый объект не режется и не участвует в кукушкином хэшировании:
 манифест хранит лишь «где лежит» (`smallBlobId`, `smallOffset`, `smallLength`, `smallCrc32c`). Подробности:
 [`docs/architecture/04-small-objects.md`](docs/architecture/04-small-objects.md).
 
@@ -205,14 +211,16 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 
 ```
 sectoriadb-meta/
-  sectoria.db        пулы, блобы, манифесты, индексы (бакет, ключ) → манифест, очередь на сборку мусора
+  sectoria.db        пулы, блобы, манифесты, индексы (бакет, ключ) → манифест, индекс чанков (chunks, chunks_by_blob),
+                     очереди для сборки мусора (deleted_manifests, chunk_gc, chunk_orphans)
   credentials.json   ключи доступа
   oplogs.jsonl       журнал операций
-sectoriadb-data/<бакет>/   blob_*.raw и small_*.sob
+sectoriadb-data/<бакет>/   несколько blob_*.raw (кукушкины таблицы чанков) и small_*.sob (журналы малых объектов)
 ```
 
-Загрузка объекта — одна транзакция метаданных (новый манифест, переключение указателя, постановка старой версии
-в очередь), листинг — диапазонный проход по индексу. Подробности: [`docs/architecture/07-metastore-integration.md`](docs/architecture/07-metastore-integration.md).
+Загрузка объекта — одна транзакция метаданных (ссылки на чанки, новый манифест, переключение указателя, освобождение ссылок
+старой версии и её постановка в очередь), листинг — диапазонный проход по индексу. Подробности: [`docs/architecture/07-metastore-integration.md`](docs/architecture/07-metastore-integration.md),
+несколько блобов, HRW и индекс чанков: [`docs/architecture/09-multi-blob-pool.md`](docs/architecture/09-multi-blob-pool.md).
 
 Проект состоит из двух Maven-модулей:
 
