@@ -22,6 +22,9 @@ import java.nio.file.Path;
  * The embedded metadata store: one file, {@code ${sectoriadb.meta-dir}/sectoria.db}, durable commits according to
  * {@code sectoriadb.fsync}, closed (and its file lock released) when the Spring context closes.
  *
+ * <p>Group commit limits (docs/architecture/09-multi-blob-pool.md): {@code sectoriadb.metastore.group.max-batch-size},
+ * {@code max-batch-pages}, {@code max-wait-micros}, {@code queue-capacity}.
+ *
  * <p>The bean is {@link Lazy} and the repositories reach it through {@link MetaStoreProvider}. In server mode the store
  * is opened when the context starts, so a second server on the same directory fails at startup; the admin CLI
  * ({@code sectoriadb.metastore.lazy=true}) opens it only if a command really needs it, so credential commands keep
@@ -36,7 +39,11 @@ public class MetaStoreConfig {
 
     @Bean(destroyMethod = "close")
     @Lazy
-    public MetaStore metaStore(StorageProperties props, StorageMetrics metrics) {
+    public MetaStore metaStore(StorageProperties props, StorageMetrics metrics,
+                               @Value("${sectoriadb.metastore.group.max-batch-size:256}") int maxBatchSize,
+                               @Value("${sectoriadb.metastore.group.max-batch-pages:1024}") int maxBatchPages,
+                               @Value("${sectoriadb.metastore.group.max-wait-micros:0}") long maxWaitMicros,
+                               @Value("${sectoriadb.metastore.group.queue-capacity:4096}") int queueCapacity) {
         Path dir = Path.of(props.getMetaDir());
         try {
             Files.createDirectories(dir);
@@ -45,7 +52,8 @@ public class MetaStoreConfig {
         }
         Path file = dir.resolve(FILE_NAME);
         try {
-            MetaStore store = MetaStore.open(file, MetaStoreOptions.defaults().fsync(props.isFsync()).metrics(metrics));
+            MetaStore store = MetaStore.open(file, MetaStoreOptions.defaults().fsync(props.isFsync()).metrics(metrics)
+                    .groupCommit(maxBatchSize, maxBatchPages, maxWaitMicros, queueCapacity));
             log.info("Metadata store opened: {} (fsync={})", file.toAbsolutePath(), props.isFsync());
             return store;
         } catch (RuntimeException e) {
