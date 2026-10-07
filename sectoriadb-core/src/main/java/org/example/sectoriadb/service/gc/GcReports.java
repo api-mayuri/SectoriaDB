@@ -77,6 +77,8 @@ public final class GcReports {
         /** copies no index entry pointed at: found / freed (the rest were committed meanwhile or deferred) */
         public long strays, freed, bytesFreed;
         public long notStray;
+        /** small-object blobs rewritten because most of their records were referenced by no manifest */
+        public int smallBlobsCompacted;
         /** true if uploads were in flight longer than the gate wait and the rest of the sweep was left for later */
         public boolean deferred;
         public int errors;
@@ -84,8 +86,8 @@ public final class GcReports {
 
         @Override
         public String toString() {
-            return String.format("blobs=%d slotsScanned=%d strays=%d freed=%d (%d bytes) notStray=%d deferred=%s errors=%d; %d ms",
-                    blobs, slotsScanned, strays, freed, bytesFreed, notStray, deferred, errors, durationMillis);
+            return String.format("blobs=%d slotsScanned=%d strays=%d freed=%d (%d bytes) notStray=%d smallBlobsCompacted=%d deferred=%s errors=%d; %d ms",
+                    blobs, slotsScanned, strays, freed, bytesFreed, notStray, smallBlobsCompacted, deferred, errors, durationMillis);
         }
     }
 

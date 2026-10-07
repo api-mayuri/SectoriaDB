@@ -134,6 +134,26 @@ public class SmallBlobCompactor {
         }
     }
 
+    /**
+     * True if the blob holds so many records that no manifest references (copies left by a compaction that crashed before
+     * its swap, small uploads that wrote their record and never committed) that rewriting it pays: the same thresholds as
+     * for dead records. Counts the live manifests of the blob, so it is a sweep-time check, not a per-minute one.
+     */
+    public boolean strayHeavy(BlobFileEntity blob) {
+        try {
+            SmallObjectBlob.Stats st = smallCache.get(blob).stats();
+            if (st.liveRecords() == 0) return false;
+            long referenced = manifestRepo.countLiveByBlobId(blob.getId());
+            long strays = Math.max(0, st.liveRecords() - referenced);
+            long strayBytes = strays * (st.liveBytes() / st.liveRecords());
+            long total = st.liveBytes() + st.deadBytes();
+            return strayBytes > 0 && strayBytes >= props.getGc().getSmallCompactMinDeadBytes()
+                    && strayBytes * 100 >= total * props.getGc().getSmallCompactDeadPercent();
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
     // ------------------------------------------------------------------ compaction
 
     /**

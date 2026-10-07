@@ -336,6 +336,13 @@ public class GarbageCollector {
                     }
                 }
             }
+            // small-object blobs: records that no manifest references are strays too; they are reclaimed by rewriting the blob
+            for (BlobFileEntity b : blobRepo.findByPoolId(pool.getId())) {
+                if (b.getKind() != BlobKind.SMALL || !compactor.strayHeavy(b)) continue;
+                CompactionReport cr = compactor.compact(pool, b, true);
+                lastCompaction = cr;
+                if (cr.compacted()) rep.smallBlobsCompacted++;
+            }
             compactor.deleteUnregisteredFiles(props.getGc().getGrace().toMillis());
         } catch (RuntimeException e) {
             rep.errors++;

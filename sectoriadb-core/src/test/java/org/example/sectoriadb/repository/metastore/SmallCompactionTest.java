@@ -321,6 +321,31 @@ class SmallCompactionTest {
     }
 
     @Test
+    void aCompactionThatCrashedBeforeItsSwapLeavesStraysThatTheSweepReclaims() throws Exception {
+        Map<String, byte[]> model = fill(50);
+        rig.props.getGc().setSweepGateWait(java.time.Duration.ofMillis(200));
+        String oldId = blobOf("o0");
+        BlobFileEntity old = rig.blobs.findById(oldId).orElseThrow();
+        // the copy phase of a compaction ran, the process died before the swap: the new blob holds unreferenced copies
+        BlobFileEntity leftover = rig.blobService.createSmall(pool, true);
+        SmallObjectBlob to = rig.smallCache.get(leftover);
+        for (ManifestEntity m : rig.manifests.findByBlobId(oldId, true)) {
+            to.appendWhileSealed(rig.smallCache.get(old).read(m.getSmallOffset(), m.getSmallLength(), m.getSmallCrc32c()), 1);
+        }
+        rig.reopen();                                                   // the restart: an ordinary blob now
+        pool = rig.bucket("bkt");
+        for (int i = 0; i < 25; i++) put("later" + i, bytes(SIZE, 800 + i));   // a newer blob becomes the append target
+        assertNotEquals(leftover.getId(), rig.blobService.smallAppendTarget(pool).orElseThrow().getId());
+        assertTrue(rig.compactor.strayHeavy(rig.blobs.findById(leftover.getId()).orElseThrow()));
+
+        var s = rig.gc.sweep(pool);
+        assertTrue(s.smallBlobsCompacted >= 1, s.toString());
+        assertTrue(rig.blobs.findById(leftover.getId()).isEmpty(), "the blob of unreferenced copies is gone");
+        for (var e : model.entrySet()) assertArrayEquals(e.getValue(), get(e.getKey()), e.getKey());
+        for (int i = 0; i < 25; i++) assertArrayEquals(bytes(SIZE, 800 + i), get("later" + i));
+    }
+
+    @Test
     void theSwapRefusesWhenAManifestChangedOrWasNotCopied() throws Exception {
         fill(50);
         String oldId = blobOf("o0");
