@@ -243,4 +243,28 @@ class SmallObjectStorageTest {
         BlobFileEntity b = BlobCodec.decode(BlobCodec.encode(new BlobFileEntity()));
         assertEquals(BlobKind.CUCKOO, b.getKind());
     }
+
+    /** bench/warp: concurrent first PUTs into a fresh bucket each created their own multi-GiB blob (15 at 200 threads). */
+    @Test
+    void concurrentFirstWritesCreateExactlyOneCuckooBlob() throws Exception {
+        int threads = 16;
+        var start = new java.util.concurrent.CountDownLatch(1);
+        var pool2 = new java.util.concurrent.ForkJoinPool(threads);
+        try {
+            var futures = new java.util.ArrayList<java.util.concurrent.Future<String>>();
+            for (int t = 0; t < threads; t++) {
+                futures.add(pool2.submit(() -> {
+                    start.await();
+                    return blobService.chooseBlobFileForWrite(pool).getId();
+                }));
+            }
+            start.countDown();
+            java.util.Set<String> ids = new java.util.HashSet<>();
+            for (var f : futures) ids.add(f.get());
+            assertEquals(1, ids.size(), "all writers must be given the same blob");
+        } finally {
+            pool2.shutdownNow();
+        }
+        assertEquals(1, blobRepo.findByPoolId(pool.getId()).stream().filter(b -> b.getKind() == BlobKind.CUCKOO).count());
+    }
 }

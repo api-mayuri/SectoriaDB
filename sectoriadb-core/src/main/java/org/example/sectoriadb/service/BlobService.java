@@ -34,6 +34,8 @@ public class BlobService {
     private final HashTableCache cache;
     private final SmallBlobCache smallCache;
     private final Object smallChooseLock = new Object();
+    /** Serialises "the pool has no cuckoo blob yet: create one" (see chooseBlobFileForWrite). */
+    private final Object cuckooCreateLock = new Object();
     private final StorageProperties props;
     private final OperationLogService opLog;
 
@@ -156,11 +158,18 @@ public class BlobService {
      * Auto-creates one with default settings if the pool has no blobs yet.
      */
     public BlobFileEntity chooseBlobFileForWrite(PoolEntity pool) throws IOException {
-        List<BlobFileEntity> blobs = blobRepo.findByPoolId(pool.getId()).stream()
-                .filter(b -> b.getKind() == BlobKind.CUCKOO).toList();
+        List<BlobFileEntity> blobs = cuckooBlobsOf(pool);
         if (blobs.isEmpty()) {
-            log.info("No blob files in pool '{}' — auto-creating one with defaults", pool.getName());
-            return create(pool, props.getDefaultNumBuckets(), props.getDefaultChunkSize());
+            // Concurrent first writes to a fresh bucket must not each create their own blob: every blob is a sparse
+            // file of several GiB with an in-memory table of ~9 MiB that stays loaded (a 200-thread warp run created
+            // 15 blobs in one bucket and exhausted a 1 GiB heap after about 25 buckets).
+            synchronized (cuckooCreateLock) {
+                blobs = cuckooBlobsOf(pool);   // another thread may have created it while this one waited
+                if (blobs.isEmpty()) {
+                    log.info("No blob files in pool '{}' — auto-creating one with defaults", pool.getName());
+                    return create(pool, props.getDefaultNumBuckets(), props.getDefaultChunkSize());
+                }
+            }
         }
         BlobFileEntity best = null;
         int maxFree = -1;
@@ -173,6 +182,10 @@ public class BlobService {
             }
         }
         return best;
+    }
+
+    private List<BlobFileEntity> cuckooBlobsOf(PoolEntity pool) {
+        return blobRepo.findByPoolId(pool.getId()).stream().filter(b -> b.getKind() == BlobKind.CUCKOO).toList();
     }
 
     public void delete(String blobId) throws IOException {
