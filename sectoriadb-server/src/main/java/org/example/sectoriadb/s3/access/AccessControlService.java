@@ -191,6 +191,14 @@ public class AccessControlService {
                 return false;
             }
 
+            // An anonymous request may never name another object as its source (CopyObject reads the source without
+            // any permission check, so an open bucket would become an exfiltration channel for every private
+            // object) and may never set a non-private ACL / grants (AWS needs s3:PutObjectAcl for that, which the
+            // public-read-write bucket ACL does not give to anonymous callers).
+            if (carriesPrivilegedHeaders(request)) {
+                return false;
+            }
+
             PoolEntity poolEntity;
             try {
                 poolEntity = poolService.getByName(bucket);
@@ -320,6 +328,16 @@ public class AccessControlService {
     private static final Set<String> PRIVATE_SUBRESOURCES = Set.of(
             "acl", "policy", "uploads", "uploadId", "partNumber", "tagging", "versioning",
             "cors", "lifecycle", "encryption", "publicAccessBlock", "delete", "location");
+
+    private static boolean carriesPrivilegedHeaders(HttpServletRequest request) {
+        if (request.getHeader("x-amz-copy-source") != null) return true;
+        String acl = request.getHeader("x-amz-acl");
+        if (acl != null && !acl.isBlank() && !"private".equalsIgnoreCase(acl.trim())) return true;
+        for (java.util.Enumeration<String> names = request.getHeaderNames(); names != null && names.hasMoreElements(); ) {
+            if (names.nextElement().regionMatches(true, 0, "x-amz-grant-", 0, "x-amz-grant-".length())) return true;
+        }
+        return false;
+    }
 
     private boolean isPrivateQuery(String queryString) {
         if (queryString == null || queryString.isEmpty()) return false;

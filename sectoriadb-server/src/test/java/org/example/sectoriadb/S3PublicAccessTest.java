@@ -141,6 +141,36 @@ class S3PublicAccessTest {
         assertEquals(200, status("PUT", "/rw-bkt/new.txt"));
     }
 
+    private int statusWithHeaders(String method, String path, String... headers) throws Exception {
+        var b = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path));
+        for (int i = 0; i < headers.length; i += 2) b.header(headers[i], headers[i + 1]);
+        if ("PUT".equals(method)) b.PUT(BodyPublishers.ofString("x"));
+        else b.method(method, BodyPublishers.noBody());
+        return http.send(b.build(), BodyHandlers.discarding()).statusCode();
+    }
+
+    @Test
+    void anonymousCopyIntoPublicWritableBucketCannotReadPrivateObjects() throws Exception {
+        putObject("loot-src", "secret.txt");
+        putObject("loot-dst", "seed.txt");
+        poolService.setAcl("loot-dst", "public-read-write");
+
+        // plain anonymous write is allowed by the bucket ACL ...
+        assertEquals(200, status("PUT", "/loot-dst/plain.txt"));
+        // ... but naming a source (CopyObject) or making the copy public is not
+        assertEquals(403, statusWithHeaders("PUT", "/loot-dst/loot.txt", "x-amz-copy-source", "/loot-src/secret.txt"));
+        assertEquals(403, statusWithHeaders("PUT", "/loot-dst/loot2.txt", "x-amz-copy-source", "loot-src/secret.txt",
+                "x-amz-acl", "public-read"));
+        assertTrue(manifestRepo.findCurrent("loot-dst", "loot.txt").isEmpty());
+        assertTrue(manifestRepo.findCurrent("loot-dst", "loot2.txt").isEmpty());
+        // an anonymous caller cannot make its own upload public or hand out grants either (needs s3:PutObjectAcl)
+        assertEquals(403, statusWithHeaders("PUT", "/loot-dst/pub.txt", "x-amz-acl", "public-read"));
+        assertEquals(403, statusWithHeaders("PUT", "/loot-dst/pub2.txt", "x-amz-grant-read",
+                "uri=\"http://acs.amazonaws.com/groups/global/AllUsers\""));
+        assertEquals(200, statusWithHeaders("PUT", "/loot-dst/priv.txt", "x-amz-acl", "private"));
+        assertEquals(403, statusWithHeaders("GET", "/loot-dst/plain.txt"), "uploaded object is not readable anonymously");
+    }
+
     @Test
     void publicBucketPlusPublicObjectAclReadsOnlyThatObject() throws Exception {
         putObject("mix-bkt", "pub.txt");
