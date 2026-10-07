@@ -11,6 +11,7 @@ public final class MetaStoreOptions {
     public static final int DEFAULT_MAX_BATCH_SIZE = 256;
     public static final int DEFAULT_MAX_BATCH_PAGES = 1024;
     public static final int DEFAULT_QUEUE_CAPACITY = 4096;
+    public static final long DEFAULT_RECOVERY_BACKOFF_MILLIS = 1000;
 
     private final int pageSize;
     private final boolean fsync;
@@ -19,9 +20,12 @@ public final class MetaStoreOptions {
     private final int maxBatchPages;
     private final long maxBatchWaitMicros;
     private final int queueCapacity;
+    private final long recoveryBackoffMillis;
 
     private MetaStoreOptions(int pageSize, boolean fsync, StorageMetrics metrics,
-                             int maxBatchSize, int maxBatchPages, long maxBatchWaitMicros, int queueCapacity) {
+                             int maxBatchSize, int maxBatchPages, long maxBatchWaitMicros, int queueCapacity,
+                             long recoveryBackoffMillis) {
+        this.recoveryBackoffMillis = Math.max(0, recoveryBackoffMillis);
         if (maxBatchSize < 1 || maxBatchPages < 1 || maxBatchWaitMicros < 0 || queueCapacity < 1) {
             throw new IllegalArgumentException("group commit limits must be positive (wait may be 0)");
         }
@@ -40,22 +44,22 @@ public final class MetaStoreOptions {
 
     public static MetaStoreOptions defaults() {
         return new MetaStoreOptions(DEFAULT_PAGE_SIZE, true, StorageMetrics.NOOP,
-                DEFAULT_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_PAGES, 0, DEFAULT_QUEUE_CAPACITY);
+                DEFAULT_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_PAGES, 0, DEFAULT_QUEUE_CAPACITY, DEFAULT_RECOVERY_BACKOFF_MILLIS);
     }
 
     /** Page size used when the file is created. For an existing file the size stored in its header wins. */
     public MetaStoreOptions pageSize(int pageSize) {
-        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity);
+        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis);
     }
 
     /** If false, commits do not call force(); durability is then up to the OS (tests, bulk loads). */
     public MetaStoreOptions fsync(boolean fsync) {
-        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity);
+        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis);
     }
 
     /** Receiver of lock-wait, commit, fsync and checksum-failure events (default: none). */
     public MetaStoreOptions metrics(StorageMetrics metrics) {
-        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity);
+        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis);
     }
 
     /**
@@ -66,7 +70,19 @@ public final class MetaStoreOptions {
      * block when it is full.
      */
     public MetaStoreOptions groupCommit(int maxBatchSize, int maxBatchPages, long maxWaitMicros, int queueCapacity) {
-        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxWaitMicros, queueCapacity);
+        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxWaitMicros, queueCapacity, recoveryBackoffMillis);
+    }
+
+    /**
+     * After a failed commit the store refuses writes (reads keep working) and tries to recover on the next write; when
+     * the recovery fails, or the commit failed less than this long ago, writes fail fast without touching the disk.
+     */
+    public MetaStoreOptions recoveryBackoff(long millis) {
+        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, millis);
+    }
+
+    public long recoveryBackoffMillis() {
+        return recoveryBackoffMillis;
     }
 
     public int maxBatchSize() {

@@ -126,6 +126,9 @@ public interface StorageMetrics {
     /** A grouped write body threw and was rolled back without affecting the rest of its batch. */
     default void metaGroupBodyRollback() { }
 
+    /** The write side of the metadata store tried to recover from a failed commit (doc 10, part B). */
+    default void metaRecovery(boolean success) { }
+
     // ---- garbage collection (doc 10) ----------------------------------------------------------------------------
 
     /** Why the collector left something for a later pass. */

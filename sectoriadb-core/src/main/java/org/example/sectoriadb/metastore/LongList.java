@@ -16,6 +16,10 @@ final class LongList {
         return a[--n];
     }
 
+    void clear() {
+        n = 0;
+    }
+
     boolean isEmpty() {
         return n == 0;
     }

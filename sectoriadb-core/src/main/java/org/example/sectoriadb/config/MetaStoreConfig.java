@@ -23,7 +23,8 @@ import java.nio.file.Path;
  * {@code sectoriadb.fsync}, closed (and its file lock released) when the Spring context closes.
  *
  * <p>Group commit limits (docs/architecture/09-multi-blob-pool.md): {@code sectoriadb.metastore.group.max-batch-size},
- * {@code max-batch-pages}, {@code max-wait-micros}, {@code queue-capacity}.
+ * {@code max-batch-pages}, {@code max-wait-micros}, {@code queue-capacity}. A failed commit makes the store read-only
+ * until it recovers in place (doc 10, part B); {@code sectoriadb.metastore.recovery-backoff} is the pause between attempts.
  *
  * <p>The bean is {@link Lazy} and the repositories reach it through {@link MetaStoreProvider}. In server mode the store
  * is opened when the context starts, so a second server on the same directory fails at startup; the admin CLI
@@ -43,7 +44,8 @@ public class MetaStoreConfig {
                                @Value("${sectoriadb.metastore.group.max-batch-size:256}") int maxBatchSize,
                                @Value("${sectoriadb.metastore.group.max-batch-pages:1024}") int maxBatchPages,
                                @Value("${sectoriadb.metastore.group.max-wait-micros:0}") long maxWaitMicros,
-                               @Value("${sectoriadb.metastore.group.queue-capacity:4096}") int queueCapacity) {
+                               @Value("${sectoriadb.metastore.group.queue-capacity:4096}") int queueCapacity,
+                               @Value("${sectoriadb.metastore.recovery-backoff:1s}") java.time.Duration recoveryBackoff) {
         Path dir = Path.of(props.getMetaDir());
         try {
             Files.createDirectories(dir);
@@ -53,7 +55,8 @@ public class MetaStoreConfig {
         Path file = dir.resolve(FILE_NAME);
         try {
             MetaStore store = MetaStore.open(file, MetaStoreOptions.defaults().fsync(props.isFsync()).metrics(metrics)
-                    .groupCommit(maxBatchSize, maxBatchPages, maxWaitMicros, queueCapacity));
+                    .groupCommit(maxBatchSize, maxBatchPages, maxWaitMicros, queueCapacity)
+                    .recoveryBackoff(recoveryBackoff.toMillis()));
             log.info("Metadata store opened: {} (fsync={})", file.toAbsolutePath(), props.isFsync());
             return store;
         } catch (RuntimeException e) {

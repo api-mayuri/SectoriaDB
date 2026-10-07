@@ -3,6 +3,8 @@
 # mount -o loop). PUTs are sent until the disk is full. Expected: clean 5xx error (no hang, no crash), earlier objects
 # still readable, no corruption (offline verify-all), service keeps answering, and PUTs work again after space is freed
 # (a filler file on the same device is removed; SectoriaDB itself does not delete data to make room).
+# TARGET=meta (doc 10, part B): the metadata store keeps serving reads while its disk is full (writes: 507 / 503) and
+# recovers IN PLACE once space is freed: the PUT after freeing must succeed WITHOUT a restart.
 #   SIZE_MB=64 TARGET=storage ./full-disk.sh        data directory full
 #   SIZE_MB=40 TARGET=meta OBJ_KIB=1 MAX_PUTS=20000 FILLER_MB=20 ./full-disk.sh   metadata directory full
 set -uo pipefail
@@ -40,6 +42,11 @@ done
 [ "$bad" = 0 ] && pass "objects written before the disk filled are intact" || fail "$bad earlier objects unreadable/corrupt"
 mkfile "$WORK/obj.bin" "$OBJ_MIB"; WANT="$(sha "$WORK/obj.bin")"; OBJ_BYTES=$(( OBJ_MIB * 1048576 ))
 r2="$(s3c put diskb after-full "$WORK/obj.bin")"; info "another PUT while still full: $r2"
+if [ "$TARGET" = meta ]; then
+  echo "$r2" | grep -qE "(507|503)" && pass "writes are refused with 507/503 while the metadata disk is full" || fail "unexpected answer while the metadata disk is full: $r2"
+  [ "$ok" -ge 1 ] && [ "$(s3c get diskb o1)" = "GET ok $(( OBJ_KIB * 1024 )) $(awk '$1 == "o1" {print $2}' "$WORK/fill.sha")" ] \
+    && pass "reads keep working while the metadata disk is full" || fail "reads do not work while the metadata disk is full"
+fi
 info "errors by code: $(curl -s "http://localhost:$MGMT_PORT/actuator/prometheus" | grep '^sectoriadb_s3_errors_total' | sed 's/application="SectoriaDB",//' | tr '\n' ' ')"
 info "disk free metric: $(curl -s "http://localhost:$MGMT_PORT/actuator/prometheus" | grep '^sectoriadb_disk_free_bytes' | tr '\n' ' ')"
 server_logs | grep -iE "No space|ENOSPC|IOException" | sed 's/^/      log: /' | sort | uniq -c | sort -rn | head -3
@@ -47,6 +54,7 @@ server_logs | grep -iE "No space|ENOSPC|IOException" | sed 's/^/      log: /' | 
 rm -f "$MNT/filler.bin"; sleep 1
 r3="$(s3c put diskb after-free "$WORK/obj.bin")"
 [ "$r3" = "PUT ok" ] && pass "PUT succeeds after space was freed (no restart)" || {
+  [ "$TARGET" = meta ] && fail "the metadata store did not recover in place: $r3"
   info "PUT after freeing: $r3; restarting the server"; start_server
   [ "$(s3c put diskb after-free2 "$WORK/obj.bin")" = "PUT ok" ] && pass "PUT succeeds after space was freed and a restart" || fail "PUT still fails after freeing space and restart"; }
 [ "$(s3c get diskb after-free)" = "GET ok $OBJ_BYTES $WANT" ] || [ "$(s3c get diskb after-free2)" = "GET ok $OBJ_BYTES $WANT" ] \

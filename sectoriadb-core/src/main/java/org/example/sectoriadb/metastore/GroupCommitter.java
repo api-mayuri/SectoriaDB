@@ -20,7 +20,8 @@ import java.util.function.Function;
  * the earlier ones, so the outcome is that of the serial order of submission. Atomicity per body: a body that throws is
  * rolled back to its savepoint, the others stay in the batch. Durability: a future completes after the meta page
  * of the commit that contains its changes has been fsynced. If the commit itself fails every body of the batch fails
- * (the store is then poisoned, like for a direct writer).
+ * (the store is then read-only until it recovers, like for a direct writer; the committer thread is the one that
+ * attempts the recovery when the next batch begins).
  */
 final class GroupCommitter {
 
@@ -72,7 +73,7 @@ final class GroupCommitter {
         if (onCommitterThread()) {
             throw new IllegalStateException("a grouped write body must not submit another grouped write (it would wait for itself)");
         }
-        Throwable unusable = store.unusableCause();
+        Throwable unusable = store.writeRejection();   // closed, or failed commit and the next recovery is not due yet
         if (unusable != null) return CompletableFuture.failedFuture(unusable);
         Task t = new Task((Function<WriteTxn, Object>) (Function<?, ?>) body);
         synchronized (lifecycle) {
@@ -135,7 +136,7 @@ final class GroupCommitter {
         WriteTxn tx;
         try {
             tx = store.beginWrite();
-        } catch (Throwable t) {                 // poisoned or closed: fail fast with that cause
+        } catch (Throwable t) {                 // closed, or the store could not recover from a failed commit: fail with that cause
             Throwable cause = t instanceof IllegalStateException ? t : new IllegalStateException(t);
             for (Task x : local) x.future.completeExceptionally(cause);
             local.clear();

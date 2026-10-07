@@ -119,8 +119,8 @@ class CrashSafetyTest {
             if (stage.equals("after-data")) throw new IllegalStateException("simulated crash");
         };
         assertThrows(IllegalStateException.class, () -> put(s, "v2"));
-        assertThrows(IllegalStateException.class, s::beginWrite);   // store refuses to continue
-        assertThrows(IllegalStateException.class, s::beginRead);
+        assertThrows(MetaStoreUnavailableException.class, s::beginWrite);   // writes are refused until the store recovers
+        assertEquals("v1", get(s));                                         // reads keep serving the committed snapshot
         s.close();
         try (MetaStore r = MetaStore.open(f, OPTS)) {
             assertEquals("v1", get(r));

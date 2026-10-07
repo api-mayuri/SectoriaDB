@@ -58,6 +58,8 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     private final Counter gcSmallMarked;
     private final Timer gcCompactionOk;
     private final Timer gcCompactionFailed;
+    private final Counter metaRecoveryOk;
+    private final Counter metaRecoveryFailed;
     private final Counter gcReclaimed;
     private final Map<GcDeferral, Counter> gcDeferred = new EnumMap<>(GcDeferral.class);
     private final Counter gcErrors;
@@ -99,6 +101,12 @@ public class MicrometerStorageMetrics implements StorageMetrics {
         groupQueueWait = timer(r, "sectoriadb.metastore.group.queue.wait", "Time a write body waited in the group commit queue before it started to run", Buckets.LOCK_WAIT);
         groupRollbacks = Counter.builder("sectoriadb.metastore.group.body.rollbacks")
                 .description("Grouped write bodies that threw and were rolled back without affecting their batch").register(r);
+        metaRecoveryOk = Counter.builder("sectoriadb.metastore.recoveries")
+                .description("Attempts of the metadata store to recover in place after a failed commit")
+                .tag("result", "success").register(r);
+        metaRecoveryFailed = Counter.builder("sectoriadb.metastore.recoveries")
+                .description("Attempts of the metadata store to recover in place after a failed commit")
+                .tag("result", "failure").register(r);
         resizeOk = timer(r, "sectoriadb.resize", "Blob resize duration", Buckets.RESIZE, "result", "success");
         resizeFailed = timer(r, "sectoriadb.resize", "Blob resize duration", Buckets.RESIZE, "result", "failure");
         autoResizeRuns = Counter.builder("sectoriadb.auto.resize.runs")
@@ -177,6 +185,7 @@ public class MicrometerStorageMetrics implements StorageMetrics {
 
     @Override public void metaGroupQueueWait(long nanos) { groupQueueWait.record(nanos, TimeUnit.NANOSECONDS); }
     @Override public void metaGroupBodyRollback() { groupRollbacks.increment(); }
+    @Override public void metaRecovery(boolean success) { (success ? metaRecoveryOk : metaRecoveryFailed).increment(); }
 
     @Override public void resize(long nanos, boolean success) {
         (success ? resizeOk : resizeFailed).record(nanos, TimeUnit.NANOSECONDS);

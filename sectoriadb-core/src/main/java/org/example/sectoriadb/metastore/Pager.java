@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.CRC32C;
 
 /** Fixed-size page I/O with CRC32C. Page layout: crc(4) type(1) flags(1) count(2) payload. */
@@ -27,6 +28,27 @@ final class Pager {
         this.pageSize = pageSize;
         this.fsync = fsync;
         this.metrics = metrics;
+    }
+
+    // test hook: the next N writes / forces fail with an IOException (a full or failing disk)
+    private final AtomicInteger writeFaults = new AtomicInteger();
+    private final AtomicInteger forceFaults = new AtomicInteger();
+    private volatile String faultMessage = "injected I/O failure";
+
+    /** Makes the next {@code writes} page writes and {@code forces} fsyncs fail with {@code message}. */
+    void injectFaults(int writes, int forces, String message) {
+        faultMessage = message;
+        writeFaults.set(writes);
+        forceFaults.set(forces);
+    }
+
+    private void maybeFail(AtomicInteger counter) throws IOException {
+        int n;
+        do {
+            n = counter.get();
+            if (n <= 0) return;
+        } while (!counter.compareAndSet(n, n == Integer.MAX_VALUE ? n : n - 1));
+        throw new IOException(faultMessage);
     }
 
     static int crc(byte[] p, int off, int len) {
@@ -66,6 +88,7 @@ final class Pager {
     void writeRaw(long pos, byte[] p) {
         long t0 = System.nanoTime();
         try {
+            maybeFail(writeFaults);
             ByteBuffer bb = ByteBuffer.wrap(p);
             while (bb.hasRemaining()) ch.write(bb, pos + bb.position());
         } catch (IOException e) {
@@ -78,6 +101,7 @@ final class Pager {
         if (!fsync) return;
         long t0 = System.nanoTime();
         try {
+            maybeFail(forceFaults);
             ch.force(false);
         } catch (IOException e) {
             throw new UncheckedIOException(e);

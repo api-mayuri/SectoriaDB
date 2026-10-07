@@ -145,6 +145,33 @@ public class S3ExceptionHandler {
     }
 
     /**
+     * The metadata store refuses writes because its last commit failed and it has not recovered yet (reads are not
+     * affected and keep working). A full disk is {@code 507 InsufficientStorage}; any other fault is
+     * {@code 503 SlowDown} with {@code Retry-After}: the store recovers by itself once the disk works, a retry is meaningful.
+     */
+    @ExceptionHandler(org.example.sectoriadb.metastore.MetaStoreUnavailableException.class)
+    public ResponseEntity<S3Error> handleMetaStoreUnavailable(org.example.sectoriadb.metastore.MetaStoreUnavailableException ex) {
+        String requestId = S3Support.requestId();
+        if (isNoSpaceLeft(ex)) {
+            log.warn("Write refused, the metadata disk is full [{}]: {}", requestId, ex.getMessage());
+            ObservabilityAttributes.noteErrorCode("InsufficientStorage");
+            return ResponseEntity.status(HttpStatus.INSUFFICIENT_STORAGE)
+                    .header("Retry-After", "5")
+                    .contentType(MediaType.APPLICATION_XML)
+                    .body(new S3Error("InsufficientStorage",
+                            "The server has run out of storage space for metadata. Try again after space has been freed.",
+                            null, requestId));
+        }
+        log.warn("Write refused, the metadata store is recovering [{}]: {}", requestId, ex.getMessage());
+        ObservabilityAttributes.noteErrorCode("SlowDown");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                .header("Retry-After", "1")
+                .contentType(MediaType.APPLICATION_XML)
+                .body(new S3Error("SlowDown", "The storage engine is recovering from a disk failure. Please retry.",
+                        null, requestId));
+    }
+
+    /**
      * IllegalStateException: BucketNotEmpty from a bucket deletion conflict; anything else is a server-side state
      * problem (for example the metadata store refusing work after a failed commit, "must be reopened"), which is a
      * 503, not a bucket conflict: reads of existing objects used to answer 409 BucketNotEmpty in that state.

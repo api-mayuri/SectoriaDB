@@ -1,6 +1,8 @@
 package org.example.sectoriadb.metastore;
 
 import org.example.sectoriadb.metrics.StorageMetrics;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -29,6 +31,8 @@ import java.util.function.Function;
  * <p>One write transaction at a time, any number of concurrent read transactions with snapshot isolation.
  */
 public final class MetaStore implements AutoCloseable {
+    private static final Logger log = LoggerFactory.getLogger(MetaStore.class);
+
     static final long MAGIC = 0x53454354_4D455441L; // "SECTMETA"
     static final int FORMAT_VERSION = 1;
     static final int META_SIZE = 52;
@@ -61,7 +65,14 @@ public final class MetaStore implements AutoCloseable {
     private final TreeMap<Long, Integer> readers = new TreeMap<>();
     private volatile Snapshot committed;
     private volatile boolean closed;
+    /**
+     * Set when a commit failed: the in-memory free-page bookkeeping is unreliable and the write side is closed until
+     * {@link #recoverIfPoisoned} has rebuilt it from disk. Reads keep serving the last committed snapshot.
+     */
     private volatile Throwable poisoned;
+    private final long recoveryBackoffNanos;
+    private volatile long nextRecoveryAt;      // System.nanoTime() from which a recovery may be attempted again
+    private volatile int dirtyMetaSlot = -1;   // slot a commit started writing its meta page to and has not finished
     private volatile long freeCountApprox;
 
     // free-page state; only touched while holding the writer permit
@@ -81,6 +92,7 @@ public final class MetaStore implements AutoCloseable {
 
     private MetaStore(FileChannel channel, FileLock lock, Pager pager, Snapshot snap, MetaStoreOptions opts) {
         this.metrics = opts.metrics();
+        this.recoveryBackoffNanos = TimeUnit.MILLISECONDS.toNanos(opts.recoveryBackoffMillis());
         this.committer = new GroupCommitter(this, opts);
         this.channel = channel;
         this.fileLock = lock;
@@ -198,6 +210,16 @@ public final class MetaStore implements AutoCloseable {
     // ---------------------------------------------------------------- free list persistence
 
     private void loadFreelist() {
+        loadFreelist(true);
+    }
+
+    /**
+     * Rebuilds the free-page state from the persisted freelist chain of the committed snapshot. After a restart
+     * ({@code restart}) nobody reads old snapshots, so every page that no meta page can reference is reusable at once;
+     * in a running store readers may still hold older snapshots, so each page stays in the group of the transaction
+     * that freed it and the usual rule (free once that transaction is older than the oldest reader) releases it.
+     */
+    private void loadFreelist(boolean restart) {
         Snapshot s = committed;
         List<Long> chain = new ArrayList<>();
         long id = s.freelistRoot();
@@ -214,8 +236,9 @@ public final class MetaStore implements AutoCloseable {
                 long page = b.getLong(16 + i * 16);
                 long group = b.getLong(24 + i * 16);
                 if (page < 2 || page >= s.pageCount()) throw new CorruptedPageException(id, "free page out of range");
-                if (group != 0 && group >= s.txId()) {
+                if (group != 0 && (!restart || group >= s.txId())) {
                     // freed by the newest txn: the previous meta page (the fallback snapshot) still references it
+                    // (and, in a running store, readers of older snapshots may)
                     restartPending.computeIfAbsent(group, k -> new LongList()).push(page);
                 } else {
                     available.push(page);   // no readers after a restart and no meta references it any more
@@ -239,7 +262,7 @@ public final class MetaStore implements AutoCloseable {
     // ---------------------------------------------------------------- transactions
 
     public ReadTxn beginRead() {
-        checkUsable();
+        checkOpen();   // a failed commit does not stop reads: the committed snapshot and its pages are intact
         synchronized (stateLock) {
             Snapshot s = committed;
             readers.merge(s.txId(), 1, Integer::sum);
@@ -265,7 +288,8 @@ public final class MetaStore implements AutoCloseable {
 
     private WriteTxn startWrite() {
         try {
-            checkUsable();
+            checkOpen();
+            recoverIfPoisoned();
             Snapshot s;
             long minReader;
             synchronized (stateLock) {
@@ -392,7 +416,16 @@ public final class MetaStore implements AutoCloseable {
             doCommit(w);
             metrics.metaCommit(System.nanoTime() - t0);
         } catch (Throwable t) {
-            poisoned = t;   // in-memory free-page state is unreliable now; the file itself is still consistent
+            // in-memory free-page state is unreliable now; the file itself is still consistent (copy on write): the
+            // write side stays closed until recoverIfPoisoned() has rebuilt it from disk, reads are not affected
+            nextRecoveryAt = System.nanoTime() + recoveryBackoffNanos;
+            poisoned = t;
+            log.error("Metadata store commit failed, the store is read-only until it recovers: {}", t.toString());
+            if (t instanceof UncheckedIOException io) {
+                // a disk fault: the same exception as the writes refused afterwards, so that callers (S3: 503 / 507) treat all alike
+                throw new MetaStoreUnavailableException("The metadata commit failed (" + io.getCause() + "); the store is read-only"
+                        + " until its disk works again", io);
+            }
             throw t;
         }
     }
@@ -457,6 +490,7 @@ public final class MetaStore implements AutoCloseable {
         pager.force();
         hook("after-data");
         Snapshot ns = new Snapshot(t, cat.root, n == 0 ? 0 : chain[0], w.hwm);
+        dirtyMetaSlot = (int) (t % 2);   // from here the slot may hold a valid page of a commit that then fails
         writeMeta(ns);
         pager.force();
         hook("after-meta");
@@ -470,6 +504,7 @@ public final class MetaStore implements AutoCloseable {
         synchronized (stateLock) {
             committed = ns;
         }
+        dirtyMetaSlot = -1;
     }
 
     // ---------------------------------------------------------------- misc
@@ -498,7 +533,8 @@ public final class MetaStore implements AutoCloseable {
     public VerifyReport verify() {
         writer.acquireUninterruptibly();
         try {
-            checkUsable();
+            checkOpen();
+            recoverIfPoisoned();   // the check compares the pages of the file with the free-page state
             return new Verifier(this, committed).run();
         } finally {
             writer.release();
@@ -509,20 +545,108 @@ public final class MetaStore implements AutoCloseable {
         return committed;
     }
 
-    /** Why writes cannot be accepted (closed or poisoned), or null. */
-    Throwable unusableCause() {
-        try {
-            checkUsable();
-            return null;
-        } catch (IllegalStateException e) {
-            return e;
-        }
+    /**
+     * Why a grouped write must be refused right now (closed, or the last commit failed and the next recovery attempt is
+     * not due yet), or null when the write may be queued (the committer thread then attempts the recovery itself).
+     */
+    Throwable writeRejection() {
+        if (closed) return new IllegalStateException("store is closed");
+        Throwable p = poisoned;
+        if (p != null && System.nanoTime() - nextRecoveryAt < 0) return unavailable(p);
+        return null;
     }
 
-    private void checkUsable() {
+    private void checkOpen() {
         if (closed) throw new IllegalStateException("store is closed");
-        if (poisoned != null) {
-            throw new IllegalStateException("store failed during a commit and must be reopened", poisoned);
+    }
+
+    /**
+     * Test hook: the next {@code writes} page writes and {@code forces} fsyncs of the store file fail with an
+     * {@code IOException(message)}, like a full or failing disk. Pass {@link Integer#MAX_VALUE} for "until cleared"
+     * and 0, 0 to clear.
+     */
+    public void injectFaultsForTesting(int writes, int forces, String message) {
+        pager.injectFaults(writes, forces, message);
+    }
+
+    /** True while the last commit failed and the write side has not recovered (reads still work). */
+    public boolean isReadOnly() {
+        return poisoned != null;
+    }
+
+    private MetaStoreUnavailableException unavailable(Throwable cause) {
+        long ms = Math.max(0, TimeUnit.NANOSECONDS.toMillis(nextRecoveryAt - System.nanoTime()));
+        return new MetaStoreUnavailableException("The metadata store is read-only because its last commit failed ("
+                + cause + "); writes resume once the disk works again (next recovery attempt in " + ms + " ms)", cause);
+    }
+
+    // ---------------------------------------------------------------- recovery of the write side
+
+    /**
+     * Called with the writer permit held. If a commit failed earlier, rebuilds what the failure made unreliable from
+     * the disk, then lets the write go on. While the disk still fails, or the back-off after the last failure has not
+     * passed, throws {@link MetaStoreUnavailableException} without touching the disk (writes fail fast).
+     *
+     * <p>Why this is enough: pages are copy-on-write, a commit changes the visible state only by the meta page, so after
+     * a failure the committed snapshot and every page it references are exactly as before. What is lost is the
+     * in-memory free-page state (the failed commit had already taken pages from it, queued frees and a new freelist
+     * chain): it is rebuilt from the persisted freelist of the committed snapshot. The pages the failed transaction
+     * took from the free list are listed there still (the chain on disk is the previous one), the pages it allocated
+     * above the high-water mark are simply forgotten. A meta page of the failed commit that did reach the disk is
+     * erased (a later crash must not resurrect a transaction whose callers were told it failed, and its pages are
+     * reused by the next transaction); the meta page of the committed snapshot is rewritten if the disk lost it.
+     */
+    private void recoverIfPoisoned() {
+        Throwable cause = poisoned;
+        if (cause == null) return;
+        if (System.nanoTime() - nextRecoveryAt < 0) throw unavailable(cause);
+        try {
+            doRecover();
+        } catch (Throwable t) {
+            nextRecoveryAt = System.nanoTime() + recoveryBackoffNanos;
+            poisoned = t;
+            metrics.metaRecovery(false);
+            log.warn("Metadata store recovery failed, writes stay refused: {}", t.toString());
+            throw unavailable(t);
+        }
+        poisoned = null;
+        metrics.metaRecovery(true);
+        log.warn("Metadata store recovered after a failed commit (was: {}); writes are accepted again", cause.toString());
+    }
+
+    private void doRecover() {
+        Snapshot s = committed;
+        int ps = pager.pageSize;
+        boolean wrote = false;
+        int dirty = dirtyMetaSlot;
+        for (int slot = 0; slot < 2; slot++) {
+            Snapshot onDisk = readSlot(slot);
+            // The slot of a failed commit is erased on every attempt until one attempt gets all the way through: a
+            // failed fsync does not tell which of our writes reached the disk, so "the slot reads as erased" proves nothing.
+            if (slot == dirty || (onDisk != null && onDisk.txId() > s.txId())) {
+                pager.writeRaw((long) slot * ps, new byte[ps]);   // the failed commit's meta page: forget it
+                wrote = true;
+            } else if (slot == s.txId() % 2 && (onDisk == null || onDisk.txId() != s.txId())) {
+                pager.writeRaw((long) slot * ps, encodeMeta(ps, s));   // the committed one is damaged or missing
+                wrote = true;
+            }
+        }
+        if (wrote) pager.force();
+        dirtyMetaSlot = -1;
+        available.clear();
+        pending.clear();
+        chainPending.clear();
+        restartPending.clear();
+        loadFreelist(false);
+    }
+
+    /** The valid meta page of a slot as a snapshot, or null (unreadable, damaged or of another page size). */
+    private Snapshot readSlot(int slot) {
+        try {
+            Object[] m = readMetaAt(channel, (long) slot * pager.pageSize, channel.size());
+            return m != null && (Integer) m[0] == pager.pageSize ? (Snapshot) m[1] : null;
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 
