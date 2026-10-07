@@ -10,7 +10,9 @@ import org.example.sectoriadb.repository.BlobFileRepository;
 import org.example.sectoriadb.repository.ChunkRepository;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.metastore.MetaStoreProvider;
+import org.example.sectoriadb.service.ChunkStore;
 import org.example.sectoriadb.service.HashTableCache;
+import org.example.sectoriadb.service.gc.SmallBlobCompactor;
 import org.example.sectoriadb.service.SmallBlobCache;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
 import org.example.sectoriadb.service.impl.SmallObjectBlob;
@@ -43,8 +45,8 @@ public class StorageGauges {
             long metaFileBytes, long metaPages, long metaFreePages, long metaLastTxId, long metaLiveReaders, long metaPageSize,
             long gcQueue, long objects, long objectBytes,
             long chunksIndexed, long chunkRefs, long chunkGcQueue, long chunkOrphans, long poolBlobsMax,
-            long dataFree, long dataTotal, long metaDirFree, long metaDirTotal) {
-        static final Snapshot EMPTY = new Snapshot(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+            long dataFree, long dataTotal, long metaDirFree, long metaDirTotal, long uploadHolds, long oldSmallFilesPending) {
+        static final Snapshot EMPTY = new Snapshot(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     private final MeterRegistry registry;
@@ -54,6 +56,8 @@ public class StorageGauges {
     private final ManifestRepository manifests;
     private final ChunkRepository chunks;
     private final BlobFileRepository blobs;
+    private final ChunkStore chunkStore;
+    private final SmallBlobCompactor compactor;
     private final StorageProperties props;
     private final long ttlNanos;
 
@@ -63,6 +67,7 @@ public class StorageGauges {
 
     public StorageGauges(MeterRegistry registry, HashTableCache tables, SmallBlobCache smallBlobs,
                          MetaStoreProvider stores, ManifestRepository manifests, ChunkRepository chunks, BlobFileRepository blobs,
+                         ChunkStore chunkStore, SmallBlobCompactor compactor,
                          StorageProperties props, ObservabilityProperties obs) {
         this.registry = registry;
         this.tables = tables;
@@ -71,6 +76,8 @@ public class StorageGauges {
         this.manifests = manifests;
         this.chunks = chunks;
         this.blobs = blobs;
+        this.chunkStore = chunkStore;
+        this.compactor = compactor;
         this.props = props;
         this.ttlNanos = Math.max(0, obs.getGaugeCacheMs()) * 1_000_000L;
     }
@@ -103,6 +110,8 @@ public class StorageGauges {
         g("sectoriadb.chunks.refs", "Sum of the reference counts of all indexed chunks (chunk positions of live manifests)", null, s -> s.chunkRefs);
         g("sectoriadb.chunks.gc.queue.length", "Chunks whose reference count reached zero, waiting for the collector", null, s -> s.chunkGcQueue);
         g("sectoriadb.chunks.orphans", "Physical chunk copies recorded as orphans (written twice by concurrent uploads)", null, s -> s.chunkOrphans);
+        g("sectoriadb.gc.upload.holds", "Uploads between 'data written' and 'committed' (they keep the collector away from stray copies)", null, s -> s.uploadHolds);
+        g("sectoriadb.gc.old.small.files.pending", "Compacted small-object files kept until the grace period is over", null, s -> s.oldSmallFilesPending);
         g("sectoriadb.pool.blobs.max", "Largest number of cuckoo blobs in one pool", null, s -> s.poolBlobsMax);
         g("sectoriadb.disk.free.bytes", "Usable space of the file system holding the directory", "bytes", "dir", "data", s -> s.dataFree);
         g("sectoriadb.disk.free.bytes", "Usable space of the file system holding the directory", "bytes", "dir", "meta", s -> s.metaDirFree);
@@ -180,7 +189,7 @@ public class StorageGauges {
                 ms.fileSize(), ms.pageCount(), ms.freePages(), ms.lastTxId(), ms.liveReaders(), ms.pageSize(),
                 gc, totals.objects(), totals.bytes(),
                 cs.chunks(), cs.refs(), cs.gcQueue(), cs.orphans(), poolBlobsMax,
-                data[0], data[1], meta[0], meta[1]);
+                data[0], data[1], meta[0], meta[1], chunkStore.gate().inFlight(), compactor.pendingFiles());
     }
 
     /** {usable, total} bytes of the file system holding {@code dir} (or its nearest existing parent). */

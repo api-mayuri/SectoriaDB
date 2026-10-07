@@ -47,6 +47,21 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     private final Counter poolGrown;
     private final DistributionSummary smallForceRecords;
     private final Timer smallDurabilityWait;
+    private final Timer gcRunOk;
+    private final Timer gcRunFailed;
+    private final Counter gcFreedChunksQueue, gcFreedChunksOrphan, gcFreedChunksSweep;
+    private final Counter gcFreedBytesQueue, gcFreedBytesOrphan, gcFreedBytesSweep;
+    private final Timer gcSweepTimer;
+    private final Counter gcSweepSlots;
+    private final Counter gcSweepStrays;
+    private final Counter gcTombstones;
+    private final Counter gcSmallMarked;
+    private final Timer gcCompactionOk;
+    private final Timer gcCompactionFailed;
+    private final Counter gcReclaimed;
+    private final Map<GcDeferral, Counter> gcDeferred = new EnumMap<>(GcDeferral.class);
+    private final Counter gcErrors;
+    private final java.util.concurrent.atomic.AtomicLong gcLastRunSeconds = new java.util.concurrent.atomic.AtomicLong();
 
     public MicrometerStorageMetrics(MeterRegistry r) {
         for (Target t : Target.values()) {
@@ -97,7 +112,37 @@ public class MicrometerStorageMetrics implements StorageMetrics {
         smallForceRecords = DistributionSummary.builder("sectoriadb.small.group.fsync.records")
                 .description("Small-object records made durable by one fsync (group fsync)")
                 .serviceLevelObjectives(Buckets.GROUP_BATCH_SIZE).register(r);
+        gcRunOk = timer(r, "sectoriadb.gc.run", "Duration of one collector pass (chunk queue, orphans, tombstones)", Buckets.RESIZE, "result", "success");
+        gcRunFailed = timer(r, "sectoriadb.gc.run", "Duration of one collector pass (chunk queue, orphans, tombstones)", Buckets.RESIZE, "result", "failure");
+        gcFreedChunksQueue = freed(r, "sectoriadb.gc.freed.chunks", "Chunk slots freed by the collector", null, "queue");
+        gcFreedChunksOrphan = freed(r, "sectoriadb.gc.freed.chunks", "Chunk slots freed by the collector", null, "orphan");
+        gcFreedChunksSweep = freed(r, "sectoriadb.gc.freed.chunks", "Chunk slots freed by the collector", null, "sweep");
+        gcFreedBytesQueue = freed(r, "sectoriadb.gc.freed.bytes", "Chunk bytes freed by the collector", "bytes", "queue");
+        gcFreedBytesOrphan = freed(r, "sectoriadb.gc.freed.bytes", "Chunk bytes freed by the collector", "bytes", "orphan");
+        gcFreedBytesSweep = freed(r, "sectoriadb.gc.freed.bytes", "Chunk bytes freed by the collector", "bytes", "sweep");
+        gcSweepTimer = timer(r, "sectoriadb.gc.sweep", "Duration of one sweep of a pool for stray chunk copies", Buckets.RESIZE);
+        gcSweepSlots = Counter.builder("sectoriadb.gc.sweep.slots.scanned").description("Slots examined by sweeps").register(r);
+        gcSweepStrays = Counter.builder("sectoriadb.gc.sweep.strays.found").description("Stray copies (no index entry) found by sweeps").register(r);
+        gcTombstones = Counter.builder("sectoriadb.gc.tombstones.collected").description("Retired manifests removed by the collector").register(r);
+        gcSmallMarked = Counter.builder("sectoriadb.gc.small.records.marked").description("Small-object records marked DELETED by the collector").register(r);
+        gcCompactionOk = timer(r, "sectoriadb.gc.compaction", "Duration of one small-object blob compaction", Buckets.RESIZE, "result", "success");
+        gcCompactionFailed = timer(r, "sectoriadb.gc.compaction", "Duration of one small-object blob compaction", Buckets.RESIZE, "result", "failure");
+        gcReclaimed = Counter.builder("sectoriadb.gc.compaction.reclaimed.bytes").baseUnit("bytes")
+                .description("File bytes given back by small-object blob compactions").register(r);
+        for (GcDeferral d : GcDeferral.values()) {
+            gcDeferred.put(d, Counter.builder("sectoriadb.gc.deferred")
+                    .description("Collector work left for a later pass, by reason").tag("reason", d.label()).register(r));
+        }
+        gcErrors = Counter.builder("sectoriadb.gc.errors").description("Collector steps that failed and are retried").register(r);
+        io.micrometer.core.instrument.Gauge.builder("sectoriadb.gc.last.run.timestamp.seconds", gcLastRunSeconds, java.util.concurrent.atomic.AtomicLong::get)
+                .description("Unix time of the last finished collector pass (0 = none yet)").baseUnit("seconds").register(r);
         smallDurabilityWait = timer(r, "sectoriadb.small.durability.wait", "Time a small-object append waited from taking the lock until its record was durable", Buckets.FSYNC);
+    }
+
+    private static Counter freed(MeterRegistry r, String name, String description, String unit, String kind) {
+        Counter.Builder b = Counter.builder(name).description(description).tag("kind", kind);
+        if (unit != null) b.baseUnit(unit);
+        return b.register(r);
     }
 
     private static Timer timer(MeterRegistry r, String name, String description, Duration[] slo, String... tags) {
@@ -142,6 +187,41 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     @Override public void poolGrown() { poolGrown.increment(); }
     @Override public void smallGroupFsync(int records) { smallForceRecords.record(records); }
     @Override public void smallDurabilityWait(long nanos) { smallDurabilityWait.record(nanos, TimeUnit.NANOSECONDS); }
+
+    @Override public void gcRun(long nanos, boolean success) {
+        (success ? gcRunOk : gcRunFailed).record(nanos, TimeUnit.NANOSECONDS);
+        gcLastRunSeconds.set(System.currentTimeMillis() / 1000);
+    }
+
+    @Override public void gcChunksFreed(long chunks, long bytes) {
+        gcFreedChunksQueue.increment(chunks);
+        gcFreedBytesQueue.increment(bytes);
+    }
+
+    @Override public void gcStraysFreed(String source, long chunks, long bytes) {
+        boolean orphan = "orphan".equals(source);
+        (orphan ? gcFreedChunksOrphan : gcFreedChunksSweep).increment(chunks);
+        (orphan ? gcFreedBytesOrphan : gcFreedBytesSweep).increment(bytes);
+    }
+
+    @Override public void gcSweep(long nanos, long slotsScanned, long strays) {
+        gcSweepTimer.record(nanos, TimeUnit.NANOSECONDS);
+        gcSweepSlots.increment(slotsScanned);
+        gcSweepStrays.increment(strays);
+    }
+
+    @Override public void gcTombstones(long manifests, long smallRecords) {
+        gcTombstones.increment(manifests);
+        gcSmallMarked.increment(smallRecords);
+    }
+
+    @Override public void gcCompaction(long nanos, long reclaimedBytes, boolean success) {
+        (success ? gcCompactionOk : gcCompactionFailed).record(nanos, TimeUnit.NANOSECONDS);
+        if (success) gcReclaimed.increment(reclaimedBytes);
+    }
+
+    @Override public void gcDeferred(GcDeferral reason) { gcDeferred.get(reason).increment(); }
+    @Override public void gcError() { gcErrors.increment(); }
 
     @Override public void autoResizeRun() { autoResizeRuns.increment(); }
 }

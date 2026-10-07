@@ -90,6 +90,10 @@ public class StatusCommands {
                 "  pool.grow-threshold-percent:    %d%%%n" +
                 "  auto-resize.enabled:            %s%n" +
                 "  auto-resize.check-interval:     %s%n" +
+                "  gc.enabled:                     %s%n" +
+                "  gc.grace / interval:            %s / %s%n" +
+                "  gc.sweep-interval:              %s%n" +
+                "  gc.small-compact-dead-percent:  %d%%%n" +
                 "%n" +
                 "Edit application.properties and restart to change settings.",
                 ShellTable.humanSize(props.getDefaultChunkSize()),
@@ -100,7 +104,11 @@ public class StatusCommands {
                 props.getPool().getMaxBlobs(),
                 props.getPool().getGrowThresholdPercent(),
                 ar.isEnabled(),
-                formatDuration(ar.getCheckIntervalMs()));
+                formatDuration(ar.getCheckIntervalMs()),
+                props.getGc().isEnabled(),
+                props.getGc().getGrace(), props.getGc().getInterval(),
+                props.getGc().getSweepInterval(),
+                props.getGc().getSmallCompactDeadPercent());
     }
 
     @ShellMethod(key = "logs", value = "Show the last N lines of the application log  |  logs [--n N]")

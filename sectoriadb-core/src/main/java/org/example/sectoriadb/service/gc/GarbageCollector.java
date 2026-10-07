@@ -367,6 +367,7 @@ public class GarbageCollector {
         for (int i = 0; i < due.size(); i += batch) {
             List<Tombstone> part = due.subList(i, Math.min(due.size(), i + batch));
             List<Tombstone> ready = new ArrayList<>(part.size());
+            long markedBefore = r.smallRecordsMarked;
             for (Tombstone t : part) {
                 Optional<ManifestEntity> m = manifestRepo.findById(t.manifestId());
                 if (m.isPresent() && poolId != null && !poolId.equals(m.get().getPoolId())) continue;
@@ -386,7 +387,7 @@ public class GarbageCollector {
             try {
                 int removed = gcRepo.deleteTombstones(ready);
                 r.tombstones += removed;
-                if (removed > 0) metrics.gcTombstones(removed, r.smallRecordsMarked);
+                if (removed > 0) metrics.gcTombstones(removed, r.smallRecordsMarked - markedBefore);
             } catch (RuntimeException e) {
                 r.error("tombstone batch failed: " + e);
                 metrics.gcError();
