@@ -240,18 +240,25 @@ public class ChunkStore {
             PlacedChunk mine = placed.get(key);
             if (mine != null) {
                 // the key is already used by a chunk of this very upload: a repeat of it, or a collision
-                if (verifyExisting(mine.blobId(), key, mine.dataLength(), mine.crc32c(), data, crc)) return key;
+                if (verifyExisting(mine.blobId(), key, mine.dataLength(), mine.crc32c(), data, crc) == Verdict.SAME) return key;
                 continue;
             }
             ChunkEntry e = attempt == 0 ? indexed.get(key) : index.find(pool.getId(), key).orElse(null);
             if (e != null) {
-                if (verifyExisting(e.blobId(), key, e.dataLength(), e.crc32c(), data, crc)) {
+                Verdict v = verifyExisting(e.blobId(), key, e.dataLength(), e.crc32c(), data, crc);
+                if (v == Verdict.GONE) {
+                    // the blob named by the entry was replaced (or deleted) since the lookup: look at the entry again
+                    e = index.find(pool.getId(), key).orElse(null);
+                    v = e == null ? Verdict.GONE : verifyExisting(e.blobId(), key, e.dataLength(), e.crc32c(), data, crc);
+                }
+                if (v == Verdict.SAME) {
                     metrics.poolDedupHit();
                     placed.put(key, new PlacedChunk(key, e.blobId(), data.length, crc, true));
                     locations.put(pool.getId(), key, e.blobId());
                     return key;
                 }
-                continue;   // a different chunk is indexed under this key: collision
+                if (v == Verdict.DIFFERENT) continue;   // a different chunk is indexed under this key: collision
+                // GONE: no usable entry (collected meanwhile): the chunk is new
             }
             try {
                 String blobId = place(pool, chunkSize, key, data);
@@ -272,26 +279,76 @@ public class ChunkStore {
      * and compared. A copy that is missing or damaged although we hold bytes that match its recorded length and CRC
      * is rewritten in place (heals it). False means the key belongs to a different chunk.
      */
-    private boolean verifyExisting(String blobId, long key, int recordedLen, int recordedCrc,
+    private Verdict verifyExisting(String blobId, long key, int recordedLen, int recordedCrc,
                                    byte[] data, int dataCrc) throws IOException {
-        if (recordedLen != data.length || recordedCrc != dataCrc) return false;
-        CuckooHashTable table = blobs.tableOf(blobId);
-        try {
-            var stored = table.readChunkByKey(key, data.length);
-            if (stored.isPresent()) {
-                ByteBuffer b = stored.get();
-                byte[] bytes = new byte[b.remaining()];
-                b.get(bytes);
-                return Arrays.equals(bytes, data);
+        if (recordedLen != data.length || recordedCrc != dataCrc) return Verdict.DIFFERENT;
+        String target = cache.resolveRedirect(blobId);   // a resize may have replaced the blob since the index was read
+        try (ResidentHandle<CuckooHashTable> h = blobs.acquireTable(target)) {
+            CuckooHashTable table = h.get();
+            try {
+                var stored = table.readChunkByKey(key, data.length);
+                if (stored.isPresent()) {
+                    ByteBuffer b = stored.get();
+                    byte[] bytes = new byte[b.remaining()];
+                    b.get(bytes);
+                    return Arrays.equals(bytes, data) ? Verdict.SAME : Verdict.DIFFERENT;
+                }
+                log.warn("Chunk 0x{} is indexed in blob {} but missing from its table: restoring the copy",
+                        Long.toHexString(key), target);
+            } catch (ChunkCorruptedException e) {
+                log.warn("Chunk 0x{} in blob {} is damaged ({}): healing it from the incoming identical bytes",
+                        Long.toHexString(key), target, e.getMessage());
             }
-            log.warn("Chunk 0x{} is indexed in blob {} but missing from its table: restoring the copy",
-                    Long.toHexString(key), blobId);
-        } catch (ChunkCorruptedException e) {
-            log.warn("Chunk 0x{} in blob {} is damaged ({}): healing it from the incoming identical bytes",
-                    Long.toHexString(key), blobId, e.getMessage());
+        } catch (BlobService.BlobGoneException | ClosedChannelException gone) {
+            return Verdict.GONE;
         }
-        table.insertPreservingKey(key, ByteBuffer.wrap(data));
-        return true;
+        return heal(target, key, data);
+    }
+
+    /**
+     * Writes the bytes back into the blob that the index names (a slot that is missing or damaged although the chunk is
+     * indexed). Like every insert it runs under the blob's writer gate; a blob that is frozen by a resize cannot take
+     * writes, so this waits for the resize (which then moves the whole blob, or gives up) and heals the replacement.
+     */
+    private Verdict heal(String blobId, long key, byte[] data) throws IOException {
+        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
+        String target = blobId;
+        while (true) {
+            target = cache.resolveRedirect(target);
+            try (ResidentHandle<CuckooHashTable> h = blobs.acquireTable(target)) {
+                var gate = cache.writerGate(target);
+                gate.lock();
+                try {
+                    if (!cache.isFrozen(target)) {
+                        h.get().insertPreservingKey(key, ByteBuffer.wrap(data));
+                        return Verdict.SAME;
+                    }
+                } finally {
+                    gate.unlock();
+                }
+            } catch (BlobService.BlobGoneException | ClosedChannelException gone) {
+                return Verdict.GONE;
+            }
+            if (System.nanoTime() > deadline) {
+                throw new IOException("Blob " + target + " stayed frozen by a resize: cannot restore chunk 0x" + Long.toHexString(key));
+            }
+            try {
+                Thread.sleep(20);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new IOException("interrupted while waiting for a resize", ie);
+            }
+        }
+    }
+
+    /** What the bytes of an indexed chunk say about the incoming ones. */
+    private enum Verdict {
+        /** identical (also after healing a missing or damaged copy) */
+        SAME,
+        /** the key belongs to a different chunk: a genuine 64-bit collision */
+        DIFFERENT,
+        /** the blob is gone: the index entry is stale */
+        GONE
     }
 
     /**
@@ -322,26 +379,28 @@ public class ChunkStore {
                     first = false;
                     continue;
                 }
-                var gate = cache.writerGate(c.id());
-                gate.lock();
-                try {
-                    if (cache.isFrozen(c.id())) {
-                        refused.add(c.id());
-                        first = false;
-                        continue;
+                try (ResidentHandle<CuckooHashTable> table = cache.acquire(byId.get(c.id()))) {
+                    var gate = cache.writerGate(c.id());
+                    gate.lock();
+                    try {
+                        if (cache.isFrozen(c.id())) {
+                            refused.add(c.id());
+                            first = false;
+                            continue;
+                        }
+                        table.get().insertPreservingKey(key, ByteBuffer.wrap(data));
+                        if (!first) metrics.placementFallback();
+                        return c.id();
+                    } finally {
+                        gate.unlock();
                     }
-                    cache.get(byId.get(c.id())).insertPreservingKey(key, ByteBuffer.wrap(data));
-                    if (!first) metrics.placementFallback();
-                    return c.id();
                 } catch (TableFullException full) {
                     refused.add(c.id());
                     first = false;
-                } catch (ClosedChannelException closed) {
+                } catch (BlobService.BlobGoneException | ClosedChannelException closed) {
                     // the blob was replaced under us (resize committed): look at the pool again
                     refused.add(c.id());
                     first = false;
-                } finally {
-                    gate.unlock();
                 }
             }
             BlobService.Growth g = blobs.growIfNeeded(pool, refused);
@@ -419,8 +478,8 @@ public class ChunkStore {
 
         /** The chunk from this blob (following resizes), or null if the blob is gone or does not hold it. */
         private ByteBuffer tryRead(String blobId, long key, int size) throws IOException {
-            try {
-                return blobs.tableOf(cache.resolveRedirect(blobId)).readChunkByKey(key, size).orElse(null);
+            try (ResidentHandle<CuckooHashTable> h = blobs.acquireTable(cache.resolveRedirect(blobId))) {
+                return h.get().readChunkByKey(key, size).orElse(null);
             } catch (BlobService.BlobGoneException | ClosedChannelException stale) {
                 return null;
             }

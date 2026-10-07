@@ -20,6 +20,7 @@ public class StorageProperties {
     private S3 s3 = new S3();
     private SmallObject smallObject = new SmallObject();
     private Gc gc = new Gc();
+    private Cache cache = new Cache();
 
     public String getMetaDir() { return metaDir; }
     public void setMetaDir(String v) { this.metaDir = v; }
@@ -47,6 +48,9 @@ public class StorageProperties {
 
     public SmallObject getSmallObject() { return smallObject; }
     public void setSmallObject(SmallObject v) { this.smallObject = v; }
+
+    public Cache getCache() { return cache; }
+    public void setCache(Cache v) { this.cache = v; }
 
     public Gc getGc() { return gc; }
     public void setGc(Gc v) { this.gc = v; }
@@ -81,6 +85,28 @@ public class StorageProperties {
          */
         public int getLocationCacheEntries() { return locationCacheEntries; }
         public void setLocationCacheEntries(int v) { this.locationCacheEntries = Math.max(0, v); }
+    }
+
+    /**
+     * Bounds on what is kept open in memory (doc 10, part B). Both caches evict the least recently used idle entry when
+     * over their limit; an entry that is in use is never closed (the limits are soft while everything is in use).
+     */
+    public static class Cache {
+        private int maxResidentTables = 64;
+        private long maxResidentTableBytes = 0;
+        private int maxOpenSmallBlobs = 256;
+
+        /** Cuckoo blob tables kept in memory (about 9 MiB each at the default geometry). */
+        public int getMaxResidentTables() { return maxResidentTables; }
+        public void setMaxResidentTables(int v) { this.maxResidentTables = Math.max(1, v); }
+
+        /** Optional memory budget for the slot metadata of resident tables, in bytes; 0 = only the count limit applies. */
+        public long getMaxResidentTableBytes() { return maxResidentTableBytes; }
+        public void setMaxResidentTableBytes(long v) { this.maxResidentTableBytes = Math.max(0, v); }
+
+        /** Small-object blobs kept open (file handle and counters; reopening a blob scans its log tail). */
+        public int getMaxOpenSmallBlobs() { return maxOpenSmallBlobs; }
+        public void setMaxOpenSmallBlobs(int v) { this.maxOpenSmallBlobs = Math.max(1, v); }
     }
 
     /** Small-object blobs: objects smaller than {@code default-chunk-size} are stored whole in an append-only log. */

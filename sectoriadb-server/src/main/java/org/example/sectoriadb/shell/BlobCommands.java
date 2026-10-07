@@ -89,7 +89,7 @@ public class BlobCommands {
                     s.deadRecords(), ShellTable.humanSize(s.deadBytes()),
                     s.writable() ? "yes" : "NO (damage found in the middle of the log; see 'scrub')");
         }
-        CuckooHashTable.FillStats stats = cache.get(b).getFillStats();
+        CuckooHashTable.FillStats stats = cache.fillStats(b);
 
         return String.format(
                 "Blob: %s%n" +
@@ -128,12 +128,12 @@ public class BlobCommands {
         if (old.getKind() == BlobKind.SMALL) {
             return "Small-object blobs cannot be resized (they grow by rollover to a new blob).";
         }
-        CuckooHashTable.FillStats stats = cache.get(old).getFillStats();
+        CuckooHashTable.FillStats stats = cache.fillStats(old);
         System.out.printf("Resizing blob %s: %d → %d buckets  (current fill: %.1f%%)%n",
                 id, old.getNumBuckets(), buckets, stats.fillPercent());
 
         BlobFileEntity newBlob = resizeService.resizeBlobFile(id, buckets);
-        CuckooHashTable.FillStats newStats = cache.get(newBlob).getFillStats();
+        CuckooHashTable.FillStats newStats = cache.fillStats(newBlob);
         return String.format("Done.  new id=%s  fill=%.1f%% (%d/%d slots)",
                 newBlob.getId(), newStats.fillPercent(), newStats.activeSlots(), newStats.totalSlots());
     }
@@ -151,7 +151,10 @@ public class BlobCommands {
             sb.append(System.lineSeparator()).append(r.corrupt() == 0 ? "RESULT: clean" : "RESULT: DAMAGED");
             return sb.toString();
         }
-        CuckooHashTable.ScrubReport r = cache.get(b).scrub();
+        CuckooHashTable.ScrubReport r;
+        try (var h = cache.acquire(b)) {
+            r = h.get().scrub();
+        }
         StringBuilder sb = new StringBuilder(String.format(
                 "Scrub of blob %s: active=%d  ok=%d  corrupt=%d  quarantined=%d",
                 id, r.activeSlots(), r.ok(), r.corrupt(), r.quarantined()));

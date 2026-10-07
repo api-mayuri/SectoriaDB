@@ -76,7 +76,14 @@ public class ResizeService {
             throw new IllegalArgumentException("Blob " + blobId + " is a " + oldEntity.getKind()
                     + " blob; only cuckoo blobs can be resized");
         }
-        CuckooHashTable oldTable = cache.get(oldEntity);
+        try (ResidentHandle<CuckooHashTable> oldHandle = cache.acquire(oldEntity)) {
+            return doResize(oldEntity, oldHandle.get(), newNumBuckets, t0);
+        }
+    }
+
+    private BlobFileEntity doResize(BlobFileEntity oldEntity, CuckooHashTable oldTable, int newNumBuckets, long t0)
+            throws IOException {
+        String blobId = oldEntity.getId();
         CuckooHashTable.FillStats stats = oldTable.getFillStats();
         int activeSlots = stats.activeSlots();
         if (stats.quarantinedSlots() > 0) {

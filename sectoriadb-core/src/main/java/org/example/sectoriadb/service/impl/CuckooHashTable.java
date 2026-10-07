@@ -582,6 +582,16 @@ public class CuckooHashTable implements AutoCloseable {
         }
     }
 
+    /** Memory held by the in-memory slot metadata, in bytes (the weight of a resident table in the cache budget). */
+    public long memoryBytes() {
+        return (long) totalSlots * (8 + 1 + 4 + 4);
+    }
+
+    /** True if inserted chunks were written but not forced to disk yet (such a table is not evicted). */
+    public boolean hasUnforcedWrites() {
+        return false;
+    }
+
     /** Number of slots of the table (both halves). */
     public int totalSlots() { return totalSlots; }
     public int getNumBuckets() { return numBuckets; }

@@ -94,6 +94,8 @@ public class StatusCommands {
                 "  gc.grace / interval:            %s / %s%n" +
                 "  gc.sweep-interval:              %s%n" +
                 "  gc.small-compact-dead-percent:  %d%%%n" +
+                "  cache.max-resident-tables:      %d (budget %s)%n" +
+                "  cache.max-open-small-blobs:     %d%n" +
                 "%n" +
                 "Edit application.properties and restart to change settings.",
                 ShellTable.humanSize(props.getDefaultChunkSize()),
@@ -108,7 +110,10 @@ public class StatusCommands {
                 props.getGc().isEnabled(),
                 props.getGc().getGrace(), props.getGc().getInterval(),
                 props.getGc().getSweepInterval(),
-                props.getGc().getSmallCompactDeadPercent());
+                props.getGc().getSmallCompactDeadPercent(),
+                props.getCache().getMaxResidentTables(),
+                props.getCache().getMaxResidentTableBytes() == 0 ? "none" : ShellTable.humanSize(props.getCache().getMaxResidentTableBytes()),
+                props.getCache().getMaxOpenSmallBlobs());
     }
 
     @ShellMethod(key = "logs", value = "Show the last N lines of the application log  |  logs [--n N]")

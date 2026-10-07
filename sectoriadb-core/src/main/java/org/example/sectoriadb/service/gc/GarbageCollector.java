@@ -19,6 +19,7 @@ import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.PoolRepository;
 import org.example.sectoriadb.service.BlobService;
 import org.example.sectoriadb.service.ChunkStore;
+import org.example.sectoriadb.service.ResidentHandle;
 import org.example.sectoriadb.service.HashTableCache;
 import org.example.sectoriadb.service.SmallBlobCache;
 import org.example.sectoriadb.service.UploadGate;
@@ -27,6 +28,7 @@ import org.example.sectoriadb.service.gc.GcReports.Options;
 import org.example.sectoriadb.service.gc.GcReports.RunReport;
 import org.example.sectoriadb.service.gc.GcReports.SweepReport;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
+import org.example.sectoriadb.service.impl.SmallObjectBlob;
 import org.example.sectoriadb.service.impl.SmallObjectCorruptedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -196,22 +198,24 @@ public class GarbageCollector {
      */
     private SlotFree freeSlot(String poolId, String blobId, long key) throws IOException {
         if (cache.isFrozen(blobId) || cache.isReplaced(blobId)) return SlotFree.DEFERRED;
-        CuckooHashTable table;
+        ResidentHandle<CuckooHashTable> handle;
         try {
-            table = blobs.tableOf(blobId);
+            handle = blobs.acquireTable(blobId);
         } catch (BlobService.BlobGoneException gone) {
             return SlotFree.ABSENT;
         }
-        var gate = cache.writerGate(blobId);
-        gate.lock();
-        try {
-            if (cache.isFrozen(blobId)) return SlotFree.DEFERRED;
-            int len = table.freeSlot(key);
-            return len < 0 ? SlotFree.ABSENT : SlotFree.freed(len);
-        } catch (ClosedChannelException replaced) {
-            return SlotFree.DEFERRED;
-        } finally {
-            gate.unlock();
+        try (handle) {
+            var gate = cache.writerGate(blobId);
+            gate.lock();
+            try {
+                if (cache.isFrozen(blobId)) return SlotFree.DEFERRED;
+                int len = handle.get().freeSlot(key);
+                return len < 0 ? SlotFree.ABSENT : SlotFree.freed(len);
+            } catch (ClosedChannelException replaced) {
+                return SlotFree.DEFERRED;
+            } finally {
+                gate.unlock();
+            }
         }
     }
 
@@ -302,19 +306,23 @@ public class GarbageCollector {
                     metrics.gcDeferred(StorageMetrics.GcDeferral.BLOB_BUSY);
                     continue;
                 }
-                CuckooHashTable table;
-                try {
-                    table = cache.get(b);
-                } catch (IOException | RuntimeException e) {
-                    rep.errors++;
-                    rep.messages.add("cannot open blob " + b.getId() + ": " + e.getMessage());
-                    metrics.gcError();
-                    continue;
-                }
-                rep.blobs++;
                 int from = 0;
+                boolean opened = false;
                 while (from >= 0) {
-                    CuckooHashTable.KeyPage page = table.activeKeys(from, SWEEP_PAGE);
+                    CuckooHashTable.KeyPage page;
+                    // pinned per page: a sweep of a big pool does not keep the table resident (or evictable) for hours
+                    try (ResidentHandle<CuckooHashTable> th = cache.acquire(b)) {
+                        page = th.get().activeKeys(from, SWEEP_PAGE);
+                    } catch (IOException | RuntimeException e) {
+                        rep.errors++;
+                        rep.messages.add("cannot open blob " + b.getId() + ": " + e.getMessage());
+                        metrics.gcError();
+                        break;
+                    }
+                    if (!opened) {
+                        opened = true;
+                        rep.blobs++;
+                    }
                     from = page.next();
                     rep.slotsScanned += page.keys().length;
                     long[] candidates = gcRepo.unindexed(b.getId(), page.keys());
@@ -413,7 +421,9 @@ public class GarbageCollector {
         BlobFileEntity blob = m.getSmallBlob();
         if (blob == null) return Marked.NOTHING_TO_DO;   // the blob is gone (compacted away, bucket deleted)
         try {
-            return smallCache.get(blob).markDeleted(m.getSmallOffset()) ? Marked.MARKED : Marked.NOTHING_TO_DO;
+            try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(blob)) {
+                return h.get().markDeleted(m.getSmallOffset()) ? Marked.MARKED : Marked.NOTHING_TO_DO;
+            }
         } catch (SmallObjectCorruptedException e) {
             log.error("Small-object record of retired manifest {} is damaged and cannot be marked DELETED: {}", m.getId(), e.getMessage());
             return Marked.NOTHING_TO_DO;   // nothing readable lives there; compaction skips it

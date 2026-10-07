@@ -87,7 +87,13 @@ public class StorageGauges {
         g("sectoriadb.cuckoo.slots.active", "Active (occupied) slots, summed over all loaded cuckoo blobs", null, s -> s.slotsActive);
         g("sectoriadb.cuckoo.slots.capacity", "Total slots (capacity), summed over all loaded cuckoo blobs", null, s -> s.slotsTotal);
         g("sectoriadb.cuckoo.slots.quarantined", "Slots quarantined because their metadata entry failed its CRC", null, s -> s.slotsQuarantined);
-        g("sectoriadb.cuckoo.tables.loaded", "Cuckoo blobs loaded into memory in this process", null, s -> s.cuckooTablesLoaded);
+        g("sectoriadb.cuckoo.tables.loaded", "Cuckoo blob tables resident in memory right now (bounded by sectoriadb.cache.max-resident-tables)", null, s -> s.cuckooTablesLoaded);
+        Gauge.builder("sectoriadb.cuckoo.tables.resident.bytes", tables, HashTableCache::residentBytes)
+                .description("Memory held by the slot metadata of the resident cuckoo tables").baseUnit("bytes")
+                .strongReference(true).register(registry);
+        Gauge.builder("sectoriadb.cuckoo.tables.max", props, p -> p.getCache().getMaxResidentTables())
+                .description("Configured limit of resident cuckoo tables (sectoriadb.cache.max-resident-tables)")
+                .strongReference(true).register(registry);
         g("sectoriadb.cuckoo.used.bytes", "Chunk bytes held by active slots (loaded blobs)", "bytes", s -> s.cuckooUsedBytes);
         g("sectoriadb.cuckoo.capacity.bytes", "Chunk capacity of all cuckoo blobs (slots x chunk size), loaded or not", "bytes", s -> s.cuckooCapacityBytes);
         g("sectoriadb.blobs", "Registered blob files by kind", null, "kind", "cuckoo", s -> s.cuckooBlobs);
@@ -96,7 +102,7 @@ public class StorageGauges {
         g("sectoriadb.small.dead.bytes", "Record bytes of deleted small objects not yet reclaimed", "bytes", s -> s.smallDeadBytes);
         g("sectoriadb.small.live.records", "Live small-object records", null, s -> s.smallLiveRecords);
         g("sectoriadb.small.dead.records", "Deleted small-object records not yet reclaimed", null, s -> s.smallDeadRecords);
-        g("sectoriadb.small.blobs.open", "Small-object blobs opened in this process", null, s -> s.smallBlobsOpen);
+        g("sectoriadb.small.blobs.open", "Small-object blobs open right now (bounded by sectoriadb.cache.max-open-small-blobs)", null, s -> s.smallBlobsOpen);
         g("sectoriadb.metastore.file.bytes", "Size of sectoria.db", "bytes", s -> s.metaFileBytes);
         g("sectoriadb.metastore.pages", "Pages in the metastore file", null, s -> s.metaPages);
         g("sectoriadb.metastore.free.pages", "Free (reusable or waiting for readers) metastore pages", null, s -> s.metaFreePages);
@@ -150,7 +156,7 @@ public class StorageGauges {
 
     private Snapshot compute() {
         long active = 0, total = 0, quarantined = 0, used = 0;
-        var loaded = tables.loadedTables();
+        var loaded = tables.residentTables();
         for (CuckooHashTable t : loaded) {
             CuckooHashTable.FillStats f = t.getFillStats();
             active += f.activeSlots();

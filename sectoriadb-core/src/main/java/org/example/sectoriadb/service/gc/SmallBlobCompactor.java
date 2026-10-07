@@ -13,6 +13,7 @@ import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.repository.PoolRepository;
 import org.example.sectoriadb.service.BlobService;
 import org.example.sectoriadb.service.ChunkStore;
+import org.example.sectoriadb.service.ResidentHandle;
 import org.example.sectoriadb.service.SmallBlobCache;
 import org.example.sectoriadb.service.UploadGate;
 import org.example.sectoriadb.service.gc.GcReports.CompactionReport;
@@ -124,8 +125,8 @@ public class SmallBlobCompactor {
 
     /** True if the blob has enough dead space to be worth compacting. */
     public boolean eligible(BlobFileEntity blob) {
-        try {
-            SmallObjectBlob.Stats st = smallCache.get(blob).stats();
+        try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(blob)) {
+            SmallObjectBlob.Stats st = h.get().stats();
             long total = st.liveBytes() + st.deadBytes();
             if (total == 0 || st.deadBytes() < props.getGc().getSmallCompactMinDeadBytes()) return false;
             return st.deadBytes() * 100 >= total * props.getGc().getSmallCompactDeadPercent();
@@ -140,8 +141,8 @@ public class SmallBlobCompactor {
      * for dead records. Counts the live manifests of the blob, so it is a sweep-time check, not a per-minute one.
      */
     public boolean strayHeavy(BlobFileEntity blob) {
-        try {
-            SmallObjectBlob.Stats st = smallCache.get(blob).stats();
+        try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(blob)) {
+            SmallObjectBlob.Stats st = h.get().stats();
             if (st.liveRecords() == 0) return false;
             long referenced = manifestRepo.countLiveByBlobId(blob.getId());
             long strays = Math.max(0, st.liveRecords() - referenced);
@@ -183,12 +184,18 @@ public class SmallBlobCompactor {
             metrics.gcDeferred(StorageMetrics.GcDeferral.NOT_ELIGIBLE);
             return fail(old, "the blob is the append target of its pool", t0);
         }
-        SmallObjectBlob oldBlob;
+        ResidentHandle<SmallObjectBlob> oldHandle;
         try {
-            oldBlob = smallCache.get(old);
+            oldHandle = smallCache.acquire(old);
         } catch (IOException e) {
             return fail(old, "cannot open: " + e.getMessage(), t0);
         }
+        try (oldHandle) {
+            return compactOpened(pool, old, oldHandle.get(), t0);
+        }
+    }
+
+    private CompactionReport compactOpened(PoolEntity pool, BlobFileEntity old, SmallObjectBlob oldBlob, long t0) {
         long bytesBefore = oldBlob.tail();
         boolean wasSealed = oldBlob.isSealed();
         oldBlob.seal();
@@ -210,7 +217,8 @@ public class SmallBlobCompactor {
 
             // 3. copy into a new, sealed blob
             target = blobs.createSmall(pool, true);
-            SmallObjectBlob targetBlob = smallCache.get(target);
+            try (ResidentHandle<SmallObjectBlob> targetHandle = smallCache.acquire(target)) {
+            SmallObjectBlob targetBlob = targetHandle.get();
             Map<String, SmallMove> moves = copy(oldBlob, targetBlob, live);
 
             // 4. swap
@@ -239,6 +247,7 @@ public class SmallBlobCompactor {
                     swap.repointed(), bytesBefore, bytesAfter);
             return new CompactionReport(old.getId(), true, null, swap.repointed(), bytesBefore,
                     bytesAfter, target.getId(), System.currentTimeMillis() - t0);
+            }
         } catch (IOException | RuntimeException e) {
             log.error("Compaction of small blob {} failed (the old blob stays authoritative): {}", old.getId(), e.toString());
             metrics.gcError();
@@ -294,8 +303,8 @@ public class SmallBlobCompactor {
 
     /** The compaction failed after the new blob was registered: remove it if nobody wrote into it meanwhile. */
     private void abandonTarget(BlobFileEntity target) {
-        try {
-            smallCache.get(target).unseal();
+        try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(target)) {
+            h.get().unseal();
         } catch (IOException ignored) {
             // the blob stays registered and sealed in memory only; a restart reopens it
         }

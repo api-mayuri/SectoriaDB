@@ -133,7 +133,9 @@ public class FileStorageService {
         try {
             for (int attempt = 0; attempt < 8 && loc == null; attempt++) {
                 blobEntity = blobService.chooseSmallBlobForWrite(pool, data.length);
-                loc = smallCache.get(blobEntity).append(data, ownerTag);   // null: filled up meanwhile, choose again
+                try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(blobEntity)) {
+                    loc = h.get().append(data, ownerTag);   // null: filled up meanwhile, choose again
+                }
             }
             if (loc == null) {
                 IOException e = new IOException("No small-object blob with room found for pool " + pool.getName());
@@ -599,7 +601,9 @@ public class FileStorageService {
         if (blob == null) {
             throw new IOException("Small-object blob not found: " + entity.getSmallBlobId());
         }
-        return smallCache.get(blob).read(entity.getSmallOffset(), entity.getSmallLength(), entity.getSmallCrc32c());
+        try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(blob)) {
+            return h.get().read(entity.getSmallOffset(), entity.getSmallLength(), entity.getSmallCrc32c());
+        }
     }
 
     // ── List / Info ───────────────────────────────────────────────────────────

@@ -42,6 +42,16 @@ public final class StorageRig implements AutoCloseable {
     public ChunkStore chunkStore;
     public HashTableCache cache;
     public SmallBlobCache smallCache;
+
+    /** The table of a blob, pinned for the rest of the test (tests do not release it: nothing is evicted in a rig). */
+    public org.example.sectoriadb.service.impl.CuckooHashTable table(org.example.sectoriadb.model.BlobFileEntity b) throws java.io.IOException {
+        return cache.acquire(b).get();
+    }
+
+    /** The open small-object blob, pinned for the rest of the test. */
+    public org.example.sectoriadb.service.impl.SmallObjectBlob small(org.example.sectoriadb.model.BlobFileEntity b) throws java.io.IOException {
+        return smallCache.acquire(b).get();
+    }
     public BlobService blobService;
     public PoolService poolService;
     public FileStorageService files;

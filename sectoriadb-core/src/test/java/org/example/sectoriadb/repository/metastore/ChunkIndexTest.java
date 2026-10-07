@@ -77,7 +77,7 @@ class ChunkIndexTest {
 
     long physicalChunks() throws Exception {
         long n = 0;
-        for (BlobFileEntity b : rig.blobService.cuckooBlobsOf(pool)) n += rig.cache.get(b).getFillStats().activeSlots();
+        for (BlobFileEntity b : rig.blobService.cuckooBlobsOf(pool)) n += rig.cache.fillStats(b).activeSlots();
         return n;
     }
 

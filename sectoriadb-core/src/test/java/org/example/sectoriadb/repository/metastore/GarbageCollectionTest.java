@@ -107,7 +107,7 @@ class GarbageCollectionTest {
 
     long physical() throws Exception {
         long n = 0;
-        for (BlobFileEntity b : rig.blobService.cuckooBlobsOf(pool)) n += rig.cache.get(b).getFillStats().activeSlots();
+        for (BlobFileEntity b : rig.blobService.cuckooBlobsOf(pool)) n += rig.cache.fillStats(b).activeSlots();
         return n;
     }
 
@@ -174,7 +174,7 @@ class GarbageCollectionTest {
         }
         assertTrue(keys.size() >= 10, "128 slots hold at least 10 objects of 8 chunks: " + keys.size());
         BlobFileEntity blob = rig.blobService.cuckooBlobsOf(pool).get(0);
-        double fullPercent = rig.cache.get(blob).getFillStats().fillPercent();
+        double fullPercent = rig.cache.fillStats(blob).fillPercent();
         double weightFull = rig.blobService.placementWeight(blob);
         assertTrue(fullPercent > 85, "driven close to the limit: " + fullPercent);
         assertThrows(Exception.class, () -> put("overflow", content(8, 999)), "a full pool refuses");
@@ -183,10 +183,10 @@ class GarbageCollectionTest {
         RunReport r = gc0();
         assertEquals(keys.size() * 8L, r.chunksFreed);
         // the uploads that were refused by the full pool wrote part of their chunks before they failed: strays
-        assertTrue(rig.cache.get(blob).getFillStats().activeSlots() > 0);
+        assertTrue(rig.cache.fillStats(blob).activeSlots() > 0);
         SweepReport swept = rig.gc.sweep(pool);
         assertTrue(swept.freed > 0);
-        assertEquals(0, rig.cache.get(blob).getFillStats().activeSlots());
+        assertEquals(0, rig.cache.fillStats(blob).activeSlots());
         assertTrue(rig.blobService.placementWeight(blob) > weightFull * 10,
                 "the placement weight sees the freed space: " + weightFull + " -> " + rig.blobService.placementWeight(blob));
 
@@ -273,8 +273,8 @@ class GarbageCollectionTest {
         rig.files.deleteObject("bkt", "a");
         // the collector freed two slots and died before its transaction committed: entries and queue rows remain
         BlobFileEntity blob = rig.blobService.cuckooBlobsOf(pool).get(0);
-        assertTrue(rig.cache.get(blob).freeSlot(keys[0]) > 0);
-        assertTrue(rig.cache.get(blob).freeSlot(keys[1]) > 0);
+        assertTrue(rig.table(blob).freeSlot(keys[0]) > 0);
+        assertTrue(rig.table(blob).freeSlot(keys[1]) > 0);
         assertEquals(2, physical());
 
         RunReport r = gc0();
@@ -291,7 +291,7 @@ class GarbageCollectionTest {
         long[] keys = m.chunkKeyArray();
         rig.files.deleteObject("bkt", "a");
         BlobFileEntity blob = rig.blobService.cuckooBlobsOf(pool).get(0);
-        for (long k : keys) rig.cache.get(blob).freeSlot(k);    // all slots gone, entries (zero references) remain
+        for (long k : keys) rig.table(blob).freeSlot(k);    // all slots gone, entries (zero references) remain
 
         put("b", data);                                         // finds the entries, sees the slots missing, rewrites them
         assertEquals(4, physical());
@@ -334,8 +334,9 @@ class GarbageCollectionTest {
         int[] calls = {0};
         GcRepository.ChunkBatchResult res = rig.gcRepo.collectChunks(due, cutoff, (p, blob, k) -> {
             if (++calls[0] == 4) throw new IOException("disk says no");
-            var table = rig.blobService.tableOf(blob);
-            return GcRepository.SlotFree.freed(table.freeSlot(k));
+            try (var h = rig.blobService.acquireTable(blob)) {
+                return GcRepository.SlotFree.freed(h.get().freeSlot(k));
+            }
         });
         assertEquals(3, res.freed());
         assertNotNull(res.error());

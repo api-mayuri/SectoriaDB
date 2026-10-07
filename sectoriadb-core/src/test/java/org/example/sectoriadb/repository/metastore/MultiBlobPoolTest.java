@@ -100,8 +100,8 @@ class MultiBlobPoolTest {
         for (BlobFileEntity b : blobs) {
             long chunks = rig.chunks.countByBlob(b.getId());
             assertTrue(chunks > 0, "every blob holds chunks");
-            assertEquals(chunks, rig.cache.get(b).getFillStats().activeSlots(), "index and table agree on the blob content");
-            assertTrue(rig.cache.get(b).getFillStats().fillPercent() < 98, "no blob is driven to its limit");
+            assertEquals(chunks, rig.cache.fillStats(b).activeSlots(), "index and table agree on the blob content");
+            assertTrue(rig.cache.fillStats(b).fillPercent() < 98, "no blob is driven to its limit");
         }
         assertEquals(320, rig.chunks.stats().chunks());
         assertTrue(rig.metrics.poolGrown.get() >= 2);
@@ -191,7 +191,7 @@ class MultiBlobPoolTest {
 
     /** Fills a blob's table until it refuses more, with chunks that no manifest knows. */
     private void fill(BlobFileEntity b) throws Exception {
-        CuckooHashTable t = rig.cache.get(b);
+        CuckooHashTable t = rig.table(b);
         Random r = new Random(b.getId().hashCode());
         try {
             while (true) t.insertPreservingKey(r.nextLong(), ByteBuffer.wrap(bytes(CHUNK, r.nextLong())));
@@ -205,12 +205,12 @@ class MultiBlobPoolTest {
         BlobFileEntity a = rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
         BlobFileEntity b = rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
         fill(a);
-        long aBefore = rig.cache.get(a).getFillStats().activeSlots();
+        long aBefore = rig.cache.fillStats(a).activeSlots();
         assertTrue(aBefore > 100);
         byte[] data = bytes(40 * CHUNK, 77);
         put("x", data);
         assertEquals(2, cuckoo().size(), "40 chunks fit in the other blob: no growth needed");
-        assertEquals(aBefore, rig.cache.get(a).getFillStats().activeSlots(), "the full blob received nothing");
+        assertEquals(aBefore, rig.cache.fillStats(a).activeSlots(), "the full blob received nothing");
         assertEquals(40, rig.chunks.countByBlob(b.getId()));
         assertArrayEquals(data, get("x"));
     }
@@ -324,7 +324,7 @@ class MultiBlobPoolTest {
         }
         // every indexed chunk is physically present in the blob the index names
         for (BlobFileEntity b : cuckoo()) {
-            assertEquals(rig.chunks.countByBlob(b.getId()), rig.cache.get(b).getFillStats().activeSlots() - orphansIn(b));
+            assertEquals(rig.chunks.countByBlob(b.getId()), rig.cache.fillStats(b).activeSlots() - orphansIn(b));
         }
     }
 

@@ -116,7 +116,11 @@ public class BlobService {
         entity.setChunkSize(0);
         entity.setTotalBytes(org.example.sectoriadb.format.SmallBlobLayout.HEADER_SIZE);
         entity.setCreatedAt(Instant.now());
-        if (sealed) smallCache.get(entity).seal();   // opened (and sealed) from the file before the registry knows it
+        if (sealed) {   // opened (and sealed) from the file before the registry knows it; a sealed blob is never evicted
+            try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(entity)) {
+                h.get().seal();
+            }
+        }
         blobRepo.save(entity);
 
         opLog.success("BLOB_CREATE", blobId, fileName,
@@ -137,8 +141,8 @@ public class BlobService {
                     .sorted(Comparator.comparing(BlobFileEntity::getCreatedAt).reversed())
                     .toList();
             for (BlobFileEntity b : blobs) {
-                try {
-                    if (smallCache.get(b).hasRoom(dataLength)) {
+                try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(b)) {
+                    if (h.get().hasRoom(dataLength)) {
                         return b;
                     }
                 } catch (IOException e) {
@@ -160,8 +164,8 @@ public class BlobService {
                     .filter(b -> b.getKind() == BlobKind.SMALL)
                     .sorted(Comparator.comparing(BlobFileEntity::getCreatedAt).reversed())
                     .filter(b -> {
-                        try {
-                            return smallCache.get(b).hasRoom(1);
+                        try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(b)) {
+                            return h.get().hasRoom(1);
                         } catch (IOException e) {
                             return false;
                         }
@@ -171,11 +175,15 @@ public class BlobService {
     }
 
     public SmallObjectBlob.Stats getSmallStats(BlobFileEntity entity) throws IOException {
-        return smallCache.get(entity).stats();
+        try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(entity)) {
+            return h.get().stats();
+        }
     }
 
     public SmallObjectBlob.ScrubReport scrubSmall(BlobFileEntity entity) throws IOException {
-        return smallCache.get(entity).scrub();
+        try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(entity)) {
+            return h.get().scrub();
+        }
     }
 
     public List<BlobFileEntity> listByPool(PoolEntity pool) {
@@ -188,7 +196,7 @@ public class BlobService {
     }
 
     public CuckooHashTable.FillStats getFillStats(BlobFileEntity entity) throws IOException {
-        return cache.get(entity).getFillStats();
+        return cache.fillStats(entity);
     }
 
     // ── Pool growth (doc 09) ──────────────────────────────────────────────────
@@ -229,7 +237,7 @@ public class BlobService {
         for (BlobFileEntity b : blobs) {
             CuckooHashTable.FillStats st;
             try {
-                st = cache.get(b).getFillStats();
+                st = cache.fillStats(b);
             } catch (BlobGoneException replacedMeanwhile) {
                 continue;   // a resize replaced it after the listing; the next look sees the replacement
             }
@@ -297,7 +305,7 @@ public class BlobService {
                 if (refused.contains(b.getId()) || cache.isFrozen(b.getId())) continue;
                 CuckooHashTable.FillStats st;
                 try {
-                    st = cache.get(b).getFillStats();
+                    st = cache.fillStats(b);
                 } catch (BlobGoneException replacedMeanwhile) {
                     continue;
                 }
@@ -330,7 +338,7 @@ public class BlobService {
         BlobFileEntity best = null;
         int maxFree = -1;
         for (BlobFileEntity b : blobs) {
-            CuckooHashTable.FillStats stats = cache.get(b).getFillStats();
+            CuckooHashTable.FillStats stats = cache.fillStats(b);
             int free = stats.totalSlots() - stats.activeSlots();
             if (free > maxFree) {
                 maxFree = free;
@@ -346,21 +354,22 @@ public class BlobService {
      * quarantined) get weight 0: they are used only after every other blob refused a chunk.
      */
     public double placementWeight(BlobFileEntity b) throws IOException {
-        CuckooHashTable.FillStats st = cache.get(b).getFillStats();
+        CuckooHashTable.FillStats st = cache.fillStats(b);
         if (cache.isFrozen(b.getId()) || st.quarantinedSlots() * 20L > st.totalSlots()) return 0;
         return RendezvousPlacement.weightOf(st.totalSlots(), st.activeSlots() + st.quarantinedSlots(), b.getChunkSize());
     }
 
     /**
-     * The table of a blob by id (chunk index entries name blobs by id): from the cache without any metastore access
-     * when it is loaded, else the blob record is read and the table loaded.
+     * Pins the table of a blob by id (chunk index entries name blobs by id): from the cache without any metastore access
+     * when it is resident, else the blob record is read and the table loaded. Close the handle when done (it keeps the
+     * table open, whatever eviction pressure there is).
      */
-    public CuckooHashTable tableOf(String blobId) throws IOException {
-        CuckooHashTable t = cache.getLoaded(blobId);
-        if (t != null) return t;
+    public ResidentHandle<CuckooHashTable> acquireTable(String blobId) throws IOException {
+        ResidentHandle<CuckooHashTable> h = cache.acquireResident(blobId);
+        if (h != null) return h;
         BlobFileEntity e = blobRepo.findById(blobId)
                 .orElseThrow(() -> new BlobGoneException(blobId));
-        return cache.get(e);
+        return cache.acquire(e);
     }
 
     /** The blob named by a chunk index entry no longer exists (replaced by a resize or deleted since the lookup). */

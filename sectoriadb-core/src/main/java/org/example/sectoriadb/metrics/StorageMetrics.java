@@ -106,6 +106,9 @@ public interface StorageMetrics {
     /** An upload found the chunk in the pool-wide chunk index and verified it byte for byte: nothing was written. */
     default void poolDedupHit() { }
 
+    /** A cuckoo table was evicted from memory by the LRU policy of the table cache (doc 10, part B). */
+    default void tableEvicted() { }
+
     /** A cuckoo blob was added to a pool (it reached the grow threshold, or no blob accepted a chunk). */
     default void poolGrown() { }
 

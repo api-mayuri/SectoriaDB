@@ -298,10 +298,10 @@ class SmallCompactionTest {
         List<ManifestEntity> live = rig.manifests.findByBlobId(oldId, true);
         BlobFileEntity old = rig.blobs.findById(oldId).orElseThrow();
         BlobFileEntity target = rig.blobService.createSmall(pool, true);
-        SmallObjectBlob to = rig.smallCache.get(target);
+        SmallObjectBlob to = rig.small(target);
         Map<String, GcRepository.SmallMove> moves = new LinkedHashMap<>();
         for (ManifestEntity m : live) {
-            byte[] data = rig.smallCache.get(old).read(m.getSmallOffset(), m.getSmallLength(), m.getSmallCrc32c());
+            byte[] data = rig.small(old).read(m.getSmallOffset(), m.getSmallLength(), m.getSmallCrc32c());
             var loc = to.appendWhileSealed(data, 1);
             moves.put(m.getId(), new GcRepository.SmallMove(m.getSmallOffset(), loc.offset(), loc.length(), loc.crc32c()));
         }
@@ -328,9 +328,9 @@ class SmallCompactionTest {
         BlobFileEntity old = rig.blobs.findById(oldId).orElseThrow();
         // the copy phase of a compaction ran, the process died before the swap: the new blob holds unreferenced copies
         BlobFileEntity leftover = rig.blobService.createSmall(pool, true);
-        SmallObjectBlob to = rig.smallCache.get(leftover);
+        SmallObjectBlob to = rig.small(leftover);
         for (ManifestEntity m : rig.manifests.findByBlobId(oldId, true)) {
-            to.appendWhileSealed(rig.smallCache.get(old).read(m.getSmallOffset(), m.getSmallLength(), m.getSmallCrc32c()), 1);
+            to.appendWhileSealed(rig.small(old).read(m.getSmallOffset(), m.getSmallLength(), m.getSmallCrc32c()), 1);
         }
         rig.reopen();                                                   // the restart: an ordinary blob now
         pool = rig.bucket("bkt");

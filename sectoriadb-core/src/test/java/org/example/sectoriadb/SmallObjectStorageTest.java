@@ -183,7 +183,7 @@ class SmallObjectStorageTest {
         var stats = blobService.getSmallStats(sob);
         assertEquals(2, stats.liveRecords());
         assertEquals(0, stats.deadRecords());
-        assertArrayEquals(bytes(100), smallCache.get(sob).read(a.getSmallOffset(), a.getSmallLength(), a.getSmallCrc32c()),
+        assertArrayEquals(bytes(100), smallCache.acquire(sob).get().read(a.getSmallOffset(), a.getSmallLength(), a.getSmallCrc32c()),
                 "a retired record stays readable until it is collected");
         assertArrayEquals(bytes(200), get(b));
 
