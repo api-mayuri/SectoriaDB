@@ -1504,7 +1504,7 @@
     {
       "type": "timeseries",
       "title": "Metastore commits/s",
-      "description": "",
+      "description": "Rate of the commit histogram count. The last_txid gauge is cached for 15 s and therefore steps; do not rate() it.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -1515,7 +1515,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(sectoriadb_metastore_last_txid[$__rate_interval])",
+          "expr": "sum(rate(sectoriadb_metastore_commit_seconds_count[$__rate_interval]))",
           "legendFormat": "commits/s",
           "refId": "A",
           "editorMode": "code",

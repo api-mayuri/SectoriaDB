@@ -204,7 +204,8 @@ def server():
         pq(q_hist("sectoriadb_metastore_commit_seconds", 0.99, by=""), "commit p99", "B"),
         pq(q_hist("sectoriadb_metastore_commit_seconds", 0.5, by=""), "commit p50", "C")], "s", log=True,
         desc="Wait growing faster than commit time means the single writer is the bottleneck (queue of writers)."), 8, 8)
-    d.add(ts("Metastore commits/s", [pq(f"rate(sectoriadb_metastore_last_txid[{R}])", "commits/s")], "ops"), 8, 8)
+    d.add(ts("Metastore commits/s", [pq(f"sum(rate(sectoriadb_metastore_commit_seconds_count[{R}]))", "commits/s")], "ops",
+             desc="Rate of the commit histogram count. The last_txid gauge is cached for 15 s and therefore steps; do not rate() it."), 8, 8)
     d.add(ts("Engine lock waits p99", [
         pq(q_hist("sectoriadb_small_append_lock_wait_seconds", 0.99, by=""), "small append", "A"),
         pq(q_hist("sectoriadb_cuckoo_lock_wait_seconds", 0.99, by=""), "cuckoo insert", "B")], "s", log=True), 8, 8)

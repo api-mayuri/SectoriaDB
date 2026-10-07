@@ -155,7 +155,7 @@
 | `sectoriadb_small_blobs_open` | gauge | нет | шт. | открытые файлы малых объектов | |
 | `sectoriadb_metastore_file_bytes` | gauge | нет | байт | размер `sectoria.db` | |
 | `sectoriadb_metastore_pages`, `sectoriadb_metastore_free_pages` | gauge | нет | шт. | страниц в файле / свободных (включая ждущие читателей) | `sectoriadb_metastore_free_pages / sectoriadb_metastore_pages` |
-| `sectoriadb_metastore_last_txid` | gauge | нет | номер | последняя зафиксированная транзакция | `rate(sectoriadb_metastore_last_txid[1m])` это коммитов в секунду |
+| `sectoriadb_metastore_last_txid` | gauge | нет | номер | последняя зафиксированная транзакция | коммитов в секунду: `sum(rate(sectoriadb_metastore_commit_seconds_count[1m]))`; сам `last_txid` кэшируется на 15 с и растёт ступенями, `rate()` по нему даёт неточный результат на коротких окнах |
 | `sectoriadb_metastore_live_readers` | gauge | нет | шт. | открытые читающие транзакции (долгие читатели удерживают страницы от переиспользования) | |
 | `sectoriadb_metastore_page_size_bytes` | gauge | нет | байт | размер страницы | |
 | `sectoriadb_gc_queue_length` | gauge | нет | шт. | замещённые и удалённые манифесты, ждущие сборщика мусора (`deleted_manifests`); растёт до этапа `10-gc-and-resize` | `sectoriadb_gc_queue_length` |
