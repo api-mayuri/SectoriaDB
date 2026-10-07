@@ -44,6 +44,17 @@ fi
 
 die() { echo "error: $*" >&2; exit 2; }
 
+# S3 endpoint as seen from THIS host (the warp container uses WARP_HOST on the stand's network; curl runs on the host).
+: "${S3_CURL_ENDPOINT:=http://localhost:${HOST_PORT:-8080}}"
+
+# delete_bucket NAME: removes an (empty) bucket through the S3 API; prints the HTTP status. warp empties its bucket but
+# never deletes it, and every bucket keeps its blob files and in-memory tables until it is deleted, so a run that
+# creates one bucket per run must remove it again (otherwise a long matrix exhausts the server heap).
+delete_bucket() {
+  curl -sS -m 60 -o /dev/null -w '%{http_code}' -X DELETE --user "$WARP_ACCESS_KEY:$WARP_SECRET_KEY" \
+    --aws-sigv4 "aws:amz:${SECTORIADB_REGION:-us-east-1}:s3" "$S3_CURL_ENDPOINT/$1" 2>/dev/null || echo 000
+}
+
 # warp_exec ARGS...: run warp. For docker, $WARP_MOUNT (host dir) is visible as /out.
 warp_exec() {
   if [ "$WARP_RUNNER" = local ]; then

@@ -15,6 +15,7 @@
 #   --influx          stream live results to InfluxDB (INFLUX_TOKEN etc. from bench/observability/.env)
 #   --autoterm        stop when stable (compare MEDIANS, not the whole run)
 #   --bucket B        use this bucket (default warp-bench-<mode>-<size>-c<conc>-<HHMMSS>; warp WIPES it)
+#   --keep-bucket     do not delete the bucket after the run (default: a bucket created by this script is deleted)
 #   --list-existing   do not prepare data, use objects already in --bucket (see preload.sh); never clears the bucket
 #   --no-annotate     do not post Grafana annotations
 #   --label TEXT      free-text note stored in meta.json
@@ -26,7 +27,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 MODE="${MODE:-mixed}"; SIZE="${SIZE:-small}"; CONC="${CONC:-20}"; DURATION="${DURATION:-30s}"
 OBJECTS="${OBJECTS:-}"; PARTS="${PARTS:-20}"; PART_SIZE="${PART_SIZE:-5MiB}"
 INFLUX="${INFLUX:-0}"; AUTOTERM="${AUTOTERM:-0}"; BUCKET="${BUCKET:-}"; LIST_EXISTING="${LIST_EXISTING:-0}"
-ANNOTATE="${ANNOTATE:-1}"; LABEL="${LABEL:-}"; EXTRA="${EXTRA:-}"
+ANNOTATE="${ANNOTATE:-1}"; LABEL="${LABEL:-}"; EXTRA="${EXTRA:-}"; KEEP_BUCKET="${KEEP_BUCKET:-0}"; OWN_BUCKET=1
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -39,7 +40,8 @@ while [ $# -gt 0 ]; do
     --part-size) PART_SIZE=$2; shift 2 ;;
     --influx) INFLUX=1; shift ;;
     --autoterm) AUTOTERM=1; shift ;;
-    --bucket) BUCKET=$2; shift 2 ;;
+    --bucket) BUCKET=$2; OWN_BUCKET=0; shift 2 ;;
+    --keep-bucket) KEEP_BUCKET=1; shift ;;
     --list-existing) LIST_EXISTING=1; shift ;;
     --no-annotate) ANNOTATE=0; shift ;;
     --label) LABEL=$2; shift 2 ;;
@@ -69,7 +71,7 @@ RUN_DIR="$RESULTS_DIR/${STAMP}_${SHA}_${MODE}_${SIZE_LABEL}_c${CONC}"
 mkdir -p "$RUN_DIR"
 export WARP_MOUNT="$RUN_DIR"
 
-[ -n "$BUCKET" ] || BUCKET="warp-bench-${MODE}-${SIZE_LABEL}-c${CONC}-${STAMP:9:6}"
+if [ -n "$BUCKET" ]; then OWN_BUCKET=0; else BUCKET="warp-bench-${MODE}-${SIZE_LABEL}-c${CONC}-${STAMP:9:6}"; fi
 BUCKET="$(echo "$BUCKET" | tr 'A-Z_' 'a-z-')"
 
 ARGS=("$MODE" --no-color --host "$WARP_HOST" --access-key "$WARP_ACCESS_KEY" --secret-key "$WARP_SECRET_KEY"
@@ -126,6 +128,11 @@ python3 -I "$(dirname "${BASH_SOURCE[0]}")/meta.py" "$RUN_DIR/meta.json" \
   mode="$MODE" size_class="$SIZE" size_label="$SIZE_LABEL" concurrency="$CONC" duration="$DURATION" \
   objects="$OBJECTS" bucket="$BUCKET" autoterm="$AUTOTERM" list_existing="$LIST_EXISTING" influx="$INFLUX" \
   warp_exit_code="$WARP_RC" error_free="$ERR_FREE" label="$LABEL"
+
+if [ "$OWN_BUCKET" = 1 ] && [ "$KEEP_BUCKET" = 0 ] && [ "$LIST_EXISTING" = 0 ]; then
+  BUCKET_DELETE_STATUS="$(delete_bucket "$BUCKET")"
+  echo "== bucket $BUCKET deleted: HTTP $BUCKET_DELETE_STATUS"
+fi
 
 [ "$ANNOTATE" = 1 ] && grafana_annotate_end "warp $MODE $SIZE_LABEL c$CONC @ $SHA: $([ "$ERR_FREE" = true ] && echo ok || echo ERRORS)" "$TAGS"
 

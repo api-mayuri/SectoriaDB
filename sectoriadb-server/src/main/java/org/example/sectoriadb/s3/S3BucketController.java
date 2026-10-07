@@ -91,8 +91,12 @@ public class S3BucketController {
         try {
             poolService.deleteBucket(bucket);
         } catch (IllegalStateException e) {
-            // Convert BucketNotEmpty error to S3Exception
-            String msg = e.getMessage() != null ? e.getMessage() : "The bucket you tried to delete is not empty";
+            // Only a real "bucket is not empty" conflict is BucketNotEmpty; any other illegal state (for example the
+            // metadata store refusing work after a failed commit) goes to the exception handler (503)
+            String msg = e.getMessage() != null ? e.getMessage() : "";
+            if (!(msg.contains("BucketNotEmpty") || msg.contains("still has") || msg.contains("not empty"))) {
+                throw e;
+            }
             throw new S3Exception(HttpStatus.CONFLICT, "BucketNotEmpty", msg, "/" + bucket);
         }
 

@@ -19,7 +19,7 @@ services:
     environment:
       SECTORIADB_S3_AUTH_ENABLED: "true"
       SECTORIADB_S3_CREDENTIALS: "${SECTORIADB_ACCESS_KEY:-BENCHACCESSKEY0001}:${SECTORIADB_SECRET_KEY:-benchsecretkey0123456789abcdef}:bench,${SECTORIADB_ALT_ACCESS_KEY:-ALTACCESSKEY00002}:${SECTORIADB_ALT_SECRET_KEY:-altsecretkey0123456789abcdef}:bench-alt"
-      JAVA_OPTS: "${SECTORIADB_JAVA_OPTS:--Xmx1g -XX:+UseG1GC} -Dsectoriadb.fsync=${SECTORIADB_FSYNC:-true} -Dlogging.level.org.example.sectoriadb=INFO -Dlogging.level.org.springframework.web=WARN -Dlogging.level.org.springframework.web.servlet.mvc.method.annotation=WARN"
+      JAVA_OPTS: "${SECTORIADB_JAVA_OPTS:--Xmx1g -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError} -Dsectoriadb.fsync=${SECTORIADB_FSYNC:-true} -Dlogging.level.org.example.sectoriadb=INFO -Dlogging.level.org.springframework.web=WARN -Dlogging.level.org.springframework.web.servlet.mvc.method.annotation=WARN"
       SPRING_SHELL_INTERACTIVE_ENABLED: "false"
     ports:
       - "8080:8080"
@@ -27,6 +27,8 @@ services:
     volumes:
       - sectoriadb-bench-meta:/data/meta
       - sectoriadb-bench-data:/data/storage
+    # after an OutOfMemoryError the metadata store refuses all work until the process is restarted: exit and come back
+    restart: unless-stopped
     networks: [bench]
 
   prometheus:
