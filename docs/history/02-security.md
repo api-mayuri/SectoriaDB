@@ -1,3 +1,5 @@
+> Исторический документ этапа 02; актуальное описание — [security.md](../architecture/security.md).
+
 # Этап 02. Безопасность S3-слоя (S1–S5)
 
 Ветка `02-security`, растёт из коммита с `ROADMAP.md`. Затронут только `sectoriadb-server`

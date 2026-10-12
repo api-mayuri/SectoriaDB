@@ -1,3 +1,5 @@
+> Исторический документ этапа 03; актуальное описание — [storage-engine.md](../architecture/storage-engine.md), [integrity.md](../architecture/integrity.md).
+
 # Этап 03 — целостность чанков (C7)
 
 Ветка `03-chunk-integrity`, растёт из `01-engine-safety`. По решению владельца проекта **обратная совместимость со старыми

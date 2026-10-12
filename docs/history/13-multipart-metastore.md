@@ -1,3 +1,5 @@
+> Исторический документ этапа 13; актуальное описание — [metadata-model.md](../architecture/metadata-model.md), [overview.md](../architecture/overview.md).
+
 # Этап 13. Multipart в метахранилище
 
 До этого этапа состояние multipart-загрузки жило в файловой системе (`<data-dir>/.multipart/<uploadId>/`: `meta.properties`,

@@ -1,3 +1,5 @@
+> Исторический документ этапа 09; актуальное описание — [storage-engine.md](../architecture/storage-engine.md), [metastore.md](../architecture/metastore.md), [metadata-model.md](../architecture/metadata-model.md).
+
 # 09. Несколько блобов в пуле
 
 Этап делится на две части.

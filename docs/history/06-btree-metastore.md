@@ -1,3 +1,5 @@
+> Исторический документ этапа 06; актуальное описание — [metastore.md](../architecture/metastore.md).
+
 # 06. Транзакционное хранилище метаданных (B+-дерево, copy-on-write)
 
 Пакет `org.example.sectoriadb.metastore` (отдельный модуль `sectoriadb-metastore`, с этапа 12). Встраиваемое key-value хранилище в

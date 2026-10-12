@@ -1,3 +1,5 @@
+> Исторический документ этапа 10; актуальное описание — [garbage-collection.md](../architecture/garbage-collection.md), [metastore.md](../architecture/metastore.md), [storage-engine.md](../architecture/storage-engine.md).
+
 # 10. Сборка мусора и безопасное расширение
 
 Этап делится на две части.

@@ -1,3 +1,5 @@
+> Исторический документ этапа 08; актуальное описание — [monitoring.md](../guide/monitoring.md), [benchmarking.md](../testing/benchmarking.md), [compatibility.md](../testing/compatibility.md), [fault-injection.md](../testing/fault-injection.md), [sandbox-results.md](../reports/sandbox-results.md).
+
 # 08. Наблюдаемость и бенчмарки
 
 Этап состоит из двух частей:
