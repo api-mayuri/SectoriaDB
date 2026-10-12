@@ -32,10 +32,6 @@ import java.util.function.Function;
 public final class MetaStore implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(MetaStore.class);
 
-    static final long MAGIC = 0x53454354_4D455441L; // "SECTMETA"
-    static final int FORMAT_VERSION = 1;
-    static final int META_SIZE = 52;
-
     /** Immutable committed state. */
     record Snapshot(long txId, long catalogRoot, long freelistRoot, long pageCount) {
     }
@@ -106,7 +102,7 @@ public final class MetaStore implements AutoCloseable {
             Snapshot snap;
             Pager pager;
             long size = ch.size();
-            if (needsInitialisation(ch, size)) {
+            if (MetaPage.needsInitialisation(ch, size)) {
                 // Fresh file, or one whose creation never finished (a store has at least two pages, so a shorter file
                 // cannot hold a commit): write both meta slots in ONE write so that a crash leaves either nothing
                 // usable (re-initialised on the next open) or a complete file.
@@ -114,12 +110,12 @@ public final class MetaStore implements AutoCloseable {
                 pager = new Pager(ch, opts.pageSize(), opts.fsync(), opts.listener());
                 snap = new Snapshot(0, 0, 0, 2);
                 byte[] both = new byte[2 * pager.pageSize];
-                System.arraycopy(encodeMeta(pager.pageSize, snap), 0, both, 0, pager.pageSize);
+                System.arraycopy(MetaPage.encode(pager.pageSize, snap), 0, both, 0, pager.pageSize);
                 pager.writeRaw(0, both);
                 pager.force();
                 if (opts.fsync()) syncParentDirectory(file);
             } else {
-                Object[] r = chooseMeta(ch, size);
+                Object[] r = MetaPage.choose(ch, size);
                 pager = new Pager(ch, (Integer) r[0], opts.fsync(), opts.listener());
                 snap = (Snapshot) r[1];
             }
@@ -133,30 +129,6 @@ public final class MetaStore implements AutoCloseable {
             closeQuietly(ch);
             throw e;
         }
-    }
-
-    /**
-     * True for an empty file and for a file whose creation was interrupted: it holds no commit, because a store has at
-     * least two pages and its first commit rewrites a meta page only after both exist. That is the case when the first
-     * meta page is valid with txId 0 but the file is shorter than two pages, or when the file is shorter than the
-     * largest possible two pages and all zeros (the size was extended but the data never reached the disk).
-     */
-    private static boolean needsInitialisation(FileChannel ch, long size) throws IOException {
-        if (size == 0) return true;
-        Object[] m0 = readMetaAt(ch, 0, size);
-        if (m0 != null) {
-            Snapshot s = (Snapshot) m0[1];
-            return s.txId() == 0 && size < 2L * (Integer) m0[0];
-        }
-        if (size > 2L * MetaStoreOptions.MAX_PAGE_SIZE) return false;
-        ByteBuffer bb = ByteBuffer.allocate((int) size);
-        while (bb.hasRemaining()) {
-            if (ch.read(bb, bb.position()) < 0) return false;
-        }
-        for (byte x : bb.array()) {
-            if (x != 0) return false;
-        }
-        return true;
     }
 
     /** Makes the directory entry of a newly created file durable; best effort (not supported on every platform). */
@@ -180,64 +152,8 @@ public final class MetaStore implements AutoCloseable {
 
     // ---------------------------------------------------------------- meta pages
 
-    static byte[] encodeMeta(int pageSize, Snapshot s) {
-        byte[] p = new byte[pageSize];
-        ByteBuffer b = ByteBuffer.wrap(p);
-        b.putLong(0, MAGIC).putInt(8, FORMAT_VERSION).putInt(12, pageSize).putLong(16, s.txId())
-                .putLong(24, s.catalogRoot()).putLong(32, s.freelistRoot()).putLong(40, s.pageCount());
-        b.putInt(48, Pager.crc(p, 0, 48));
-        return p;
-    }
-
-    /** Parses a meta page header; null if magic/version/crc/pageSize do not check out. */
-    private static Object[] parseMeta(byte[] h) {
-        ByteBuffer b = ByteBuffer.wrap(h);
-        if (b.getLong(0) != MAGIC || b.getInt(8) != FORMAT_VERSION) return null;
-        if (b.getInt(48) != Pager.crc(h, 0, 48)) return null;
-        int ps = b.getInt(12);
-        if (ps < MetaStoreOptions.MIN_PAGE_SIZE || ps > MetaStoreOptions.MAX_PAGE_SIZE || Integer.bitCount(ps) != 1) {
-            return null;
-        }
-        return new Object[]{ps, new Snapshot(b.getLong(16), b.getLong(24), b.getLong(32), b.getLong(40))};
-    }
-
-    private static Object[] readMetaAt(FileChannel ch, long pos, long fileSize) throws IOException {
-        if (pos + META_SIZE > fileSize) return null;
-        byte[] h = new byte[META_SIZE];
-        ByteBuffer bb = ByteBuffer.wrap(h);
-        while (bb.hasRemaining()) {
-            if (ch.read(bb, pos + bb.position()) < 0) return null;
-        }
-        return parseMeta(h);
-    }
-
-    /** Reads both meta slots, drops invalid ones, picks the highest txId. Returns {pageSize, Snapshot}. */
-    private static Object[] chooseMeta(FileChannel ch, long fileSize) throws IOException {
-        Object[] m0 = readMetaAt(ch, 0, fileSize);
-        List<Integer> sizes = new ArrayList<>();
-        if (m0 != null) {
-            sizes.add((Integer) m0[0]);
-        } else {
-            for (int s = MetaStoreOptions.MIN_PAGE_SIZE; s <= MetaStoreOptions.MAX_PAGE_SIZE; s *= 2) sizes.add(s);
-        }
-        for (int ps : sizes) {
-            Object[] a = m0 != null && (Integer) m0[0] == ps ? m0 : null;
-            Object[] b = readMetaAt(ch, ps, fileSize);
-            if (b != null && (Integer) b[0] != ps) b = null;
-            Snapshot best = null;
-            for (Object[] m : new Object[][]{a, b}) {
-                if (m == null) continue;
-                Snapshot s = (Snapshot) m[1];
-                if (s.pageCount() < 2 || s.pageCount() * ps > fileSize) continue; // tail of the file is missing
-                if (best == null || s.txId() > best.txId()) best = s;
-            }
-            if (best != null) return new Object[]{ps, best};
-        }
-        throw new CorruptedPageException(-1, "no valid meta page");
-    }
-
     private void writeMeta(Snapshot s) {
-        pager.writeRaw((s.txId() % 2) * pager.pageSize, encodeMeta(pager.pageSize, s));
+        pager.writeRaw((s.txId() % 2) * pager.pageSize, MetaPage.encode(pager.pageSize, s));
     }
 
     // ---------------------------------------------------------------- free list persistence
@@ -682,7 +598,7 @@ public final class MetaStore implements AutoCloseable {
                 pager.writeRaw((long) slot * ps, new byte[ps]);   // the failed commit's meta page: forget it
                 wrote = true;
             } else if (slot == s.txId() % 2 && (onDisk == null || onDisk.txId() != s.txId())) {
-                pager.writeRaw((long) slot * ps, encodeMeta(ps, s));   // the committed one is damaged or missing
+                pager.writeRaw((long) slot * ps, MetaPage.encode(ps, s));   // the committed one is damaged or missing
                 wrote = true;
             }
         }
@@ -697,7 +613,7 @@ public final class MetaStore implements AutoCloseable {
     /** The valid meta page of a slot as a snapshot, or null (unreadable, damaged or of another page size). */
     private Snapshot readSlot(int slot) {
         try {
-            Object[] m = readMetaAt(channel, (long) slot * pager.pageSize, channel.size());
+            Object[] m = MetaPage.readAt(channel, (long) slot * pager.pageSize, channel.size());
             return m != null && (Integer) m[0] == pager.pageSize ? (Snapshot) m[1] : null;
         } catch (IOException e) {
             throw new UncheckedIOException(e);

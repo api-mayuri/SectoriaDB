@@ -14,11 +14,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.BitSet;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.example.sectoriadb.engine.error.ChunkCorruptedException;
 import org.example.sectoriadb.engine.error.KeyCollisionException;
@@ -99,14 +96,12 @@ public class CuckooHashTable implements AutoCloseable {
     private final long tableAOffset;
     private final long tableBOffset;
 
+    private final EvictionPlanner planner;
+
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
 
     // durability barrier: writes issued but not yet forced (see barrier())
-    private volatile long writeSeq;                 // inserts whose data and meta were written (advanced under the write lock)
-    private volatile long forcedSeq;                // every insert up to this one is covered by a completed fsync
-    private final ReentrantLock forceLock = new ReentrantLock();
-    private final Condition forceDone = forceLock.newCondition();
-    private boolean forcing;                        // a leader is inside fsync (guarded by forceLock)
+    private final ForceBarrier forceBarrier = new ForceBarrier();
 
     /** Callback for iterating active chunks. Can throw IOException. */
     @FunctionalInterface
@@ -175,6 +170,7 @@ public class CuckooHashTable implements AutoCloseable {
         this.lengthMeta = new int[totalSlots];
         this.crcMeta = new int[totalSlots];
         Arrays.fill(stateMeta, FREE);
+        this.planner = new EvictionPlanner(stateMeta, chunkIdMeta, numBuckets, maxEvictions);
 
         this.tableAOffset = BlobLayout.tableAOffset(numBuckets);
         this.tableBOffset = tableAOffset + (long) slotsPerTable * chunkSize;
@@ -259,7 +255,7 @@ public class CuckooHashTable implements AutoCloseable {
                 key = hasher.hash64(payload, attempt + 1L);
             }
 
-            int[] path = findEvictionPath(key);
+            int[] path = planner.findPath(key);
             if (path == null) {
                 listener.onTableFull();
                 throw new TableFullException("CuckooHashTable: no eviction path within " + maxEvictions
@@ -289,7 +285,7 @@ public class CuckooHashTable implements AutoCloseable {
             int target = path[0];
             ioEngine.writeChunk(blobFile, dataOffset(target), ByteBuffer.wrap(payload));
             writeMeta(target, key, ACTIVE, len, crc, false);
-            writeSeq++;
+            forceBarrier.written();
             return new InsertResult(key, false);
         } finally {
             lock.writeLock().unlock();
@@ -564,46 +560,12 @@ public class CuckooHashTable implements AutoCloseable {
      * upload that has not committed and not forced yet). Cheap when nothing is pending.
      */
     public void barrier() throws IOException {
-        final long target = writeSeq;
-        if (forcedSeq >= target) return;
-        long t0 = System.nanoTime();
-        boolean led = false;
-        long covered = 0;
-        forceLock.lock();
-        try {
-            while (forcedSeq < target) {
-                if (forcing) {
-                    forceDone.awaitUninterruptibly();
-                    continue;
-                }
-                forcing = true;
-                long upTo = writeSeq;          // every insert issued so far wrote before it advanced the counter
-                long before = forcedSeq;
-                forceLock.unlock();
-                boolean ok = false;
-                try {
-                    ioEngine.force(blobFile);
-                    ok = true;
-                } finally {
-                    forceLock.lock();
-                    forcing = false;
-                    if (ok) {
-                        if (upTo > forcedSeq) forcedSeq = upTo;
-                        led = true;
-                        covered += upTo - before;
-                    }
-                    forceDone.signalAll();
-                }
-            }
-        } finally {
-            forceLock.unlock();
-        }
-        listener.onCuckooBarrier(System.nanoTime() - t0, led, covered);
+        forceBarrier.await(() -> ioEngine.force(blobFile), listener);
     }
 
     /** True if inserted chunks were written but not forced to disk yet (such a table is not evicted from the cache). */
     public boolean hasUnforcedWrites() {
-        return writeSeq > forcedSeq;
+        return forceBarrier.hasUnforced();
     }
 
     /** Memory held by the in-memory slot metadata, in bytes (the weight of a resident table in the cache budget). */
@@ -616,100 +578,6 @@ public class CuckooHashTable implements AutoCloseable {
     public int getNumBuckets() { return numBuckets; }
     public int getChunkSize() { return chunkSize; }
     public BlobFile getBlobFile() { return blobFile; }
-
-    // ─── Eviction path search ────────────────────────────────────────────────
-
-    /**
-     * BFS over buckets using in-memory metadata only. Roots are the two candidate buckets of the new key
-     * (table A and table B). An edge goes from a bucket to the alternate bucket of one of its ACTIVE chunks.
-     * Returns the flat slot indices p[0..n]: the new chunk goes to p[0], the chunk in p[i-1] moves to p[i],
-     * and p[n] is a free slot (n = number of moves, 0 if a root bucket has room). Null if no path of at
-     * most maxEvictions moves exists.
-     */
-    private int[] findEvictionPath(long newKey) {
-        int bA = bucketA(newKey);
-        int bB = bucketB(newKey);
-        // a root bucket with room needs no search state at all (the common case)
-        for (int s = 0; s < SLOTS_PER_BUCKET; s++) {
-            int idx = flatIndex(0, bA, s);
-            if (isFreeSlot(idx)) return new int[]{idx};
-        }
-        for (int s = 0; s < SLOTS_PER_BUCKET; s++) {
-            int idx = flatIndex(1, bB, s);
-            if (isFreeSlot(idx)) return new int[]{idx};
-        }
-        // node: {tableId, bucket, parentNodeIndex, slotInParentOfMovedChunk, depth}
-        List<int[]> nodes = new ArrayList<>();
-        BitSet visited = visitedScratch();   // the caller holds the write lock: one scratch set per table is safe
-        try {
-            nodes.add(new int[]{0, bA, -1, -1, 0});
-            visited.set(bA);
-            nodes.add(new int[]{1, bB, -1, -1, 0});
-            visited.set(numBuckets + bB);
-
-            for (int head = 0; head < nodes.size(); head++) {
-                int[] node = nodes.get(head);
-                int tableId = node[0];
-                int bucket = node[1];
-
-                for (int s = 0; s < SLOTS_PER_BUCKET; s++) {
-                    int idx = flatIndex(tableId, bucket, s);
-                    if (isFreeSlot(idx)) {
-                        return buildPath(nodes, head, s);
-                    }
-                }
-
-                if (node[4] >= maxEvictions) {
-                    continue; // cannot move anything out of this bucket within the budget
-                }
-                int other = 1 - tableId;
-                for (int s = 0; s < SLOTS_PER_BUCKET; s++) {
-                    int idx = flatIndex(tableId, bucket, s);
-                    if (stateMeta[idx] != ACTIVE) {
-                        continue;
-                    }
-                    long key = chunkIdMeta[idx];
-                    int otherBucket = (other == 0) ? bucketA(key) : bucketB(key);
-                    int visitId = other * numBuckets + otherBucket;
-                    if (!visited.get(visitId)) {
-                        visited.set(visitId);
-                        nodes.add(new int[]{other, otherBucket, head, s, node[4] + 1});
-                    }
-                }
-                // bounded work under the write lock: a nearly full table reports TableFull instead of exploring every bucket
-                if (nodes.size() >= MAX_SEARCH_NODES) {
-                    return null;
-                }
-            }
-            return null;
-        } finally {
-            for (int[] n : nodes) visited.clear(n[0] * numBuckets + n[1]);   // leave the scratch set empty for the next insert
-        }
-    }
-
-    /** Upper bound of buckets visited by one eviction search. */
-    private static final int MAX_SEARCH_NODES = 4096;
-    private BitSet visitedScratch;
-
-    private BitSet visitedScratch() {
-        if (visitedScratch == null) visitedScratch = new BitSet(2 * numBuckets);
-        return visitedScratch;
-    }
-
-    private int[] buildPath(List<int[]> nodes, int endNode, int freeSlot) {
-        int[] end = nodes.get(endNode);
-        int depth = end[4];
-        int[] path = new int[depth + 1];
-        path[depth] = flatIndex(end[0], end[1], freeSlot);
-        int cur = endNode;
-        for (int i = depth - 1; i >= 0; i--) {
-            int[] child = nodes.get(cur);
-            int[] parent = nodes.get(child[2]);
-            path[i] = flatIndex(parent[0], parent[1], child[3]);
-            cur = child[2];
-        }
-        return path;
-    }
 
     // ─── Private helpers ─────────────────────────────────────────────────────
 
