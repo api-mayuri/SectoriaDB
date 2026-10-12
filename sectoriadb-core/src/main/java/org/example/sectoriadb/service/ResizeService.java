@@ -1,13 +1,13 @@
 package org.example.sectoriadb.service;
 
 import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.format.BlobLayout;
-import org.example.sectoriadb.model.BlobFile;
+import org.example.sectoriadb.engine.format.BlobLayout;
+import org.example.sectoriadb.engine.io.BlobFile;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.repository.BlobFileRepository;
 import org.example.sectoriadb.repository.PoolRepository;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
-import org.example.sectoriadb.tools.XxHash64BytesHasher;
+import org.example.sectoriadb.engine.blob.CuckooHashTable;
+import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;

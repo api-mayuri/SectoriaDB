@@ -7,7 +7,7 @@ import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PlacedChunk;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.ChunkRepository;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
+import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

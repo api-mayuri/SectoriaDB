@@ -17,7 +17,7 @@ import org.example.sectoriadb.service.ResidentHandle;
 import org.example.sectoriadb.service.SmallBlobCache;
 import org.example.sectoriadb.service.UploadGate;
 import org.example.sectoriadb.service.gc.GcReports.CompactionReport;
-import org.example.sectoriadb.service.impl.SmallObjectBlob;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;

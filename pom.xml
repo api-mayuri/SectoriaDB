@@ -21,6 +21,7 @@
 
     <modules>
         <module>sectoriadb-metastore</module>
+        <module>sectoriadb-engine</module>
         <module>sectoriadb-core</module>
         <module>sectoriadb-server</module>
     </modules>
@@ -40,6 +41,18 @@
             <dependency>
                 <groupId>org.example</groupId>
                 <artifactId>sectoriadb-metastore</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.example</groupId>
+                <artifactId>sectoriadb-engine</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.example</groupId>
+                <artifactId>sectoriadb-engine</artifactId>
                 <version>${project.version}</version>
                 <type>test-jar</type>
                 <scope>test</scope>

@@ -8,7 +8,7 @@ import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.GcRepository;
 import org.example.sectoriadb.service.gc.GcReports.CompactionReport;
 import org.example.sectoriadb.service.gc.GcReports.Options;
-import org.example.sectoriadb.service.impl.SmallObjectBlob;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

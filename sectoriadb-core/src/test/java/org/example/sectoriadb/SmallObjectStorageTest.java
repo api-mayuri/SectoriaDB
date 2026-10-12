@@ -7,12 +7,9 @@ import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.model.StorageKind;
-import org.example.sectoriadb.repository.*;
-import org.example.sectoriadb.service.*;
-import org.example.sectoriadb.service.impl.SmallObjectCorruptedException;
+import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
-import org.example.sectoriadb.repository.metastore.*;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,6 +22,23 @@ import java.util.Arrays;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.*;
+import org.example.sectoriadb.repository.BlobFileRepository;
+import org.example.sectoriadb.repository.JsonOperationLogRepository;
+import org.example.sectoriadb.repository.ManifestRepository;
+import org.example.sectoriadb.repository.PoolRepository;
+import org.example.sectoriadb.repository.metastore.BlobCodec;
+import org.example.sectoriadb.repository.metastore.ManifestCodec;
+import org.example.sectoriadb.repository.metastore.MetaStoreBlobFileRepository;
+import org.example.sectoriadb.repository.metastore.MetaStoreChunkRepository;
+import org.example.sectoriadb.repository.metastore.MetaStoreManifestRepository;
+import org.example.sectoriadb.repository.metastore.MetaStorePoolRepository;
+import org.example.sectoriadb.repository.metastore.MetaStoreProvider;
+import org.example.sectoriadb.service.BlobService;
+import org.example.sectoriadb.service.ChunkStore;
+import org.example.sectoriadb.service.FileStorageService;
+import org.example.sectoriadb.service.HashTableCache;
+import org.example.sectoriadb.service.OperationLogService;
+import org.example.sectoriadb.service.SmallBlobCache;
 
 /** FileStorageService routing: empty / small (whole record) / chunked, and all read paths for each kind. */
 class SmallObjectStorageTest {

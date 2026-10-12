@@ -11,7 +11,7 @@ import org.example.sectoriadb.repository.OperationLogRepository;
 import org.example.sectoriadb.service.BlobService;
 import org.example.sectoriadb.service.HashTableCache;
 import org.example.sectoriadb.service.PoolService;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
+import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;

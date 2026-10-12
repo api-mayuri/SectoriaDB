@@ -7,7 +7,7 @@ import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.metrics.StorageMetricsEngineListener;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobKind;
-import org.example.sectoriadb.service.impl.SmallObjectBlob;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 

@@ -4,12 +4,12 @@ import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.repository.ChunkRepository;
 import org.example.sectoriadb.service.BlobService;
-import org.example.sectoriadb.service.impl.SmallObjectBlob;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 
 import java.io.IOException;
 import java.util.List;
 import org.example.sectoriadb.model.ManifestEntity;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
+import org.example.sectoriadb.engine.blob.CuckooHashTable;
 
 /** Formatting helpers shared across shell command classes. */
 class ShellTable {

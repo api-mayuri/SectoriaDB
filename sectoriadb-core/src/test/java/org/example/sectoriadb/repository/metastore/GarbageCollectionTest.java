@@ -11,9 +11,9 @@ import org.example.sectoriadb.service.gc.GcReports;
 import org.example.sectoriadb.service.gc.GcReports.Options;
 import org.example.sectoriadb.service.gc.GcReports.RunReport;
 import org.example.sectoriadb.service.gc.GcReports.SweepReport;
-import org.example.sectoriadb.service.impl.ChunkNotFoundException;
-import org.example.sectoriadb.service.impl.SmallObjectCorruptedException;
-import org.example.sectoriadb.service.impl.TableFullException;
+import org.example.sectoriadb.service.ChunkNotFoundException;
+import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
+import org.example.sectoriadb.engine.error.TableFullException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -167,7 +167,7 @@ class GarbageCollectionTest {
                 put("o" + i, content(8, 100 + i));
                 keys.add("o" + i);
             }
-        } catch (TableFullException | org.example.sectoriadb.service.impl.ChunkCorruptedException e) {
+        } catch (TableFullException | org.example.sectoriadb.engine.error.ChunkCorruptedException e) {
             // the pool is full
         } catch (Exception e) {
             assertTrue(e instanceof TableFullException || e.getCause() instanceof TableFullException, "unexpected: " + e);

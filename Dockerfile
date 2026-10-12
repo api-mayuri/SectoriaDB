@@ -6,12 +6,14 @@ WORKDIR /build
 # Download dependencies first (cacheable layer); sibling modules are not built yet, so skip org.example
 COPY pom.xml .
 COPY sectoriadb-metastore/pom.xml sectoriadb-metastore/
+COPY sectoriadb-engine/pom.xml sectoriadb-engine/
 COPY sectoriadb-core/pom.xml sectoriadb-core/
 COPY sectoriadb-server/pom.xml sectoriadb-server/
 RUN mvn -B dependency:go-offline -q -DexcludeGroupIds=org.example
 
 # Build the jar
 COPY sectoriadb-metastore/src/ sectoriadb-metastore/src/
+COPY sectoriadb-engine/src/ sectoriadb-engine/src/
 COPY sectoriadb-core/src/ sectoriadb-core/src/
 COPY sectoriadb-server/src/ sectoriadb-server/src/
 RUN mvn -B package -DskipTests -q

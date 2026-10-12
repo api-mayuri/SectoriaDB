@@ -1,12 +1,12 @@
 package org.example.sectoriadb.repository.metastore;
 
-import org.example.sectoriadb.CrashSimulation;
+import org.example.sectoriadb.engine.io.CrashSimulation;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.service.FileStorageService;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
+import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

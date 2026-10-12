@@ -17,6 +17,10 @@
     <dependencies>
         <dependency>
             <groupId>org.example</groupId>
+            <artifactId>sectoriadb-engine</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.example</groupId>
             <artifactId>sectoriadb-metastore</artifactId>
         </dependency>
 
@@ -37,6 +41,12 @@
         </dependency>
 
         <!-- Test -->
+        <dependency>
+            <groupId>org.example</groupId>
+            <artifactId>sectoriadb-engine</artifactId>
+            <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>

@@ -1,15 +1,15 @@
 package org.example.sectoriadb.service;
 
 import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.format.BlobLayout;
-import org.example.sectoriadb.model.BlobFile;
+import org.example.sectoriadb.engine.format.BlobLayout;
+import org.example.sectoriadb.engine.io.BlobFile;
 import org.example.sectoriadb.model.BlobFileEntity;
-import org.example.sectoriadb.placement.RendezvousPlacement;
+import org.example.sectoriadb.engine.placement.RendezvousPlacement;
 import org.example.sectoriadb.model.BlobKind;
-import org.example.sectoriadb.service.impl.SmallObjectBlob;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.BlobFileRepository;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
+import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -111,7 +111,7 @@ public class BlobService {
         entity.setFilePath(filePath.toString());
         entity.setNumBuckets(0);
         entity.setChunkSize(0);
-        entity.setTotalBytes(org.example.sectoriadb.format.SmallBlobLayout.HEADER_SIZE);
+        entity.setTotalBytes(org.example.sectoriadb.engine.format.SmallBlobLayout.HEADER_SIZE);
         entity.setCreatedAt(Instant.now());
         if (sealed) {   // opened (and sealed) from the file before the registry knows it; a sealed blob is never evicted
             try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(entity)) {

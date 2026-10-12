@@ -4,11 +4,11 @@ import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.engine.metrics.EngineListener;
 import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.metrics.StorageMetricsEngineListener;
-import org.example.sectoriadb.model.BlobFile;
+import org.example.sectoriadb.engine.io.BlobFile;
 import org.example.sectoriadb.model.BlobFileEntity;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
-import org.example.sectoriadb.service.impl.FileChannelStorageIOEngine;
-import org.example.sectoriadb.tools.XxHash64BytesHasher;
+import org.example.sectoriadb.engine.blob.CuckooHashTable;
+import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
+import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +19,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+import org.example.sectoriadb.engine.io.StorageIOEngine;
 
 /**
  * Cache of live CuckooHashTable instances keyed by blob file id, with reference-counted handles and LRU eviction.
