@@ -12,7 +12,7 @@ import org.example.sectoriadb.engine.placement.RendezvousPlacement.Candidate;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.engine.error.ChunkCorruptedException;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
-import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
+import org.example.sectoriadb.engine.io.PositionalIo;
 import org.example.sectoriadb.engine.error.KeyCollisionException;
 import org.example.sectoriadb.engine.error.TableFullException;
 import org.example.sectoriadb.engine.hash.BytesHasher;
@@ -199,7 +199,7 @@ public class ChunkStore {
                     int len = (int) Math.min(chunkSize, size - offset);
                     byte[] b = new byte[len];
                     try {
-                        FileChannelStorageIOEngine.readFully(fc::read, ByteBuffer.wrap(b), offset);
+                        PositionalIo.readFully(fc::read, ByteBuffer.wrap(b), offset);
                     } catch (IOException e) {
                         throw new IOException("Source file shrank while being read: " + file
                                 + " (expected " + size + " bytes, failed at offset " + offset + ")", e);

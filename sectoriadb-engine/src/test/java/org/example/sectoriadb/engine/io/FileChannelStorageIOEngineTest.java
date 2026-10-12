@@ -21,7 +21,7 @@ class FileChannelStorageIOEngineTest {
         byte[] src = new byte[100];
         new Random(1).nextBytes(src);
         ByteBuffer dst = ByteBuffer.allocate(100);
-        FileChannelStorageIOEngine.readFully((buf, pos) -> {
+        PositionalIo.readFully((buf, pos) -> {
             int n = Math.min(3, buf.remaining());
             buf.put(src, (int) pos, n);
             return n;
@@ -32,7 +32,7 @@ class FileChannelStorageIOEngineTest {
     @Test
     void readFully_throwsOnEofBeforeBufferIsFull() {
         ByteBuffer dst = ByteBuffer.allocate(10);
-        assertThrows(IOException.class, () -> FileChannelStorageIOEngine.readFully((buf, pos) -> {
+        assertThrows(IOException.class, () -> PositionalIo.readFully((buf, pos) -> {
             if (pos >= 4) return -1;
             buf.put((byte) 1);
             return 1;
@@ -44,7 +44,7 @@ class FileChannelStorageIOEngineTest {
         byte[] src = new byte[50];
         new Random(2).nextBytes(src);
         byte[] out = new byte[50];
-        FileChannelStorageIOEngine.writeFully((buf, pos) -> {
+        PositionalIo.writeFully((buf, pos) -> {
             int n = Math.min(7, buf.remaining());
             buf.get(out, (int) pos, n);
             return n;

@@ -22,7 +22,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import static org.example.sectoriadb.engine.format.SmallBlobLayout.*;
 import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
-import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
+import org.example.sectoriadb.engine.io.PositionalIo;
 
 /**
  * An append-only, log-structured file holding whole small objects (see {@link SmallBlobLayout} for the format and
@@ -120,7 +120,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         }
         try (FileChannel fc = FileChannel.open(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
             ByteBuffer header = encodeHeader(System.currentTimeMillis());
-            FileChannelStorageIOEngine.writeFully(fc::write, header, 0);
+            PositionalIo.writeFully(fc::write, header, 0);
             fc.force(true);
         }
         org.example.sectoriadb.engine.format.BlobLayout.syncDirectory(path);
@@ -712,7 +712,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         int start = src.position();
         onChannel(ch -> {
             src.position(start);
-            FileChannelStorageIOEngine.writeFully(ch::write, src, position);
+            PositionalIo.writeFully(ch::write, src, position);
             return null;
         });
     }
