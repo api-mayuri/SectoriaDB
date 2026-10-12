@@ -13,9 +13,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
-import java.util.UUID;
 import org.example.sectoriadb.s3.error.S3Exception;
-import org.example.sectoriadb.s3.http.S3Support;
+import org.example.sectoriadb.s3.http.S3Request;
 
 /**
  * S3 ACL and configuration endpoints:
@@ -63,7 +62,6 @@ public class S3AclController {
         aclService.applyBucketAcl(request, body, pool);
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .build();
     }
 
@@ -79,7 +77,6 @@ public class S3AclController {
         String xml = aclService.aclXml(acl);
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .body(xml);
     }
 
@@ -94,7 +91,7 @@ public class S3AclController {
             throw S3Exception.noSuchBucket(bucket);
         }
 
-        String key = S3Support.extractKey(request, bucket);
+        String key = S3Request.extractKey(request, bucket);
         byte[] body = RequestBodies.readLimited(request, RequestBodies.MAX_ACL_BYTES, HttpStatus.BAD_REQUEST,
                 "MalformedACLError", "The ACL document is too large");
         // one transaction reads the current version, applies the ACL and writes it back: a concurrent PUT of the key
@@ -103,7 +100,6 @@ public class S3AclController {
                 .orElseThrow(() -> S3Exception.noSuchKey(bucket, key));
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .build();
     }
 
@@ -117,7 +113,7 @@ public class S3AclController {
             throw S3Exception.noSuchBucket(bucket);
         }
 
-        String key = S3Support.extractKey(request, bucket);
+        String key = S3Request.extractKey(request, bucket);
         ManifestEntity manifest = manifestRepo.findCurrent(bucket, key)
                 .orElseThrow(() -> S3Exception.noSuchKey(bucket, key));
 
@@ -125,7 +121,6 @@ public class S3AclController {
         String xml = aclService.aclXml(acl);
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .body(xml);
     }
 
@@ -146,7 +141,6 @@ public class S3AclController {
         }
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .body(pool.getPolicy());
     }
 
@@ -181,7 +175,6 @@ public class S3AclController {
         poolService.setPolicy(bucket, policyJson);
 
         return ResponseEntity.status(HttpStatus.NO_CONTENT)
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .build();
     }
 
@@ -194,7 +187,6 @@ public class S3AclController {
         poolService.deletePolicy(bucket);
 
         return ResponseEntity.status(HttpStatus.NO_CONTENT)
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .build();
     }
 
@@ -219,7 +211,6 @@ public class S3AclController {
         }
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .body(locationXml);
     }
 
@@ -236,7 +227,6 @@ public class S3AclController {
                 "<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>";
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .body(versioningXml);
     }
 
@@ -317,7 +307,7 @@ public class S3AclController {
             throw S3Exception.noSuchBucket(bucket);
         }
 
-        String key = S3Support.extractKey(request, bucket);
+        String key = S3Request.extractKey(request, bucket);
         if (!manifestRepo.existsCurrent(bucket, key)) {
             throw S3Exception.noSuchKey(bucket, key);
         }
@@ -329,7 +319,6 @@ public class S3AclController {
                 "</Tagging>";
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .body(taggingXml);
     }
 
@@ -342,7 +331,7 @@ public class S3AclController {
             throw S3Exception.noSuchBucket(bucket);
         }
 
-        String key = S3Support.extractKey(request, bucket);
+        String key = S3Request.extractKey(request, bucket);
         if (!manifestRepo.existsCurrent(bucket, key)) {
             throw S3Exception.noSuchKey(bucket, key);
         }
@@ -361,13 +350,12 @@ public class S3AclController {
             throw S3Exception.noSuchBucket(bucket);
         }
 
-        String key = S3Support.extractKey(request, bucket);
+        String key = S3Request.extractKey(request, bucket);
         if (!manifestRepo.existsCurrent(bucket, key)) {
             throw S3Exception.noSuchKey(bucket, key);
         }
 
         return ResponseEntity.status(HttpStatus.NO_CONTENT)
-                .header("x-amz-request-id", UUID.randomUUID().toString())
                 .build();
     }
 }

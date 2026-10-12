@@ -21,8 +21,10 @@ import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
 import org.example.sectoriadb.s3.error.S3Exception;
-import org.example.sectoriadb.s3.http.S3Support;
 import org.example.sectoriadb.s3.xml.XmlSupport;
+import org.example.sectoriadb.s3.http.HttpDates;
+import org.example.sectoriadb.s3.http.S3Request;
+import org.example.sectoriadb.s3.http.UrlCodec;
 
 /**
  * S3 bucket-level operations:
@@ -57,7 +59,7 @@ public class S3BucketController {
     public ResponseEntity<Void> createBucket(@PathVariable String bucket,
                                              HttpServletRequest request) throws IOException {
         // PUT /bucket?<subresource> that no other handler claimed must not silently become CreateBucket
-        S3Support.requireOnlyQueryParams(request, "x-id");
+        S3Request.requireOnlyQueryParams(request, "x-id");
         // Validate bucket name before attempting to create
         lookup.validateBucketName(bucket);
 
@@ -66,9 +68,7 @@ public class S3BucketController {
         PoolEntity pool = poolService.createBucket(bucket);
         accessControl.applyBucketAcl(request, new byte[0], pool);
         return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
                 .header("Location", "/" + bucket)
-                .header("Server", "SectoriaDB")
                 .build();
     }
 
@@ -80,8 +80,6 @@ public class S3BucketController {
         lookup.requireBucket(bucket);
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
-                .header("Server", "SectoriaDB")
                 .build();
     }
 
@@ -90,7 +88,7 @@ public class S3BucketController {
     @DeleteMapping({"/{bucket}", "/{bucket}/"})
     public ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) throws java.io.IOException {
         // DELETE /bucket?tagging|lifecycle|cors|... that no sub-resource handler claimed must NOT delete the bucket
-        S3Support.requireOnlyQueryParams(request, "x-id");
+        S3Request.requireOnlyQueryParams(request, "x-id");
         lookup.requireBucket(bucket);
         try {
             poolService.deleteBucket(bucket);
@@ -104,8 +102,6 @@ public class S3BucketController {
         }
 
         return ResponseEntity.noContent()
-                .header("x-amz-request-id", S3Support.requestId())
-                .header("Server", "SectoriaDB")
                 .build();
     }
 
@@ -133,13 +129,12 @@ public class S3BucketController {
         for (String key : keys) {
             catalog.deleteObject(bucket, key);   // one transaction per key
             if (!del.quiet()) {
-                result.append("<Deleted><Key>").append(S3Support.xmlEscape(key)).append("</Key></Deleted>");
+                result.append("<Deleted><Key>").append(XmlSupport.escape(key)).append("</Key></Deleted>");
             }
         }
         result.append("</DeleteResult>");
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
                 .body(result.toString());
     }
 
@@ -197,34 +192,32 @@ public class S3BucketController {
 
         StringBuilder xml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                 .append("<ListVersionsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">")
-                .append("<Name>").append(S3Support.xmlEscape(bucket)).append("</Name>")
-                .append("<Prefix>").append(S3Support.xmlEscape(prefix)).append("</Prefix>")
-                .append("<KeyMarker>").append(S3Support.xmlEscape(keyMarker)).append("</KeyMarker>")
-                .append("<VersionIdMarker>").append(S3Support.xmlEscape(versionIdMarker)).append("</VersionIdMarker>");
+                .append("<Name>").append(XmlSupport.escape(bucket)).append("</Name>")
+                .append("<Prefix>").append(XmlSupport.escape(prefix)).append("</Prefix>")
+                .append("<KeyMarker>").append(XmlSupport.escape(keyMarker)).append("</KeyMarker>")
+                .append("<VersionIdMarker>").append(XmlSupport.escape(versionIdMarker)).append("</VersionIdMarker>");
         if (page.truncated() && page.nextMarker() != null) {
-            xml.append("<NextKeyMarker>").append(S3Support.xmlEscape(page.nextMarker())).append("</NextKeyMarker>")
+            xml.append("<NextKeyMarker>").append(XmlSupport.escape(page.nextMarker())).append("</NextKeyMarker>")
                .append("<NextVersionIdMarker>null</NextVersionIdMarker>");
         }
         xml.append("<MaxKeys>").append(maxKeys).append("</MaxKeys>");
         if (delimiter != null && !delimiter.isEmpty()) {
-            xml.append("<Delimiter>").append(S3Support.xmlEscape(delimiter)).append("</Delimiter>");
+            xml.append("<Delimiter>").append(XmlSupport.escape(delimiter)).append("</Delimiter>");
         }
         xml.append("<IsTruncated>").append(page.truncated()).append("</IsTruncated>");
         for (ManifestRepository.ObjectSummary o : page.objects()) {
-            xml.append("<Version><Key>").append(S3Support.xmlEscape(o.key())).append("</Key>")
+            xml.append("<Version><Key>").append(XmlSupport.escape(o.key())).append("</Key>")
                .append("<VersionId>null</VersionId><IsLatest>true</IsLatest>")
-               .append("<LastModified>").append(S3Support.isoDate(o.lastModified())).append("</LastModified>")
-               .append("<ETag>").append(S3Support.xmlEscape(o.etag() != null ? o.etag() : "\"\"")).append("</ETag>")
+               .append("<LastModified>").append(HttpDates.isoDate(o.lastModified())).append("</LastModified>")
+               .append("<ETag>").append(XmlSupport.escape(o.etag() != null ? o.etag() : "\"\"")).append("</ETag>")
                .append("<Size>").append(o.size()).append("</Size>")
                .append("<StorageClass>STANDARD</StorageClass></Version>");
         }
         for (String cp : page.commonPrefixes()) {
-            xml.append("<CommonPrefixes><Prefix>").append(S3Support.xmlEscape(cp)).append("</Prefix></CommonPrefixes>");
+            xml.append("<CommonPrefixes><Prefix>").append(XmlSupport.escape(cp)).append("</Prefix></CommonPrefixes>");
         }
         xml.append("</ListVersionsResult>");
         return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
-                .header("Server", "SectoriaDB")
                 .body(xml.toString());
     }
 
@@ -244,7 +237,7 @@ public class S3BucketController {
             @RequestParam(value = "fetch-owner",        defaultValue = "false") boolean fetchOwner,
             HttpServletRequest request) {
 
-        S3Support.rejectUnsupportedBucketSubresource(request);
+        S3Request.rejectUnsupportedBucketSubresource(request);
 
         // Ensure bucket exists; throws NoSuchBucket if not
         lookup.requireBucket(bucket);
@@ -287,7 +280,7 @@ public class S3BucketController {
         // Build response
         ListBucketResult result = new ListBucketResult();
         final boolean enc = urlEncode;
-        java.util.function.UnaryOperator<String> e = v -> enc ? S3Support.urlEncodeKey(v) : v;
+        java.util.function.UnaryOperator<String> e = v -> enc ? UrlCodec.urlEncodeKey(v) : v;
         result.setName(bucket);
         result.setPrefix(e.apply(prefix));
         if (enc) result.setEncodingType("url");
@@ -301,7 +294,7 @@ public class S3BucketController {
                 .map(o -> {
                     S3ObjectEntry entry = new S3ObjectEntry(
                             e.apply(o.key()),
-                            S3Support.isoDate(o.lastModified()),
+                            HttpDates.isoDate(o.lastModified()),
                             o.etag() != null ? o.etag() : "\"\"",
                             o.size());
                     // V1 always lists the owner, V2 only with fetch-owner=true
@@ -340,8 +333,6 @@ public class S3BucketController {
         }
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
-                .header("Server", "SectoriaDB")
                 .body(result);
     }
 }

@@ -6,7 +6,6 @@ import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.s3.error.S3Exception;
-import org.example.sectoriadb.s3.http.S3Support;
 import org.example.sectoriadb.storage.PoolService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +17,7 @@ import javax.xml.parsers.DocumentBuilder;
 import org.example.sectoriadb.s3.xml.XmlSupport;
 import java.io.ByteArrayInputStream;
 import java.util.Set;
+import org.example.sectoriadb.s3.http.UrlCodec;
 
 /**
  * ACL and access control service for S3 buckets and objects.
@@ -318,7 +318,7 @@ public class AccessControlService {
         if (queryString == null || queryString.isEmpty()) return false;
         for (String pair : queryString.split("&")) {
             int eq = pair.indexOf('=');
-            String name = S3Support.percentDecode(eq < 0 ? pair : pair.substring(0, eq));
+            String name = UrlCodec.percentDecode(eq < 0 ? pair : pair.substring(0, eq));
             if (PRIVATE_SUBRESOURCES.contains(name)) return true;
         }
         return false;
@@ -339,7 +339,7 @@ public class AccessControlService {
     private String extractKeyFromUri(String uri, String bucket) {
         String prefix = "/" + bucket + "/";
         if (uri.startsWith(prefix)) {
-            return S3Support.percentDecode(uri.substring(prefix.length()));
+            return UrlCodec.percentDecode(uri.substring(prefix.length()));
         }
         return null;
     }

@@ -10,7 +10,7 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.util.List;
-import org.example.sectoriadb.s3.http.S3Support;
+import org.example.sectoriadb.s3.http.HttpDates;
 
 /**
  * S3 service-level operations.
@@ -31,12 +31,10 @@ public class S3RootController {
     @GetMapping(value = "/", produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<ListAllMyBucketsResult> listBuckets() {
         List<BucketEntry> buckets = poolService.listAll().stream()
-                .map(p -> new BucketEntry(p.getName(), S3Support.isoDate(p.getCreatedAt())))
+                .map(p -> new BucketEntry(p.getName(), HttpDates.isoDate(p.getCreatedAt())))
                 .toList();
 
         return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
-                .header("Server", "SectoriaDB")
                 .body(new ListAllMyBucketsResult(OWNER, buckets));
     }
 }

@@ -9,7 +9,6 @@ import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import org.example.sectoriadb.security.CredentialEntity;
 import org.example.sectoriadb.observability.ObservabilityAttributes;
-import org.example.sectoriadb.s3.http.S3Support;
 import org.example.sectoriadb.s3.access.AccessControlService;
 import org.example.sectoriadb.security.CredentialService;
 import org.slf4j.Logger;
@@ -31,6 +30,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 import org.example.sectoriadb.observability.AuthFailure;
+import org.example.sectoriadb.observability.RequestIds;
+import org.example.sectoriadb.s3.http.S3Request;
+import org.example.sectoriadb.s3.http.UrlCodec;
+import org.example.sectoriadb.s3.xml.XmlSupport;
 
 /**
  * Validates AWS Signature Version 4 on every S3 API request.
@@ -102,7 +105,7 @@ public class SigV4Filter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
         if (!authEnabled) {
-            request.setAttribute(S3Support.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
+            request.setAttribute(S3Request.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
             chain.doFilter(request, response);
             return;
         }
@@ -110,7 +113,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         // No credentials configured: deny by default (S4). Open setup mode is an explicit opt-in.
         if (credentialService.listAll().isEmpty()) {
             if (allowOpenSetup) {
-                request.setAttribute(S3Support.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
+                request.setAttribute(S3Request.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
                 chain.doFilter(request, response);
                 return;
             }
@@ -138,7 +141,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         if (presigned) {
             String key = verifyPresigned(request, response);
             if (key == null) return;
-            request.setAttribute(S3Support.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
+            request.setAttribute(S3Request.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
             proceed(request, response, chain, key);
             return;
         }
@@ -167,7 +170,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             return;
         }
 
-        request.setAttribute(S3Support.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
+        request.setAttribute(S3Request.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
         proceed(verified, response, chain, (String) request.getAttribute(ACCESS_KEY_ATTRIBUTE));
     }
 
@@ -203,7 +206,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         if (queryString == null || queryString.isEmpty()) return false;
         for (String pair : queryString.split("&")) {
             int eq = pair.indexOf('=');
-            if (S3Support.decodeQueryComponent(eq < 0 ? pair : pair.substring(0, eq)).equals(name)) return true;
+            if (UrlCodec.decodeQueryComponent(eq < 0 ? pair : pair.substring(0, eq)).equals(name)) return true;
         }
         return false;
     }
@@ -486,8 +489,8 @@ public class SigV4Filter extends OncePerRequestFilter {
                 String key;
                 String val;
                 try {
-                    key = S3Support.decodeQueryComponent(pair.substring(0, eq));
-                    val = S3Support.decodeQueryComponent(pair.substring(eq + 1));
+                    key = UrlCodec.decodeQueryComponent(pair.substring(0, eq));
+                    val = UrlCodec.decodeQueryComponent(pair.substring(eq + 1));
                 } catch (IllegalArgumentException e) {
                     throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "The query string is malformed.");
                 }
@@ -627,12 +630,12 @@ public class SigV4Filter extends OncePerRequestFilter {
                            String code, String message) throws IOException {
         response.setStatus(status);
         response.setContentType("application/xml;charset=UTF-8");
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         ObservabilityAttributes.noteErrorCode(request, code);
         try (PrintWriter w = response.getWriter()) {
             w.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
             w.write("<Error><Code>" + code + "</Code>");
-            w.write("<Message>" + S3Support.xmlEscape(message) + "</Message>");
+            w.write("<Message>" + XmlSupport.escape(message) + "</Message>");
             w.write("<RequestId>" + requestId + "</RequestId>");
             w.write("</Error>");
         }

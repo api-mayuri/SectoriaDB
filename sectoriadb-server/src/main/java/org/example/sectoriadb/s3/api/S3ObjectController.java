@@ -42,7 +42,10 @@ import java.util.Map;
 import org.example.sectoriadb.s3.error.S3Exception;
 import org.example.sectoriadb.s3.http.ResponseAbortedException;
 import org.example.sectoriadb.s3.http.S3Checksums;
-import org.example.sectoriadb.s3.http.S3Support;
+import org.example.sectoriadb.s3.http.HttpDates;
+import org.example.sectoriadb.s3.http.S3Request;
+import org.example.sectoriadb.s3.http.UrlCodec;
+import org.example.sectoriadb.s3.xml.XmlSupport;
 
 /**
  * S3 object-level operations:
@@ -95,13 +98,13 @@ public class S3ObjectController {
             @RequestHeader(value = "x-amz-acl", required = false) String acl,
             HttpServletRequest request) throws IOException {
 
-        String objectKey = S3Support.extractKey(request, bucket);
+        String objectKey = S3Request.extractKey(request, bucket);
         lookup.validateObjectKey(objectKey);
         // UploadPart (partNumber + uploadId) and the sub-resource writes (?retention, ?legal-hold, ...) have their own
         // handlers; a request that reaches PutObject with any of those parameters must not overwrite the object
-        S3Support.requireOnlyQueryParams(request, "x-id");
+        S3Request.requireOnlyQueryParams(request, "x-id");
         bodies.requireAcceptableUpload(request);
-        ManifestRepository.CommitPrecondition precondition = S3Support.writePrecondition(request);
+        ManifestRepository.CommitPrecondition precondition = S3Request.writePrecondition(request);
         accessControl.resolveAcl(request, new byte[0]);   // reject a bad ACL before the body is read
 
         // Verify bucket exists; throws NoSuchBucket if not
@@ -131,9 +134,7 @@ public class S3ObjectController {
             }
 
             var ok = ResponseEntity.ok()
-                    .header("ETag", entity.getEtag() != null ? entity.getEtag() : "\"\"")
-                    .header("x-amz-request-id", S3Support.requestId())
-                    .header("Server", "SectoriaDB");
+                    .header("ETag", entity.getEtag() != null ? entity.getEtag() : "\"\"");
             S3Checksums.addClientHeaders(entity, ok::header);
             return ok.build();
         }
@@ -164,22 +165,20 @@ public class S3ObjectController {
             HttpServletRequest request,
             HttpServletResponse response) throws IOException {
 
-        S3Support.rejectUnsupportedObjectSubresource(request);
+        S3Request.rejectUnsupportedObjectSubresource(request);
         // Overriding response headers (content-type, disposition, ...) would let an anonymous caller turn a public object
         // into text/html on the API origin: AWS refuses them for unsigned requests
         if ((respContentType != null || respContentDisposition != null || respCacheControl != null
                 || respContentEncoding != null || respContentLanguage != null || respExpires != null)
-                && !Boolean.TRUE.equals(request.getAttribute(S3Support.AUTHENTICATED_ATTRIBUTE))) {
+                && !Boolean.TRUE.equals(request.getAttribute(S3Request.AUTHENTICATED_ATTRIBUTE))) {
             throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidRequest",
                     "Request specific response headers cannot be used for anonymous GET requests.");
         }
-        String objectKey = S3Support.extractKey(request, bucket);
+        String objectKey = S3Request.extractKey(request, bucket);
         ManifestEntity entity = lookup.requireObject(bucket, objectKey);
 
         String etag = entity.getEtag() != null ? entity.getEtag() : "\"\"";
         checkPartNumber(partNumber, etag);
-        response.setHeader("x-amz-request-id", S3Support.requestId());
-        response.setHeader("Server", "SectoriaDB");
 
         if ((ifNoneMatch != null && ifNoneMatch.equals(etag)) || notModifiedSince(ifModifiedSince, entity)) {
             response.setHeader("ETag", etag);
@@ -332,17 +331,15 @@ public class S3ObjectController {
             @RequestParam(value = "partNumber", required = false) Integer partNumber,
             HttpServletRequest request) {
 
-        String objectKey = S3Support.extractKey(request, bucket);
+        String objectKey = S3Request.extractKey(request, bucket);
         ManifestEntity entity = lookup.requireObject(bucket, objectKey);
 
         String etag = entity.getEtag() != null ? entity.getEtag() : "\"\"";
         checkPartNumber(partNumber, etag);
-        String reqId = S3Support.requestId();
 
         // Handle conditional requests
         if (ifNoneMatch != null && ifNoneMatch.equals(etag)) {
             return ResponseEntity.status(HttpStatus.NOT_MODIFIED)
-                    .header("x-amz-request-id", reqId)
                     .build();
         }
         if (ifMatch != null && !ifMatch.equals(etag)) {
@@ -374,9 +371,6 @@ public class S3ObjectController {
         addUserMetadata(resp, entity);
         if (S3Checksums.modeEnabled(request)) S3Checksums.addObjectHeaders(entity, resp::header);
 
-        resp.header("x-amz-request-id", reqId)
-            .header("Server", "SectoriaDB");
-
         return resp.build();
     }
 
@@ -387,13 +381,11 @@ public class S3ObjectController {
             @PathVariable String bucket,
             HttpServletRequest request) {
 
-        S3Support.requireOnlyQueryParams(request, "x-id", "versionId");
-        String objectKey = S3Support.extractKey(request, bucket);
+        S3Request.requireOnlyQueryParams(request, "x-id", "versionId");
+        String objectKey = S3Request.extractKey(request, bucket);
         catalog.deleteObject(bucket, objectKey);   // idempotent: deleting a missing key is a 204 as in S3
 
         return ResponseEntity.noContent()
-                .header("x-amz-request-id", S3Support.requestId())
-                .header("Server", "SectoriaDB")
                 .build();
     }
 
@@ -411,13 +403,13 @@ public class S3ObjectController {
             @RequestHeader(value = "Content-Language", required = false) String contentLanguage,
             HttpServletRequest request) throws IOException {
 
-        S3Support.rejectCopySourceConditions(request);
+        S3Request.rejectCopySourceConditions(request);
         if (!"COPY".equalsIgnoreCase(metadataDirective) && !"REPLACE".equalsIgnoreCase(metadataDirective)) {
             throw S3Exception.invalidArgument("Unknown metadata directive.");
         }
         // x-amz-checksum-algorithm on a copy picks the destination's algorithm; otherwise the source's is kept
         ChecksumAlgorithm requestedAlg = S3Checksums.declaredAlgorithm(request);
-        String destKey = S3Support.extractKey(request, bucket);
+        String destKey = S3Request.extractKey(request, bucket);
         lookup.validateObjectKey(destKey);
 
         // Verify destination bucket exists
@@ -439,7 +431,7 @@ public class S3ObjectController {
         }
 
         String sourceBucket = sourceSpec.substring(0, slashIdx);
-        String sourceKey = S3Support.percentDecode(sourceSpec.substring(slashIdx + 1));
+        String sourceKey = UrlCodec.percentDecode(sourceSpec.substring(slashIdx + 1));
 
         // Validate: can't copy to self without REPLACE
         if (sourceBucket.equals(bucket) && sourceKey.equals(destKey) && !"REPLACE".equalsIgnoreCase(metadataDirective)) {
@@ -490,13 +482,11 @@ public class S3ObjectController {
 
             String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
                     + "<CopyObjectResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">"
-                    + "<LastModified>" + S3Support.isoDate(entity.getCreatedAt()) + "</LastModified>"
-                    + "<ETag>" + S3Support.xmlEscape(entity.getEtag()) + "</ETag>"
+                    + "<LastModified>" + HttpDates.isoDate(entity.getCreatedAt()) + "</LastModified>"
+                    + "<ETag>" + XmlSupport.escape(entity.getEtag()) + "</ETag>"
                     + "</CopyObjectResult>";
             return ResponseEntity.ok()
                     .contentType(MediaType.APPLICATION_XML)
-                    .header("x-amz-request-id", S3Support.requestId())
-                    .header("Server", "SectoriaDB")
                     .body(xml);
         } finally {
             Files.deleteIfExists(tmp);

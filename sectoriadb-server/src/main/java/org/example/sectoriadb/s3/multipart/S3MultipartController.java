@@ -42,8 +42,10 @@ import org.example.sectoriadb.s3.api.RequestBodies;
 import org.example.sectoriadb.s3.api.S3Lookup;
 import org.example.sectoriadb.s3.error.S3Exception;
 import org.example.sectoriadb.s3.http.S3Checksums;
-import org.example.sectoriadb.s3.http.S3Support;
 import org.example.sectoriadb.s3.xml.XmlSupport;
+import org.example.sectoriadb.s3.http.HttpDates;
+import org.example.sectoriadb.s3.http.S3Request;
+import org.example.sectoriadb.s3.http.UrlCodec;
 
 /**
  * S3 Multipart Upload API:
@@ -187,7 +189,7 @@ public class S3MultipartController {
             throw S3Exception.noSuchBucket(bucket);
         }
 
-        String objectKey = S3Support.extractKey(request, bucket);
+        String objectKey = S3Request.extractKey(request, bucket);
         lookup.validateObjectKey(objectKey);
         String uploadId = UUID.randomUUID().toString();
 
@@ -220,7 +222,7 @@ public class S3MultipartController {
             meta.store(os, null);
         }
 
-        var created = ResponseEntity.ok().header("x-amz-request-id", S3Support.requestId());
+        var created = ResponseEntity.ok();
         if (checksumAlg != null) {
             created.header(S3Checksums.HEADER_ALGORITHM, checksumAlg.name())
                    .header(S3Checksums.HEADER_TYPE, checksumType.name());
@@ -228,8 +230,8 @@ public class S3MultipartController {
         return created
                 .body("<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                       "<InitiateMultipartUploadResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">" +
-                      "<Bucket>" + S3Support.xmlEscape(bucket) + "</Bucket>" +
-                      "<Key>" + S3Support.xmlEscape(objectKey) + "</Key>" +
+                      "<Bucket>" + XmlSupport.escape(bucket) + "</Bucket>" +
+                      "<Key>" + XmlSupport.escape(objectKey) + "</Key>" +
                       "<UploadId>" + uploadId + "</UploadId>" +
                       "</InitiateMultipartUploadResult>");
     }
@@ -292,8 +294,7 @@ public class S3MultipartController {
                 : wanted.algorithm().name() + ":" + digest.encoded(wanted.algorithm());
         installPart(uploadDir, uploadId, partNumber, tmpFile, partFile, etagValue, checksumEntry);
         var ok = ResponseEntity.ok()
-                .header("ETag", "\"" + etagValue + "\"")
-                .header("x-amz-request-id", S3Support.requestId());
+                .header("ETag", "\"" + etagValue + "\"");
         if (wanted.algorithm() != null) {
             ok.header(wanted.algorithm().headerName(), digest.encoded(wanted.algorithm()));
         }
@@ -349,7 +350,7 @@ public class S3MultipartController {
         String rawSrcKey = sourcePath.substring(slashIdx + 1);
         int versionIdx = rawSrcKey.indexOf('?');   // strip ?versionId=... BEFORE decoding (a decoded %3F is part of the key)
         if (versionIdx >= 0) rawSrcKey = rawSrcKey.substring(0, versionIdx);
-        String srcKey = S3Support.percentDecode(rawSrcKey);
+        String srcKey = UrlCodec.percentDecode(rawSrcKey);
 
         // Load source object
         ManifestEntity srcManifest = manifestRepo.findCurrent(srcBucket, srcKey)
@@ -388,14 +389,13 @@ public class S3MultipartController {
         }
         installPart(uploadDir, uploadId, partNumber, tmpFile, partFile, etagValue, checksumEntry);
 
-        String lastModified = S3Support.isoDate(Instant.now());
+        String lastModified = HttpDates.isoDate(Instant.now());
         String responseBody = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                       "<CopyPartResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">" +
                       "<LastModified>" + lastModified + "</LastModified>" +
                       "<ETag>\"" + etagValue + "\"</ETag>" + checksumXml +
                       "</CopyPartResult>";
         return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
                 .body(responseBody);
     }
 
@@ -409,7 +409,7 @@ public class S3MultipartController {
             HttpServletRequest request) throws IOException {
 
         Path uploadDir = validateUploadId(uploadId, bucket, request, true);
-        ManifestRepository.CommitPrecondition precondition = S3Support.writePrecondition(request);
+        ManifestRepository.CommitPrecondition precondition = S3Request.writePrecondition(request);
 
         // Parse and validate the part list (bounded body); the order must be ascending, nothing is sorted silently
         ParsedParts parsedParts = parseCompleteXml(RequestBodies.xmlBody(request));
@@ -644,13 +644,12 @@ public class S3MultipartController {
         String location = request.getScheme() + "://" + (host != null ? host : request.getServerName())
                 + "/" + bucket + "/" + objectKey;
         return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
                 .body("<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                       "<CompleteMultipartUploadResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">" +
-                      "<Location>" + S3Support.xmlEscape(location) + "</Location>" +
-                      "<Bucket>" + S3Support.xmlEscape(bucket) + "</Bucket>" +
-                      "<Key>" + S3Support.xmlEscape(objectKey) + "</Key>" +
-                      "<ETag>" + S3Support.xmlEscape(etag) + "</ETag>" + checksumXml +
+                      "<Location>" + XmlSupport.escape(location) + "</Location>" +
+                      "<Bucket>" + XmlSupport.escape(bucket) + "</Bucket>" +
+                      "<Key>" + XmlSupport.escape(objectKey) + "</Key>" +
+                      "<ETag>" + XmlSupport.escape(etag) + "</ETag>" + checksumXml +
                       "</CompleteMultipartUploadResult>");
     }
 
@@ -715,8 +714,8 @@ public class S3MultipartController {
         StringBuilder xml = new StringBuilder()
                 .append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                 .append("<ListPartsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">")
-                .append("<Bucket>").append(S3Support.xmlEscape(bucket)).append("</Bucket>")
-                .append("<Key>").append(S3Support.xmlEscape(objectKey)).append("</Key>")
+                .append("<Bucket>").append(XmlSupport.escape(bucket)).append("</Bucket>")
+                .append("<Key>").append(XmlSupport.escape(objectKey)).append("</Key>")
                 .append("<UploadId>").append(uploadId).append("</UploadId>")
                 .append("<PartNumberMarker>").append(partNumberMarker).append("</PartNumberMarker>")
                 .append("<MaxParts>").append(maxParts).append("</MaxParts>")
@@ -737,7 +736,7 @@ public class S3MultipartController {
             long size = Files.size(uploadDir.resolve(String.format("part-%05d", pn)));
             xml.append("<Part>")
                .append("<PartNumber>").append(pn).append("</PartNumber>")
-               .append("<LastModified>").append(S3Support.isoDate(
+               .append("<LastModified>").append(HttpDates.isoDate(
                        Files.getLastModifiedTime(uploadDir.resolve(String.format("part-%05d", pn))).toInstant())).append("</LastModified>")
                .append("<ETag>\"").append(etag).append("\"</ETag>")
                .append("<Size>").append(size).append("</Size>");
@@ -757,7 +756,6 @@ public class S3MultipartController {
 
         xml.append("</ListPartsResult>");
         return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
                 .body(xml.toString());
     }
 
@@ -778,7 +776,6 @@ public class S3MultipartController {
         Path mpuDirPath = getMpuDir();
         if (!Files.exists(mpuDirPath)) {
             return ResponseEntity.ok()
-                    .header("x-amz-request-id", S3Support.requestId())
                     .body(buildEmptyListMultipartUploadsXml(bucket, keyMarker, maxUploads));
         }
 
@@ -814,8 +811,8 @@ public class S3MultipartController {
         StringBuilder xml = new StringBuilder()
                 .append("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                 .append("<ListMultipartUploadsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">")
-                .append("<Bucket>").append(S3Support.xmlEscape(bucket)).append("</Bucket>")
-                .append("<KeyMarker>").append(S3Support.xmlEscape(keyMarker)).append("</KeyMarker>")
+                .append("<Bucket>").append(XmlSupport.escape(bucket)).append("</Bucket>")
+                .append("<KeyMarker>").append(XmlSupport.escape(keyMarker)).append("</KeyMarker>")
                 .append("<MaxUploads>").append(maxUploads).append("</MaxUploads>")
                 .append("<IsTruncated>").append(uploads.size() > maxUploads).append("</IsTruncated>");
 
@@ -827,21 +824,20 @@ public class S3MultipartController {
                 break;
             }
             xml.append("<Upload>")
-               .append("<Key>").append(S3Support.xmlEscape(u.key)).append("</Key>")
+               .append("<Key>").append(XmlSupport.escape(u.key)).append("</Key>")
                .append("<UploadId>").append(u.uploadId).append("</UploadId>")
-               .append("<Initiated>").append(S3Support.isoDate(u.initiated)).append("</Initiated>")
+               .append("<Initiated>").append(HttpDates.isoDate(u.initiated)).append("</Initiated>")
                .append("<StorageClass>STANDARD</StorageClass>")
                .append("</Upload>");
             count++;
         }
 
         if (!nextKeyMarker.isEmpty()) {
-            xml.append("<NextKeyMarker>").append(S3Support.xmlEscape(nextKeyMarker)).append("</NextKeyMarker>");
+            xml.append("<NextKeyMarker>").append(XmlSupport.escape(nextKeyMarker)).append("</NextKeyMarker>");
         }
 
         xml.append("</ListMultipartUploadsResult>");
         return ResponseEntity.ok()
-                .header("x-amz-request-id", S3Support.requestId())
                 .body(xml.toString());
     }
 
@@ -865,7 +861,6 @@ public class S3MultipartController {
         UPLOAD_LOCKS.remove(uploadId);
 
         return ResponseEntity.noContent()
-                .header("x-amz-request-id", S3Support.requestId())
                 .build();
     }
 
@@ -1016,7 +1011,7 @@ public class S3MultipartController {
         }
 
         if (!bucket.equals(meta.getProperty("bucket"))
-                || !S3Support.extractKey(request, bucket).equals(meta.getProperty("key"))) {
+                || !S3Request.extractKey(request, bucket).equals(meta.getProperty("key"))) {
             throw S3Exception.noSuchUpload(uploadId);
         }
         if (!allowCompleted && COMPLETED.equals(stateOf(uploadDir))) {
@@ -1143,8 +1138,8 @@ public class S3MultipartController {
     private String buildEmptyListMultipartUploadsXml(String bucket, String keyMarker, int maxUploads) {
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                "<ListMultipartUploadsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">" +
-               "<Bucket>" + S3Support.xmlEscape(bucket) + "</Bucket>" +
-               "<KeyMarker>" + S3Support.xmlEscape(keyMarker) + "</KeyMarker>" +
+               "<Bucket>" + XmlSupport.escape(bucket) + "</Bucket>" +
+               "<KeyMarker>" + XmlSupport.escape(keyMarker) + "</KeyMarker>" +
                "<MaxUploads>" + maxUploads + "</MaxUploads>" +
                "<IsTruncated>false</IsTruncated>" +
                "</ListMultipartUploadsResult>";

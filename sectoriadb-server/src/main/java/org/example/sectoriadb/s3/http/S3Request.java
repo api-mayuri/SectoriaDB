@@ -1,40 +1,15 @@
 package org.example.sectoriadb.s3.http;
 
 import jakarta.servlet.http.HttpServletRequest;
-
-import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.format.DateTimeFormatter;
-import java.util.Locale;
 import org.example.sectoriadb.s3.error.S3Exception;
 
-/** Small static helpers shared by all S3 controllers. */
-public final class S3Support {
-
-    private static final DateTimeFormatter HTTP_DATE =
-            DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.ENGLISH)
-                    .withZone(ZoneOffset.UTC);
-    private static final DateTimeFormatter ISO_MILLIS =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC);
+/** Parsing and validation of the parts of an S3 request that every handler needs: the key, query parameters, preconditions. */
+public final class S3Request {
 
     /** Request attribute set by SigV4Filter when the request carries a verified identity (or auth is off / open setup). */
     public static final String AUTHENTICATED_ATTRIBUTE = "sectoriadb.s3.authenticated";
 
-    private S3Support() {}
-
-    /** The id of the request being served (MDC {@code requestId}, set by the observability filter); a fresh id outside a request. */
-    public static String requestId() {
-        String id = org.slf4j.MDC.get("requestId");
-        return id != null ? id : org.example.sectoriadb.observability.RequestIds.newRequestId();
-    }
-
-    /** RFC 1123 date for Last-Modified headers. */
-    public static String httpDate(Instant t) { return HTTP_DATE.format(t); }
-
-    /** ISO-8601 with millis, as used inside S3 XML bodies. */
-    public static String isoDate(Instant t) { return ISO_MILLIS.format(t); }
+    private S3Request() {}
 
     /**
      * Bucket and object sub-resources that S3 has but SectoriaDB does not implement. A GET carrying one of them must
@@ -70,7 +45,7 @@ public final class S3Support {
             int eq = pair.indexOf('=');
             String name;
             try {
-                name = decodeQueryComponent(eq < 0 ? pair : pair.substring(0, eq));
+                name = UrlCodec.decodeQueryComponent(eq < 0 ? pair : pair.substring(0, eq));
             } catch (IllegalArgumentException e) {
                 throw S3Exception.invalidArgument("The query string is malformed");
             }
@@ -129,29 +104,6 @@ public final class S3Support {
         }
     }
 
-    /** encoding-type=url: percent-encode everything except unreserved characters and '/'. */
-    public static String urlEncodeKey(String s) {
-        if (s == null) return null;
-        StringBuilder sb = new StringBuilder(s.length() + 8);
-        for (byte b : s.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
-            int c = b & 0xFF;
-            if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
-                    || c == '-' || c == '_' || c == '.' || c == '~' || c == '/') {
-                sb.append((char) c);
-            } else {
-                sb.append('%').append(Character.toUpperCase(Character.forDigit(c >> 4, 16)))
-                  .append(Character.toUpperCase(Character.forDigit(c & 15, 16)));
-            }
-        }
-        return sb.toString();
-    }
-
-    public static String xmlEscape(String s) {
-        if (s == null) return "";
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                .replace("\"", "&quot;").replace("'", "&apos;");
-    }
-
     /**
      * Extracts the percent-decoded object key from a path-style request URI
      * ("/bucket/some%20key" → "some key"). '+' is NOT treated as a space.
@@ -162,66 +114,6 @@ public final class S3Support {
         if (!uri.startsWith(prefix)) {
             throw S3Exception.invalidArgument("Invalid request URI: " + uri);
         }
-        return percentDecode(uri.substring(prefix.length()));
-    }
-
-    /** Percent-decoding that leaves '+' untouched (unlike URLDecoder). */
-    public static String percentDecode(String s) {
-        if (s.indexOf('%') < 0) return s;
-        ByteArrayOutputStream out = new ByteArrayOutputStream(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '%' && i + 2 < s.length() + 0 && isHex(s.charAt(i + 1)) && isHex(s.charAt(i + 2))) {
-                out.write(Integer.parseInt(s.substring(i + 1, i + 3), 16));
-                i += 2;
-            } else {
-                if (c <= 0xFF) {
-                    out.write(c);   // the container hands raw request-line bytes over as ISO-8859-1 chars: keep the byte
-                } else {
-                    byte[] b = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
-                    out.write(b, 0, b.length);
-                }
-            }
-        }
-        return out.toString(StandardCharsets.UTF_8);
-    }
-
-    /**
-     * Decodes one query-string name or value: '+' is a space, %XX is a byte, the bytes must be valid UTF-8.
-     * A lone '%', bad hex or invalid UTF-8 is an {@link IllegalArgumentException} (unlike URLDecoder this is meant to be caught
-     * and answered 400: it must never surface as a 500).
-     */
-    public static String decodeQueryComponent(String s) {
-        if (s.indexOf('%') < 0 && s.indexOf('+') < 0) return s;
-        ByteArrayOutputStream out = new ByteArrayOutputStream(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            if (c == '%') {
-                if (i + 2 >= s.length() || !isHex(s.charAt(i + 1)) || !isHex(s.charAt(i + 2))) {
-                    throw new IllegalArgumentException("malformed percent-encoding");
-                }
-                out.write(Integer.parseInt(s.substring(i + 1, i + 3), 16));
-                i += 2;
-            } else if (c == '+') {
-                out.write(' ');
-            } else if (c <= 0xFF) {
-                out.write(c);
-            } else {
-                byte[] b = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
-                out.write(b, 0, b.length);
-            }
-        }
-        try {
-            return StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-                    .decode(java.nio.ByteBuffer.wrap(out.toByteArray())).toString();
-        } catch (java.nio.charset.CharacterCodingException e) {
-            throw new IllegalArgumentException("invalid UTF-8 in query string", e);
-        }
-    }
-
-    private static boolean isHex(char c) {
-        return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        return UrlCodec.percentDecode(uri.substring(prefix.length()));
     }
 }

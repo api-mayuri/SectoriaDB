@@ -21,6 +21,12 @@ public final class RequestIds {
         return new String(c);
     }
 
+    /** The id of the request being served (MDC {@code requestId}, set by the observability filter); a fresh id outside a request. */
+    public static String current() {
+        String id = org.slf4j.MDC.get(RequestObservabilityFilter.MDC_REQUEST_ID);
+        return id != null ? id : newRequestId();
+    }
+
     public static String newExtendedId() {
         byte[] b = new byte[24];
         ThreadLocalRandom.current().nextBytes(b);

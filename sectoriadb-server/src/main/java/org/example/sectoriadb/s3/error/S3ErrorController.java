@@ -10,7 +10,7 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.example.sectoriadb.s3.http.S3Support;
+import org.example.sectoriadb.observability.RequestIds;
 
 /**
  * Replaces Spring Boot's JSON error page. Errors raised before a controller is chosen (405 for a method nobody
@@ -35,6 +35,6 @@ public class S3ErrorController implements ErrorController {
         Object uri = request.getAttribute(RequestDispatcher.ERROR_REQUEST_URI);
         return ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_XML)
-                .body(new S3Error(code, S3MvcErrors.messageFor(status), uri instanceof String s ? s : null, S3Support.requestId()));
+                .body(new S3Error(code, S3MvcErrors.messageFor(status), uri instanceof String s ? s : null, RequestIds.current()));
     }
 }

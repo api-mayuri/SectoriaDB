@@ -4,7 +4,6 @@ import org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition;
 import org.example.sectoriadb.s3.http.LimitedInputStream;
 import org.example.sectoriadb.s3.http.MinRateInputStream;
 import org.example.sectoriadb.s3.error.S3Exception;
-import org.example.sectoriadb.s3.http.S3Support;
 import org.example.sectoriadb.s3.auth.AwsChunkedInputStream;
 import org.example.sectoriadb.s3.error.PayloadVerificationException;
 import org.junit.jupiter.api.Test;
@@ -16,6 +15,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.junit.jupiter.api.Assertions.*;
+import org.example.sectoriadb.s3.http.UrlCodec;
 
 /** Unit tests of the request-body guards (no Spring context). */
 class StreamGuardsTest {
@@ -112,10 +112,10 @@ class StreamGuardsTest {
 
     @Test
     void queryComponentsDecodeStrictly() {
-        assertEquals("a b+c", S3Support.decodeQueryComponent("a+b%2Bc"));
-        assertEquals("é", S3Support.decodeQueryComponent("%C3%A9"));
+        assertEquals("a b+c", UrlCodec.decodeQueryComponent("a+b%2Bc"));
+        assertEquals("é", UrlCodec.decodeQueryComponent("%C3%A9"));
         for (String bad : new String[]{"%", "%4", "%zz", "a%", "%FF"}) {
-            assertThrows(IllegalArgumentException.class, () -> S3Support.decodeQueryComponent(bad), bad);
+            assertThrows(IllegalArgumentException.class, () -> UrlCodec.decodeQueryComponent(bad), bad);
         }
     }
 

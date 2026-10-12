@@ -1,6 +1,5 @@
 package org.example.sectoriadb.s3.auth;
 
-import org.example.sectoriadb.s3.http.S3Support;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -10,6 +9,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.*;
 import java.util.HexFormat;
+import org.example.sectoriadb.s3.http.UrlCodec;
 
 /**
  * AWS Signature Version 4 computation utilities.
@@ -69,7 +69,7 @@ public final class SigV4Utils {
             if (i > 0) sb.append('/');
             // Decode first to avoid double-encoding an already percent-encoded URI
             // Use percent-decode that leaves '+' untouched (unlike URLDecoder)
-            String decoded = S3Support.percentDecode(segments[i]);
+            String decoded = UrlCodec.percentDecode(segments[i]);
             sb.append(uriEncode(decoded, false));
         }
         return sb.toString();
@@ -86,8 +86,8 @@ public final class SigV4Utils {
             int eq = pair.indexOf('=');
             String key   = eq < 0 ? pair : pair.substring(0, eq);
             String value = eq < 0 ? "" : pair.substring(eq + 1);
-            key   = uriEncode(S3Support.decodeQueryComponent(key), true);
-            value = uriEncode(S3Support.decodeQueryComponent(value), true);
+            key   = uriEncode(UrlCodec.decodeQueryComponent(key), true);
+            value = uriEncode(UrlCodec.decodeQueryComponent(value), true);
             params.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
         }
         // Exclude X-Amz-Signature from the canonical query when computing presigned URLs

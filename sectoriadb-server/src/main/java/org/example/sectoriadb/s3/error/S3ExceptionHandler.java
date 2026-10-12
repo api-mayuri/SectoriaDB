@@ -26,7 +26,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.example.sectoriadb.s3.http.ResponseAbortedException;
-import org.example.sectoriadb.s3.http.S3Support;
+import org.example.sectoriadb.observability.RequestIds;
 
 
 @RestControllerAdvice(basePackages = "org.example.sectoriadb.s3")
@@ -39,7 +39,7 @@ public class S3ExceptionHandler {
      */
     @ExceptionHandler(S3Exception.class)
     public ResponseEntity<S3Error> handleS3Exception(S3Exception ex) {
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         log.debug("S3 error [{}]: {} - {}", ex.getStatus().value(), ex.getCode(), ex.getMessage());
 
         ObservabilityAttributes.noteErrorCode(ex.getCode());
@@ -55,7 +55,7 @@ public class S3ExceptionHandler {
      */
     @ExceptionHandler(PayloadVerificationException.class)
     public ResponseEntity<S3Error> handlePayloadVerification(PayloadVerificationException ex) {
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         log.warn("Rejected request body [{}]: {}", ex.getS3Code(), ex.getMessage());
         ObservabilityAttributes.noteErrorCode(ex.getS3Code());
         ObservabilityAttributes.noteAuthFailure(ex.getS3Code().equals("XAmzContentSHA256Mismatch")
@@ -69,7 +69,7 @@ public class S3ExceptionHandler {
     /** A declared Content-MD5 / x-amz-checksum-* did not match the received bytes; nothing was committed. */
     @ExceptionHandler(ChecksumMismatchException.class)
     public ResponseEntity<S3Error> handleChecksumMismatch(ChecksumMismatchException ex) {
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         log.warn("Rejected upload [BadDigest]: {}", ex.getMessage());
         ObservabilityAttributes.noteErrorCode("BadDigest");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -94,7 +94,7 @@ public class S3ExceptionHandler {
      */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<S3Error> handleIllegalArgument(IllegalArgumentException ex) {
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         log.debug("S3 error (IllegalArgumentException): {}", ex.getMessage());
         ObservabilityAttributes.noteErrorCode("InvalidArgument");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -108,19 +108,19 @@ public class S3ExceptionHandler {
      */
     @ExceptionHandler(java.net.SocketTimeoutException.class)
     public ResponseEntity<S3Error> handleSocketTimeout(java.net.SocketTimeoutException ex) {
-        log.info("Request body timed out [{}]", S3Support.requestId());
+        log.info("Request body timed out [{}]", RequestIds.current());
         ObservabilityAttributes.noteErrorCode("RequestTimeout");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .contentType(MediaType.APPLICATION_XML)
                 .body(new S3Error("RequestTimeout",
                         "Your socket connection to the server was not read from or written to within the timeout period.",
-                        null, S3Support.requestId()));
+                        null, RequestIds.current()));
     }
 
     /** A conditional write (If-None-Match: * / If-Match) did not hold at commit time; nothing was committed. */
     @ExceptionHandler(ManifestRepository.CommitPreconditionException.class)
     public ResponseEntity<S3Error> handleCommitPrecondition(ManifestRepository.CommitPreconditionException ex) {
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         boolean missing = ex.keyMissing();
         String code = missing ? "NoSuchKey" : "PreconditionFailed";
         ObservabilityAttributes.noteErrorCode(code);
@@ -133,7 +133,7 @@ public class S3ExceptionHandler {
     /** The bucket was deleted between the start of a PUT and its commit; nothing was committed. */
     @ExceptionHandler(ManifestRepository.PoolNotFoundException.class)
     public ResponseEntity<S3Error> handlePoolGone(ManifestRepository.PoolNotFoundException ex) {
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         ObservabilityAttributes.noteErrorCode("NoSuchBucket");
         return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .contentType(MediaType.APPLICATION_XML)
@@ -147,7 +147,7 @@ public class S3ExceptionHandler {
      */
     @ExceptionHandler(org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException.class)
     public ResponseEntity<S3Error> handleChunkPlacement(org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException ex) {
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         log.warn("Upload rejected, retry expected [{}]: {} ({})", requestId, ex.reason(), ex.getMessage());
         ObservabilityAttributes.noteErrorCode("ServiceUnavailable");
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
@@ -165,7 +165,7 @@ public class S3ExceptionHandler {
      */
     @ExceptionHandler(org.example.sectoriadb.metastore.MetaStoreUnavailableException.class)
     public ResponseEntity<S3Error> handleMetaStoreUnavailable(org.example.sectoriadb.metastore.MetaStoreUnavailableException ex) {
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         if (isNoSpaceLeft(ex)) {
             log.warn("Write refused, the metadata disk is full [{}]: {}", requestId, ex.getMessage());
             ObservabilityAttributes.noteErrorCode("InsufficientStorage");
@@ -192,7 +192,7 @@ public class S3ExceptionHandler {
      */
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<S3Error> handleIllegalState(IllegalStateException ex) {
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         log.error("S3 request failed, the storage engine is in an unusable state [{}]: {}", requestId, ex.getMessage(), ex);
         ObservabilityAttributes.noteErrorCode("ServiceUnavailable");
         return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
@@ -241,12 +241,12 @@ public class S3ExceptionHandler {
         return ResponseEntity.status(status)
                 .headers(headers)
                 .contentType(MediaType.APPLICATION_XML)
-                .body(new S3Error(code, message, null, S3Support.requestId()));
+                .body(new S3Error(code, message, null, RequestIds.current()));
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<S3Error> handleGeneral(Exception ex) {
-        String requestId = S3Support.requestId();
+        String requestId = RequestIds.current();
         if (isNoSpaceLeft(ex)) {
             // The data (or metadata) volume is full: nothing is half-written (the object was never committed), the
             // operator must free space. 507 tells monitoring and clients apart from a transient 500.

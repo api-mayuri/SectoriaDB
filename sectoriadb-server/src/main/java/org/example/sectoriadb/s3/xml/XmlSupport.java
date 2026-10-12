@@ -24,4 +24,11 @@ public final class XmlSupport {
         dbf.setNamespaceAware(namespaceAware);
         return dbf.newDocumentBuilder();
     }
+
+    /** Escapes text for use inside an XML element or attribute value; null becomes the empty string. */
+    public static String escape(String s) {
+        if (s == null) return "";
+        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                .replace("\"", "&quot;").replace("'", "&apos;");
+    }
 }
