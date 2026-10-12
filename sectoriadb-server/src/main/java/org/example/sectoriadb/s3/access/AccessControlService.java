@@ -2,12 +2,12 @@ package org.example.sectoriadb.s3.access;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
-import org.example.sectoriadb.model.ManifestEntity;
-import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.repository.ManifestRepository;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.s3.S3Exception;
 import org.example.sectoriadb.s3.S3Support;
-import org.example.sectoriadb.service.PoolService;
+import org.example.sectoriadb.storage.PoolService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;

@@ -1,7 +1,7 @@
 package org.example.sectoriadb.s3;
 
 import org.example.sectoriadb.checksum.ChecksumMismatchException;
-import org.example.sectoriadb.repository.ManifestRepository;
+import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.observability.ObservabilityAttributes;
 import org.example.sectoriadb.s3.auth.AuthFailure;
 import org.example.sectoriadb.s3.auth.PayloadVerificationException;
@@ -144,8 +144,8 @@ public class S3ExceptionHandler {
      * index (COLLECTED), or a resize / key collision raced with it. Nothing was written; the client retries the whole
      * request, which is what S3 clients do on a 503 (doc 09, 10).
      */
-    @ExceptionHandler(org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException.class)
-    public ResponseEntity<S3Error> handleChunkPlacement(org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException ex) {
+    @ExceptionHandler(org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException.class)
+    public ResponseEntity<S3Error> handleChunkPlacement(org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException ex) {
         String requestId = S3Support.requestId();
         log.warn("Upload rejected, retry expected [{}]: {} ({})", requestId, ex.reason(), ex.getMessage());
         ObservabilityAttributes.noteErrorCode("ServiceUnavailable");

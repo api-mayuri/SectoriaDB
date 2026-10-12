@@ -1,11 +1,11 @@
 package org.example.sectoriadb.shell;
 
-import org.example.sectoriadb.model.ManifestEntity;
-import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.repository.ChunkRepository;
-import org.example.sectoriadb.service.FileStorageService;
-import org.example.sectoriadb.service.ObjectVerificationService;
-import org.example.sectoriadb.service.PoolService;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.storage.FileStorageService;
+import org.example.sectoriadb.storage.ObjectVerificationService;
+import org.example.sectoriadb.storage.PoolService;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;
@@ -72,7 +72,7 @@ public class FileCommands {
                 : poolService.listAll().stream().filter(p -> p.getId().equals(m.getPoolId()))
                         .map(PoolEntity::getName).findFirst().orElse(m.getPoolId());
         String blobs = phys != null ? phys.getId() : "-";
-        if (m.getStorageKind() == org.example.sectoriadb.model.StorageKind.CHUNKED && m.getPoolId() != null) {
+        if (m.getStorageKind() == org.example.sectoriadb.catalog.StorageKind.CHUNKED && m.getPoolId() != null) {
             // the chunks of an object are spread over the pool's blobs: the chunk index says where
             var entries = chunkRepo.findAll(m.getPoolId(), m.chunkKeyArray());
             var distinct = new java.util.TreeSet<String>();

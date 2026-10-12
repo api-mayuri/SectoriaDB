@@ -1,11 +1,11 @@
 package org.example.sectoriadb.s3;
 
 import jakarta.servlet.http.HttpServletRequest;
-import org.example.sectoriadb.model.ManifestEntity;
-import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.repository.ManifestRepository;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.s3.access.AccessControlService;
-import org.example.sectoriadb.service.PoolService;
+import org.example.sectoriadb.storage.PoolService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;

@@ -1,11 +1,11 @@
 package org.example.sectoriadb;
 
-import org.example.sectoriadb.model.ManifestEntity;
-import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.service.BlobService;
-import org.example.sectoriadb.service.FileStorageService;
-import org.example.sectoriadb.service.PoolService;
-import org.example.sectoriadb.service.ResizeService;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.storage.BlobService;
+import org.example.sectoriadb.storage.FileStorageService;
+import org.example.sectoriadb.storage.PoolService;
+import org.example.sectoriadb.maintenance.ResizeService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -43,7 +43,7 @@ class SectoriaDBIntegrationTest {
     @Autowired BlobService blobService;
     @Autowired FileStorageService fileService;
     @Autowired ResizeService resizeService;
-    @Autowired org.example.sectoriadb.repository.ChunkRepository chunkRepo;
+    @Autowired org.example.sectoriadb.catalog.ChunkRepository chunkRepo;
 
     private PoolEntity newPool(String name) throws IOException {
         Path base = tempRoot.resolve(name);

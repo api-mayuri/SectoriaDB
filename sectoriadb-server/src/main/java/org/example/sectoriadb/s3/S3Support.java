@@ -99,12 +99,12 @@ public final class S3Support {
      * transaction: {@code If-None-Match: *} (create only) and {@code If-Match: <etag>} (replace that version only).
      * Other forms (lists of ETags, If-None-Match with an ETag) are not supported by S3 for writes either: 501.
      */
-    public static org.example.sectoriadb.repository.ManifestRepository.CommitPrecondition writePrecondition(
+    public static org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition writePrecondition(
             HttpServletRequest request) {
         String none = request.getHeader("If-None-Match");
         String match = request.getHeader("If-Match");
         if (none == null && match == null) {
-            return org.example.sectoriadb.repository.ManifestRepository.CommitPrecondition.NONE;
+            return org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition.NONE;
         }
         if (none != null && !"*".equals(none.trim())) {
             throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
@@ -114,7 +114,7 @@ public final class S3Support {
             throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
                     "If-Match on a write supports a single ETag");
         }
-        return new org.example.sectoriadb.repository.ManifestRepository.CommitPrecondition(none != null, match);
+        return new org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition(none != null, match);
     }
 
     /** CopyObject's {@code x-amz-copy-source-if-*} conditions are not evaluated; refusing beats silently ignoring them. */

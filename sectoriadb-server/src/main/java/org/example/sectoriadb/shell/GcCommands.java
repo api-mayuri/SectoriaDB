@@ -1,13 +1,13 @@
 package org.example.sectoriadb.shell;
 
-import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.service.PoolService;
-import org.example.sectoriadb.service.gc.GarbageCollector;
-import org.example.sectoriadb.service.gc.GcReports;
-import org.example.sectoriadb.service.gc.GcReports.CompactionReport;
-import org.example.sectoriadb.service.gc.GcReports.Options;
-import org.example.sectoriadb.service.gc.GcReports.RunReport;
-import org.example.sectoriadb.service.gc.GcReports.SweepReport;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.storage.PoolService;
+import org.example.sectoriadb.maintenance.gc.GarbageCollector;
+import org.example.sectoriadb.maintenance.gc.GcReports;
+import org.example.sectoriadb.maintenance.gc.GcReports.CompactionReport;
+import org.example.sectoriadb.maintenance.gc.GcReports.Options;
+import org.example.sectoriadb.maintenance.gc.GcReports.RunReport;
+import org.example.sectoriadb.maintenance.gc.GcReports.SweepReport;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;

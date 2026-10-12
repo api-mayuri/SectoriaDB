@@ -3,7 +3,7 @@ package org.example.sectoriadb.s3;
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.s3.auth.AwsChunkedInputStream;
 import org.example.sectoriadb.s3.auth.ChunkSigningContext;
-import org.example.sectoriadb.service.FileStorageService;
+import org.example.sectoriadb.storage.FileStorageService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;

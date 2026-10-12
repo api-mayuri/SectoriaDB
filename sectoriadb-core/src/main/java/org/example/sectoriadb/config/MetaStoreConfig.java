@@ -3,7 +3,7 @@ package org.example.sectoriadb.config;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
 import org.example.sectoriadb.metrics.StorageMetrics;
-import org.example.sectoriadb.repository.metastore.MetaStoreProvider;
+import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import org.example.sectoriadb.catalog.metastore.StorageMetricsMetaStoreListener;
 
 /**
  * The embedded metadata store: one file, {@code ${sectoriadb.meta-dir}/sectoria.db}, durable commits according to

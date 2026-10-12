@@ -1,7 +1,7 @@
 package org.example.sectoriadb.shell;
 
-import org.example.sectoriadb.model.CredentialEntity;
-import org.example.sectoriadb.service.CredentialService;
+import org.example.sectoriadb.security.CredentialEntity;
+import org.example.sectoriadb.security.CredentialService;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;

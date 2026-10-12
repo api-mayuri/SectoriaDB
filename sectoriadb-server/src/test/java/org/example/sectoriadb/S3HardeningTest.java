@@ -1,8 +1,8 @@
 package org.example.sectoriadb;
 
-import org.example.sectoriadb.model.ManifestEntity;
-import org.example.sectoriadb.repository.ManifestRepository;
-import org.example.sectoriadb.service.PoolService;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.storage.PoolService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

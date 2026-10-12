@@ -1,8 +1,8 @@
 package org.example.sectoriadb;
 
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
-import org.example.sectoriadb.model.ManifestEntity;
-import org.example.sectoriadb.repository.ManifestRepository;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.ManifestRepository;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -60,8 +60,8 @@ class S3ChecksumsTest {
 
     @LocalServerPort int port;
     @Autowired ManifestRepository manifestRepo;
-    @Autowired org.example.sectoriadb.repository.ChunkRepository chunkRepo;
-    @Autowired org.example.sectoriadb.repository.BlobFileRepository blobRepo;
+    @Autowired org.example.sectoriadb.catalog.ChunkRepository chunkRepo;
+    @Autowired org.example.sectoriadb.catalog.BlobFileRepository blobRepo;
     private final HttpClient http = HttpClient.newHttpClient();
     private static final String B = "ckbkt";
     private boolean bucketMade;

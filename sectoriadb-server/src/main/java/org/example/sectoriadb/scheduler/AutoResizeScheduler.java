@@ -2,10 +2,10 @@ package org.example.sectoriadb.scheduler;
 
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.metrics.StorageMetrics;
-import org.example.sectoriadb.model.BlobFileEntity;
-import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.service.BlobService;
-import org.example.sectoriadb.service.PoolService;
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.storage.BlobService;
+import org.example.sectoriadb.storage.PoolService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Scheduled;

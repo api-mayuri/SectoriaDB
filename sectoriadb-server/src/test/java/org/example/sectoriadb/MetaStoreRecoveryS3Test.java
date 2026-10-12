@@ -1,7 +1,7 @@
 package org.example.sectoriadb;
 
 import org.example.sectoriadb.metastore.MetaStore;
-import org.example.sectoriadb.repository.metastore.MetaStoreProvider;
+import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;

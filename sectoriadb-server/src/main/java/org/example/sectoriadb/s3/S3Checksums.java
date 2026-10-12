@@ -4,7 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.UploadChecksums;
-import org.example.sectoriadb.model.ManifestEntity;
+import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.s3.auth.PayloadVerificationException;
 import org.springframework.http.HttpStatus;
 

@@ -63,8 +63,8 @@ class S3ExceptionHandlerTest {
     /** Doc 10: a chunk the upload deduplicated against was collected before its commit; the client simply retries. */
     @Test
     void aCollectedChunkIsARetryable503() {
-        var r = handler.handleChunkPlacement(new org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException(
-                org.example.sectoriadb.repository.ChunkRepository.ChunkPlacementException.Reason.COLLECTED, "collected meanwhile"));
+        var r = handler.handleChunkPlacement(new org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException(
+                org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException.Reason.COLLECTED, "collected meanwhile"));
         assertEquals(503, r.getStatusCode().value());
         assertEquals("ServiceUnavailable", r.getBody().getCode());
         assertEquals("1", r.getHeaders().getFirst("Retry-After"));

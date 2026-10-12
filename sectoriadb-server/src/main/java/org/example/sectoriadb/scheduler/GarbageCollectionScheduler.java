@@ -1,8 +1,8 @@
 package org.example.sectoriadb.scheduler;
 
 import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.service.gc.GarbageCollector;
-import org.example.sectoriadb.service.gc.GcReports.Options;
+import org.example.sectoriadb.maintenance.gc.GarbageCollector;
+import org.example.sectoriadb.maintenance.gc.GcReports.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;

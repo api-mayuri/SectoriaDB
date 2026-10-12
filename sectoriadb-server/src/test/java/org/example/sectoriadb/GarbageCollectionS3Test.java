@@ -1,7 +1,7 @@
 package org.example.sectoriadb;
 
-import org.example.sectoriadb.service.gc.GarbageCollector;
-import org.example.sectoriadb.service.gc.GcReports;
+import org.example.sectoriadb.maintenance.gc.GarbageCollector;
+import org.example.sectoriadb.maintenance.gc.GcReports;
 import org.example.sectoriadb.shell.GcCommands;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

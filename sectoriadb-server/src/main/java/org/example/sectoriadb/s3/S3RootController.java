@@ -3,7 +3,7 @@ package org.example.sectoriadb.s3;
 import org.example.sectoriadb.s3.xml.BucketEntry;
 import org.example.sectoriadb.s3.xml.ListAllMyBucketsResult;
 import org.example.sectoriadb.s3.xml.Owner;
-import org.example.sectoriadb.service.PoolService;
+import org.example.sectoriadb.storage.PoolService;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;

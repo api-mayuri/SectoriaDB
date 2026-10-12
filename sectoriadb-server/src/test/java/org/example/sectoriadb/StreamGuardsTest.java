@@ -1,6 +1,6 @@
 package org.example.sectoriadb;
 
-import org.example.sectoriadb.repository.ManifestRepository.CommitPrecondition;
+import org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition;
 import org.example.sectoriadb.s3.LimitedInputStream;
 import org.example.sectoriadb.s3.MinRateInputStream;
 import org.example.sectoriadb.s3.S3Exception;
