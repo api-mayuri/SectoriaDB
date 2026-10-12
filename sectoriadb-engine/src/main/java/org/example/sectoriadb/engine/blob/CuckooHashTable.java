@@ -640,10 +640,6 @@ public class CuckooHashTable implements AutoCloseable {
         return BlobLayout.bucketB(key, numBuckets);
     }
 
-    /** FREE and DELETED slots can take a new chunk. QUARANTINED, RESERVED and ACTIVE slots cannot. */
-    private boolean isFreeSlot(int idx) {
-        return stateMeta[idx] == FREE || stateMeta[idx] == DELETED;
-    }
 
     /** Writes the meta entry, makes it durable, then updates the in-memory copy. */
     private void writeMeta(int idx, long chunkKey, byte state, int dataLength, int dataCrc) throws IOException {

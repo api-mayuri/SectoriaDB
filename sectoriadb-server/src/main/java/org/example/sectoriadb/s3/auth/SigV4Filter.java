@@ -52,8 +52,6 @@ public class SigV4Filter extends OncePerRequestFilter {
 
     private static final DateTimeFormatter DATE_FMT =
             DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC);
-    private static final DateTimeFormatter SHORT_DATE_FMT =
-            DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneOffset.UTC);
     private static final DateTimeFormatter RFC_1123_DATE_TIME =
             DateTimeFormatter.RFC_1123_DATE_TIME.withZone(ZoneOffset.UTC);
     private static final long SKEW_TOLERANCE_SECONDS = 900; // 15 minutes

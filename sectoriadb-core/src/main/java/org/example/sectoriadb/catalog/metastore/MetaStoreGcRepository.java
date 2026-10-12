@@ -10,8 +10,6 @@ import org.example.sectoriadb.catalog.ChunkEntry;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.GcRepository;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -30,7 +28,6 @@ import java.util.Set;
  */
 public class MetaStoreGcRepository implements GcRepository {
 
-    private static final Logger log = LoggerFactory.getLogger(MetaStoreGcRepository.class);
 
     private final MetaStoreProvider stores;
 

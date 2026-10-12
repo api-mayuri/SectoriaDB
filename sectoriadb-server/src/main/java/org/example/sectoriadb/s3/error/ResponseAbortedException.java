@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3.http;
+package org.example.sectoriadb.s3.error;
 
 /**
  * Thrown when a response body cannot be completed after the headers were already sent (e.g. an integrity check

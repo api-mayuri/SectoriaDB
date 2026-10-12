@@ -34,12 +34,14 @@ public class S3AclController {
     private final PoolService poolService;
     private final ManifestRepository manifestRepo;
     private final AccessControlService aclService;
+    private final S3Lookup lookup;
     private final String region;
 
     public S3AclController(PoolService poolService, ManifestRepository manifestRepo,
-                           AccessControlService aclService,
+                           AccessControlService aclService, S3Lookup lookup,
                            @Value("${sectoriadb.s3.region:us-east-1}") String region) {
         this.poolService = poolService;
+        this.lookup = lookup;
         this.manifestRepo = manifestRepo;
         this.aclService = aclService;
         this.region = region;
@@ -52,11 +54,7 @@ public class S3AclController {
             @PathVariable String bucket,
             HttpServletRequest request) throws IOException {
 
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
-
-        PoolEntity pool = poolService.getByName(bucket);
+        PoolEntity pool = lookup.requireBucket(bucket);
         byte[] body = RequestBodies.readLimited(request, RequestBodies.MAX_ACL_BYTES, HttpStatus.BAD_REQUEST,
                 "MalformedACLError", "The ACL document is too large");
         aclService.applyBucketAcl(request, body, pool);
@@ -68,11 +66,7 @@ public class S3AclController {
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "acl",
                 produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<String> getBucketAcl(@PathVariable String bucket) {
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
-
-        PoolEntity pool = poolService.getByName(bucket);
+        PoolEntity pool = lookup.requireBucket(bucket);
         String acl = pool.getAcl();
         String xml = aclService.aclXml(acl);
 
@@ -87,9 +81,7 @@ public class S3AclController {
             @PathVariable String bucket,
             HttpServletRequest request) throws IOException {
 
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         String key = S3Request.extractKey(request, bucket);
         byte[] body = RequestBodies.readLimited(request, RequestBodies.MAX_ACL_BYTES, HttpStatus.BAD_REQUEST,
@@ -109,9 +101,7 @@ public class S3AclController {
             @PathVariable String bucket,
             HttpServletRequest request) {
 
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         String key = S3Request.extractKey(request, bucket);
         ManifestEntity manifest = manifestRepo.findCurrent(bucket, key)
@@ -129,11 +119,7 @@ public class S3AclController {
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "policy",
                 produces = MediaType.APPLICATION_JSON_VALUE)
     public ResponseEntity<String> getBucketPolicy(@PathVariable String bucket) {
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
-
-        PoolEntity pool = poolService.getByName(bucket);
+        PoolEntity pool = lookup.requireBucket(bucket);
         if (pool.getPolicy() == null) {
             // Return 404 NoSuchBucketPolicy
             throw new S3Exception(HttpStatus.NOT_FOUND, "NoSuchBucketPolicy",
@@ -149,9 +135,7 @@ public class S3AclController {
             @PathVariable String bucket,
             HttpServletRequest request) throws IOException {
 
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         byte[] body = RequestBodies.readLimited(request, RequestBodies.MAX_POLICY_BYTES, HttpStatus.BAD_REQUEST,
                 "PolicyTooLarge", "Policies must be 20 KiB or smaller");
@@ -180,9 +164,7 @@ public class S3AclController {
 
     @DeleteMapping(value = {"/{bucket}", "/{bucket}/"}, params = "policy")
     public ResponseEntity<Void> deleteBucketPolicy(@PathVariable String bucket) {
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         poolService.deletePolicy(bucket);
 
@@ -195,9 +177,7 @@ public class S3AclController {
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "location",
                 produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<String> getBucketLocation(@PathVariable String bucket) {
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         String locationXml;
         if ("us-east-1".equals(region)) {
@@ -219,9 +199,7 @@ public class S3AclController {
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "versioning",
                 produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<String> getBucketVersioning(@PathVariable String bucket) {
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         String versioningXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
                 "<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>";
@@ -235,9 +213,7 @@ public class S3AclController {
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "tagging",
                 produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<String> getBucketTagging(@PathVariable String bucket) {
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         throw new S3Exception(HttpStatus.NOT_FOUND, "NoSuchTagSet",
                 "There is no tag set associated with the bucket.", "/" + bucket);
@@ -248,9 +224,7 @@ public class S3AclController {
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "cors",
                 produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<String> getBucketCors(@PathVariable String bucket) {
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         throw new S3Exception(HttpStatus.NOT_FOUND, "NoSuchCORSConfiguration",
                 "The CORS configuration does not exist.", "/" + bucket);
@@ -261,9 +235,7 @@ public class S3AclController {
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "lifecycle",
                 produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<String> getBucketLifecycle(@PathVariable String bucket) {
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         throw new S3Exception(HttpStatus.NOT_FOUND, "NoSuchLifecycleConfiguration",
                 "The lifecycle configuration does not exist.", "/" + bucket);
@@ -274,9 +246,7 @@ public class S3AclController {
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "encryption",
                 produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<String> getBucketEncryption(@PathVariable String bucket) {
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         throw new S3Exception(HttpStatus.NOT_FOUND, "ServerSideEncryptionConfigurationNotFoundError",
                 "The server side encryption configuration was not found.", "/" + bucket);
@@ -287,9 +257,7 @@ public class S3AclController {
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "publicAccessBlock",
                 produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<String> getBucketPublicAccessBlock(@PathVariable String bucket) {
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         throw new S3Exception(HttpStatus.NOT_FOUND, "NoSuchPublicAccessBlockConfiguration",
                 "The public access block configuration does not exist.", "/" + bucket);
@@ -303,9 +271,7 @@ public class S3AclController {
             @PathVariable String bucket,
             HttpServletRequest request) {
 
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         String key = S3Request.extractKey(request, bucket);
         if (!manifestRepo.existsCurrent(bucket, key)) {
@@ -327,9 +293,7 @@ public class S3AclController {
             @PathVariable String bucket,
             HttpServletRequest request) throws IOException {
 
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         String key = S3Request.extractKey(request, bucket);
         if (!manifestRepo.existsCurrent(bucket, key)) {
@@ -345,9 +309,7 @@ public class S3AclController {
             @PathVariable String bucket,
             HttpServletRequest request) {
 
-        if (!poolService.existsByName(bucket)) {
-            throw S3Exception.noSuchBucket(bucket);
-        }
+        lookup.requireBucket(bucket);
 
         String key = S3Request.extractKey(request, bucket);
         if (!manifestRepo.existsCurrent(bucket, key)) {

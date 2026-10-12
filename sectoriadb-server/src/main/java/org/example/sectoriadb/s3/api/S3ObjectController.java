@@ -32,7 +32,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import org.example.sectoriadb.s3.error.S3Exception;
-import org.example.sectoriadb.s3.http.ResponseAbortedException;
+import org.example.sectoriadb.s3.error.ResponseAbortedException;
 import org.example.sectoriadb.s3.http.S3Checksums;
 import org.example.sectoriadb.s3.http.HttpDates;
 import org.example.sectoriadb.s3.http.S3Request;
