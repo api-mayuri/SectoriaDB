@@ -33,9 +33,11 @@ public class JsonCredentialRepository implements CredentialRepository {
     private final Path dataFile;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    private List<CredentialEntity> cache = null;
-    private long cachedModifiedTime = -1;
-    private long cachedFileSize = -1;
+    /** Immutable view of credentials.json as of file modification time and size; replaced as a whole, never mutated. */
+    private record Snapshot(List<CredentialEntity> entries, long modifiedTime, long fileSize) {
+    }
+
+    private volatile Snapshot snapshot = null;
 
     public JsonCredentialRepository(ObjectMapper mapper, StorageProperties props) {
         this.mapper   = mapper;
@@ -46,11 +48,11 @@ public class JsonCredentialRepository implements CredentialRepository {
     public CredentialEntity save(CredentialEntity entity) {
         lock.writeLock().lock();
         try {
-            List<CredentialEntity> all = readAll();
+            List<CredentialEntity> all = new ArrayList<>(readAll());   // a copy: the published snapshot stays untouched
             all.removeIf(e -> e.getAccessKeyId().equals(entity.getAccessKeyId()));
             all.add(entity);
             writeAll(all);
-            invalidateCache();
+            publish(all);                                               // only after the durable atomic move
             log.debug("Saved credential: id={}", entity.getAccessKeyId());
             return entity;
         } finally {
@@ -84,10 +86,10 @@ public class JsonCredentialRepository implements CredentialRepository {
     public void deleteByAccessKeyId(String accessKeyId) {
         lock.writeLock().lock();
         try {
-            List<CredentialEntity> all = readAll();
+            List<CredentialEntity> all = new ArrayList<>(readAll());
             all.removeIf(e -> e.getAccessKeyId().equals(accessKeyId));
             writeAll(all);
-            invalidateCache();
+            publish(all);
             log.debug("Deleted credential: id={}", accessKeyId);
         } finally {
             lock.writeLock().unlock();
@@ -101,10 +103,15 @@ public class JsonCredentialRepository implements CredentialRepository {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
+    /** The current credentials as an immutable list; reloads the file when its time or size changed (the admin CLI edits it too). */
     private List<CredentialEntity> readAll() {
         if (!Files.exists(dataFile)) {
-            if (cache == null) cache = new ArrayList<>();
-            return cache;
+            Snapshot s = snapshot;
+            if (s == null || s.modifiedTime() != -1) {
+                s = new Snapshot(List.of(), -1, -1);
+                snapshot = s;
+            }
+            return s.entries();
         }
 
         try {
@@ -112,17 +119,27 @@ public class JsonCredentialRepository implements CredentialRepository {
             long modTime = attrs.lastModifiedTime().toMillis();
             long fileSize = attrs.size();
 
-            if (cache != null && modTime == cachedModifiedTime && fileSize == cachedFileSize) {
-                return cache;
+            Snapshot s = snapshot;
+            if (s != null && modTime == s.modifiedTime() && fileSize == s.fileSize()) {
+                return s.entries();
             }
 
-            cache = mapper.readValue(dataFile.toFile(), LIST_TYPE);
-            cachedModifiedTime = modTime;
-            cachedFileSize = fileSize;
-            return cache;
+            List<CredentialEntity> loaded = List.copyOf(mapper.readValue(dataFile.toFile(), LIST_TYPE));
+            snapshot = new Snapshot(loaded, modTime, fileSize);
+            return loaded;
         } catch (IOException e) {
             log.error("Failed to read credentials.json: {}", e.getMessage());
             throw new UncheckedIOException(e);
+        }
+    }
+
+    /** Makes the list just written the cached view; when the file cannot be stat'ed the cache is dropped (reloaded next time). */
+    private void publish(List<CredentialEntity> written) {
+        try {
+            BasicFileAttributes attrs = Files.readAttributes(dataFile, BasicFileAttributes.class);
+            snapshot = new Snapshot(List.copyOf(written), attrs.lastModifiedTime().toMillis(), attrs.size());
+        } catch (IOException e) {
+            snapshot = null;
         }
     }
 
@@ -164,11 +181,5 @@ public class JsonCredentialRepository implements CredentialRepository {
         } catch (IOException | UnsupportedOperationException e) {
             log.debug("Directory fsync not available for {}: {}", dir, e.getMessage());
         }
-    }
-
-    private void invalidateCache() {
-        cache = null;
-        cachedModifiedTime = -1;
-        cachedFileSize = -1;
     }
 }
