@@ -4,7 +4,6 @@ import org.example.sectoriadb.s3.S3Support;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
-import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
@@ -87,8 +86,8 @@ public final class SigV4Utils {
             int eq = pair.indexOf('=');
             String key   = eq < 0 ? pair : pair.substring(0, eq);
             String value = eq < 0 ? "" : pair.substring(eq + 1);
-            key   = uriEncode(URLDecoder.decode(key,   StandardCharsets.UTF_8), true);
-            value = uriEncode(URLDecoder.decode(value, StandardCharsets.UTF_8), true);
+            key   = uriEncode(S3Support.decodeQueryComponent(key), true);
+            value = uriEncode(S3Support.decodeQueryComponent(value), true);
             params.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
         }
         // Exclude X-Amz-Signature from the canonical query when computing presigned URLs

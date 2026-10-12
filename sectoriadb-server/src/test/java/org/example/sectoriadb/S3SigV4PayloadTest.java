@@ -232,7 +232,8 @@ class S3SigV4PayloadTest {
     @Test
     void unsignedTrailerStreamingIsAccepted() throws Exception {
         // STREAMING-UNSIGNED-PAYLOAD-TRAILER: chunk framing without signatures, checksum in the trailer
-        var s = client.sign("PUT", "/sigbkt/ut.txt", null, "STREAMING-UNSIGNED-PAYLOAD-TRAILER", Instant.now());
+        var s = client.sign("PUT", "/sigbkt/ut.txt", null, "STREAMING-UNSIGNED-PAYLOAD-TRAILER", Instant.now(),
+                java.util.Map.of("x-amz-trailer", "x-amz-checksum-crc32"));
         java.util.zip.CRC32 crc = new java.util.zip.CRC32();
         crc.update(bytes("unsigned!"));
         String crcB64 = java.util.Base64.getEncoder().encodeToString(

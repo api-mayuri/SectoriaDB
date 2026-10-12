@@ -28,6 +28,8 @@ final class SigV4TestClient {
     final String accessKey;
     final String secretKey;
     final HttpClient http = HttpClient.newHttpClient();
+    /** Region put into the credential scope (tests change it to probe region enforcement). */
+    String region = REGION;
 
     SigV4TestClient(int port, String accessKey, String secretKey) {
         this.port = port;
@@ -39,19 +41,26 @@ final class SigV4TestClient {
     record Signed(String authorization, String timestamp, String scope, String signature, byte[] signingKey) {}
 
     Signed sign(String method, String path, String query, String payloadHash, Instant when) {
+        return sign(method, path, query, payloadHash, when, Map.of());
+    }
+
+    /** As above, additionally signing the given headers (name lower-case; the value is hashed as UTF-8 like the AWS SDKs do). */
+    Signed sign(String method, String path, String query, String payloadHash, Instant when, Map<String, String> extra) {
         String ts = TS.format(when);
         String date = DAY.format(when);
-        String scope = date + "/" + REGION + "/s3/aws4_request";
+        String scope = date + "/" + region + "/s3/aws4_request";
         Map<String, String> headers = new TreeMap<>();
         headers.put("host", "localhost:" + port);
         headers.put("x-amz-content-sha256", payloadHash);
         headers.put("x-amz-date", ts);
+        headers.putAll(extra);
+        String signedList = String.join(";", headers.keySet());
         String canonical = SigV4Utils.buildCanonicalRequest(method, path, query, headers, payloadHash);
         String sts = SigV4Utils.buildStringToSign(ts, scope, SigV4Utils.sha256Hex(canonical.getBytes(StandardCharsets.UTF_8)));
-        byte[] key = SigV4Utils.deriveSigningKey(secretKey, date, REGION, "s3");
+        byte[] key = SigV4Utils.deriveSigningKey(secretKey, date, region, "s3");
         String sig = SigV4Utils.computeSignature(key, sts);
         String auth = "AWS4-HMAC-SHA256 Credential=" + accessKey + "/" + scope
-                + ", SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=" + sig;
+                + ", SignedHeaders=" + signedList + ", Signature=" + sig;
         return new Signed(auth, ts, scope, sig, key);
     }
 
@@ -62,12 +71,24 @@ final class SigV4TestClient {
 
     HttpResponse<String> request(String method, String path, String query, String signedPayloadHash,
                                  byte[] body, Instant when) throws Exception {
-        Signed s = sign(method, path, query, signedPayloadHash, when);
+        return request(method, path, query, signedPayloadHash, body, when, Map.of());
+    }
+
+    /** Signs and sends the request with additional (signed) headers. */
+    HttpResponse<String> request(String method, String path, String query, String signedPayloadHash,
+                                 byte[] body, Map<String, String> extra) throws Exception {
+        return request(method, path, query, signedPayloadHash, body, Instant.now(), extra);
+    }
+
+    HttpResponse<String> request(String method, String path, String query, String signedPayloadHash,
+                                 byte[] body, Instant when, Map<String, String> extra) throws Exception {
+        Signed s = sign(method, path, query, signedPayloadHash, when, extra);
         URI uri = URI.create("http://localhost:" + port + path + (query == null ? "" : "?" + query));
         HttpRequest.Builder b = HttpRequest.newBuilder(uri)
                 .header("Authorization", s.authorization())
                 .header("x-amz-date", s.timestamp())
                 .header("x-amz-content-sha256", signedPayloadHash);
+        extra.forEach(b::header);
         b.method(method, body == null ? BodyPublishers.noBody() : BodyPublishers.ofByteArray(body));
         return http.send(b.build(), BodyHandlers.ofString());
     }
@@ -130,7 +151,9 @@ final class SigV4TestClient {
     HttpResponse<String> putChunked(String path, String streamingType, byte[][] chunks, int tamperIndex,
                                     boolean omitFinal, String trailerLine, boolean signTrailer,
                                     boolean announceTrailer) throws Exception {
-        Signed s = sign("PUT", path, null, streamingType, Instant.now());
+        Map<String, String> extra = trailerLine != null && announceTrailer
+                ? Map.of("x-amz-trailer", trailerLine.substring(0, trailerLine.indexOf(':'))) : Map.of();
+        Signed s = sign("PUT", path, null, streamingType, Instant.now(), extra);
         byte[] body = chunkedBody(s, chunks, tamperIndex, omitFinal, trailerLine, signTrailer);
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
                 .header("Authorization", s.authorization())

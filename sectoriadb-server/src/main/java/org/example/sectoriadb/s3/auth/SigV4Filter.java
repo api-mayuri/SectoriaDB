@@ -24,7 +24,12 @@ import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Enumeration;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 
 /**
  * Validates AWS Signature Version 4 on every S3 API request.
@@ -59,6 +64,14 @@ public class SigV4Filter extends OncePerRequestFilter {
     private final String region;
     private final boolean allowOpenSetup;
     private final boolean allowUnsignedPayload;
+    private final boolean enforceRegion;
+    private final boolean requireSignedHeaders;
+    private final int maxInflightWrites;
+    private final int maxInflightReads;
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.Semaphore> writeSlots =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.Semaphore> readSlots =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     public SigV4Filter(
             CredentialService credentialService,
@@ -66,13 +79,21 @@ public class SigV4Filter extends OncePerRequestFilter {
             @Value("${sectoriadb.s3.auth.enabled:true}") boolean authEnabled,
             @Value("${sectoriadb.s3.region:us-east-1}") String region,
             @Value("${sectoriadb.s3.auth.allow-open-setup:false}") boolean allowOpenSetup,
-            @Value("${sectoriadb.s3.auth.allow-unsigned-payload:true}") boolean allowUnsignedPayload) {
+            @Value("${sectoriadb.s3.auth.allow-unsigned-payload:true}") boolean allowUnsignedPayload,
+            @Value("${sectoriadb.s3.auth.enforce-region:true}") boolean enforceRegion,
+            @Value("${sectoriadb.s3.auth.require-signed-headers:true}") boolean requireSignedHeaders,
+            @Value("${sectoriadb.s3.limits.max-inflight-writes-per-key:64}") int maxInflightWrites,
+            @Value("${sectoriadb.s3.limits.max-inflight-reads-per-key:128}") int maxInflightReads) {
         this.credentialService = credentialService;
         this.accessControlService = accessControlService;
         this.authEnabled = authEnabled;
         this.region = region;
         this.allowOpenSetup = allowOpenSetup;
         this.allowUnsignedPayload = allowUnsignedPayload;
+        this.enforceRegion = enforceRegion;
+        this.requireSignedHeaders = requireSignedHeaders;
+        this.maxInflightWrites = maxInflightWrites;
+        this.maxInflightReads = maxInflightReads;
     }
 
     @Override
@@ -80,6 +101,7 @@ public class SigV4Filter extends OncePerRequestFilter {
                                     HttpServletResponse response,
                                     FilterChain chain) throws ServletException, IOException {
         if (!authEnabled) {
+            request.setAttribute(S3Support.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
             chain.doFilter(request, response);
             return;
         }
@@ -87,6 +109,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         // No credentials configured: deny by default (S4). Open setup mode is an explicit opt-in.
         if (credentialService.listAll().isEmpty()) {
             if (allowOpenSetup) {
+                request.setAttribute(S3Support.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
                 chain.doFilter(request, response);
                 return;
             }
@@ -101,12 +124,21 @@ public class SigV4Filter extends OncePerRequestFilter {
 
         String authHeader   = request.getHeader("Authorization");
         String xAmzDate     = request.getHeader("x-amz-date");
-        String queryString  = request.getQueryString();
 
-        // ── Presigned URL (query-parameter auth) ─────────────────────────────
-        if (queryString != null && queryString.contains("X-Amz-Signature")) {
-            if (!verifyPresigned(request, response)) return;
-            chain.doFilter(request, response);
+        // ── Presigned URL (query-parameter auth): detected by the parameter NAME, not by a substring ──
+        boolean presigned;
+        try {
+            presigned = hasQueryParam(request.getQueryString(), "X-Amz-Signature");
+        } catch (IllegalArgumentException e) {
+            request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, AuthFailure.MALFORMED_HEADER);
+            sendError(request, response, 400, "InvalidArgument", "The query string is malformed.");
+            return;
+        }
+        if (presigned) {
+            String key = verifyPresigned(request, response);
+            if (key == null) return;
+            request.setAttribute(S3Support.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
+            proceed(request, response, chain, key);
             return;
         }
 
@@ -134,7 +166,45 @@ public class SigV4Filter extends OncePerRequestFilter {
             return;
         }
 
-        chain.doFilter(verified, response);
+        request.setAttribute(S3Support.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
+        proceed(verified, response, chain, (String) request.getAttribute(ACCESS_KEY_ATTRIBUTE));
+    }
+
+    private static final String ACCESS_KEY_ATTRIBUTE = "sectoriadb.s3.accessKeyId";
+
+    /** Runs the request under the per-access-key in-flight limit: one valid key cannot occupy every worker thread. */
+    private void proceed(HttpServletRequest request, HttpServletResponse response, FilterChain chain, String accessKey)
+            throws IOException, ServletException {
+        String method = request.getMethod();
+        boolean write = "PUT".equals(method) || "POST".equals(method);
+        int limit = write ? maxInflightWrites : maxInflightReads;
+        if (limit <= 0 || accessKey == null) {
+            chain.doFilter(request, response);
+            return;
+        }
+        var slots = (write ? writeSlots : readSlots)
+                .computeIfAbsent(accessKey, k -> new java.util.concurrent.Semaphore(limit));
+        if (!slots.tryAcquire()) {
+            response.setHeader("Retry-After", "1");
+            sendError(request, response, 503, "SlowDown",
+                    "Too many concurrent requests for this access key. Please reduce your request rate.");
+            return;
+        }
+        try {
+            chain.doFilter(request, response);
+        } finally {
+            slots.release();
+        }
+    }
+
+    /** True when the raw query string has a parameter with exactly this (decoded) name. */
+    static boolean hasQueryParam(String queryString, String name) {
+        if (queryString == null || queryString.isEmpty()) return false;
+        for (String pair : queryString.split("&")) {
+            int eq = pair.indexOf('=');
+            if (S3Support.decodeQueryComponent(eq < 0 ? pair : pair.substring(0, eq)).equals(name)) return true;
+        }
+        return false;
     }
 
     // ── Header-based auth ─────────────────────────────────────────────────────
@@ -167,6 +237,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "AuthorizationHeaderMalformed",
                     "The authorization header is malformed; the credential scope must end with s3/aws4_request.");
         }
+        requireRegion(regionFromCred, "AuthorizationHeaderMalformed");
 
         // Find secret key
         CredentialEntity cred = requireEnabledKey(accessKeyId);
@@ -174,22 +245,13 @@ public class SigV4Filter extends OncePerRequestFilter {
         // Validate timestamp
         String timestamp = resolveTimestamp(request, xAmzDate);
         checkTimestamp(timestamp);
-        if (!timestamp.startsWith(dateStr)) {
+        if (timestamp.length() != 16 || !timestamp.substring(0, 8).equals(dateStr)) {
             throw new AuthException(AuthFailure.SIGNATURE_MISMATCH, 403, "SignatureDoesNotMatch",
                     "The credential date does not match the request date.");
         }
 
         // Collect signed headers
-        List<String> headerNames = Arrays.asList(signedHeadersStr.split(";"));
-        Map<String, String> signedHeaders = new TreeMap<>();
-        for (String h : headerNames) {
-            String val = request.getHeader(h);
-            if (val == null && h.equals("host")) {
-                val = request.getServerName() + (request.getServerPort() != 80 && request.getServerPort() != 443
-                        ? ":" + request.getServerPort() : "");
-            }
-            signedHeaders.put(h.toLowerCase(), val != null ? val : "");
-        }
+        Map<String, String> signedHeaders = collectSignedHeaders(request, signedHeadersStr, true);
 
         // Payload hash
         String payloadHash = resolvePayloadHash(request);
@@ -209,15 +271,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         }
 
         // Build canonical request
-        String canonicalRequest = SigV4Utils.buildCanonicalRequest(
-                request.getMethod(),
-                request.getRequestURI(),
-                request.getQueryString(),
-                signedHeaders,
-                payloadHash);
-
-        String canonicalRequestHash = SigV4Utils.sha256Hex(
-                canonicalRequest.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String canonicalRequestHash = canonicalRequestHash(request, signedHeaders, payloadHash);
 
         String credentialScope = SigV4Utils.credentialScope(dateStr, regionFromCred, service);
         String stringToSign = SigV4Utils.buildStringToSign(timestamp, credentialScope, canonicalRequestHash);
@@ -231,6 +285,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             throw new AuthException(AuthFailure.SIGNATURE_MISMATCH, 403, "SignatureDoesNotMatch",
                     "The request signature we calculated does not match the signature you provided.");
         }
+        request.setAttribute(ACCESS_KEY_ATTRIBUTE, accessKeyId);
 
         // The request headers are authentic; now bind the body to what was signed.
         if (STREAMING_SIGNED.equals(payloadHash) || STREAMING_SIGNED_TRAILER.equals(payloadHash)) {
@@ -247,20 +302,20 @@ public class SigV4Filter extends OncePerRequestFilter {
 
     // ── Presigned URL auth ────────────────────────────────────────────────────
 
-    private boolean verifyPresigned(HttpServletRequest request, HttpServletResponse response)
+    /** Returns the access key id of the verified request, or null after an error response was written. */
+    private String verifyPresigned(HttpServletRequest request, HttpServletResponse response)
             throws IOException {
         try {
-            verifyPresignedInternal(request);
-            return true;
+            return verifyPresignedInternal(request);
         } catch (AuthException e) {
             log.warn("Presigned URL auth failed: {}", sanitize(e.getMessage()));
             request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, e.reason);
             sendError(request, response, e.httpStatus, e.errorCode, e.getMessage());
-            return false;
+            return null;
         }
     }
 
-    private void verifyPresignedInternal(HttpServletRequest request) throws AuthException {
+    private String verifyPresignedInternal(HttpServletRequest request) throws AuthException {
         Map<String, String> params = parseQueryParams(request.getQueryString());
 
         String algorithm  = params.getOrDefault("X-Amz-Algorithm", "");
@@ -271,7 +326,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         String signature  = params.getOrDefault("X-Amz-Signature", "");
 
         if (!SigV4Utils.ALGORITHM.equals(algorithm)) {
-            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Unsupported algorithm: " + algorithm);
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Unsupported algorithm: " + sanitize(algorithm));
         }
 
         String[] credParts = credential.split("/", 5);
@@ -287,12 +342,13 @@ public class SigV4Filter extends OncePerRequestFilter {
             throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "AuthorizationQueryParametersError",
                     "The credential scope must end with s3/aws4_request.");
         }
+        requireRegion(regionFromCred, "AuthorizationQueryParametersError");
 
         CredentialEntity cred = requireEnabledKey(accessKeyId);
 
         // Check expiry
         checkPresignedExpiry(xAmzDate, expires);
-        if (!xAmzDate.startsWith(dateStr)) {
+        if (xAmzDate.length() != 16 || !xAmzDate.substring(0, 8).equals(dateStr)) {
             throw new AuthException(AuthFailure.SIGNATURE_MISMATCH, 403, "SignatureDoesNotMatch",
                     "The credential date does not match X-Amz-Date.");
         }
@@ -301,25 +357,9 @@ public class SigV4Filter extends OncePerRequestFilter {
         String payloadHash = SigV4Utils.UNSIGNED_PAYLOAD;
 
         // Signed headers for presigned: usually just "host"
-        Map<String, String> signedHeaders = new TreeMap<>();
-        for (String h : signedHdrs.split(";")) {
-            String val = request.getHeader(h);
-            if (val == null && h.equals("host")) {
-                val = request.getServerName() + (request.getServerPort() != 80 && request.getServerPort() != 443
-                        ? ":" + request.getServerPort() : "");
-            }
-            signedHeaders.put(h.toLowerCase(), val != null ? val : "");
-        }
+        Map<String, String> signedHeaders = collectSignedHeaders(request, signedHdrs, false);
 
-        String canonicalRequest = SigV4Utils.buildCanonicalRequest(
-                request.getMethod(),
-                request.getRequestURI(),
-                request.getQueryString(),
-                signedHeaders,
-                payloadHash);
-
-        String canonicalRequestHash = SigV4Utils.sha256Hex(
-                canonicalRequest.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String canonicalRequestHash = canonicalRequestHash(request, signedHeaders, payloadHash);
 
         String credentialScope = SigV4Utils.credentialScope(dateStr, regionFromCred, service);
         String stringToSign = SigV4Utils.buildStringToSign(xAmzDate, credentialScope, canonicalRequestHash);
@@ -330,6 +370,79 @@ public class SigV4Filter extends OncePerRequestFilter {
         if (!constantTimeEquals(signature, expectedSig)) {
             throw new AuthException(AuthFailure.SIGNATURE_MISMATCH, 403, "SignatureDoesNotMatch",
                     "Presigned URL signature does not match.");
+        }
+        return accessKeyId;
+    }
+
+    // ── Shared verification steps ─────────────────────────────────────────────
+
+    private void requireRegion(String regionFromCred, String errorCode) throws AuthException {
+        if (enforceRegion && !region.equals(regionFromCred)) {
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, errorCode,
+                    "The authorization credential is for region '" + sanitize(regionFromCred)
+                    + "' but this server is configured for '" + region + "' (sectoriadb.s3.region).");
+        }
+    }
+
+    /**
+     * Collects the values of the signed headers. Repeated header lines are joined with "," as the spec says. The
+     * signature must cover {@code host}, and (unless disabled) every {@code x-amz-*} header of the request:
+     * otherwise an on-path party could change the ACL, copy source, metadata, checksum headers or swap the body hash
+     * (x-amz-content-sha256) without breaking the signature.
+     */
+    private Map<String, String> collectSignedHeaders(HttpServletRequest request, String signedHeadersStr,
+                                                     boolean headerAuth) throws AuthException {
+        if (signedHeadersStr == null || signedHeadersStr.isBlank()) {
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "AuthorizationHeaderMalformed",
+                    "The SignedHeaders list is empty.");
+        }
+        Map<String, String> signedHeaders = new TreeMap<>();
+        for (String h : signedHeadersStr.split(";")) {
+            String name = h.toLowerCase(java.util.Locale.ROOT);
+            String val = joinedHeader(request, h);
+            if (val == null && name.equals("host")) {
+                val = request.getServerName() + (request.getServerPort() != 80 && request.getServerPort() != 443
+                        ? ":" + request.getServerPort() : "");
+            }
+            signedHeaders.put(name, val != null ? val : "");
+        }
+        if (requireSignedHeaders) {
+            List<String> missing = new ArrayList<>();
+            if (!signedHeaders.containsKey("host")) missing.add("host");
+            for (Enumeration<String> names = request.getHeaderNames(); names != null && names.hasMoreElements(); ) {
+                String n = names.nextElement().toLowerCase(java.util.Locale.ROOT);
+                if (n.startsWith("x-amz-") && !signedHeaders.containsKey(n)) missing.add(n);
+            }
+            if (!missing.isEmpty()) {
+                throw new AuthException(AuthFailure.MALFORMED_HEADER, 403, "AccessDenied",
+                        "There were headers present in the request which were not signed: " + sanitize(String.join(", ", missing)));
+            }
+        }
+        return signedHeaders;
+    }
+
+    private static String joinedHeader(HttpServletRequest request, String name) {
+        Enumeration<String> values = request.getHeaders(name);
+        if (values == null || !values.hasMoreElements()) return null;
+        List<String> all = new ArrayList<>();
+        while (values.hasMoreElements()) all.add(values.nextElement().trim());
+        return String.join(",", all);
+    }
+
+    /**
+     * SHA-256 of the canonical request as the CLIENT computed it. The container decodes header bytes as ISO-8859-1, so
+     * a UTF-8 value such as x-amz-meta-name: "e-acute" arrives as two Latin-1 chars; every other part of the canonical
+     * request is ASCII, so hashing the Latin-1 bytes gives back exactly the bytes the client signed (re-encoding as
+     * UTF-8 would double-encode them and fail the signature).
+     */
+    private String canonicalRequestHash(HttpServletRequest request, Map<String, String> signedHeaders,
+                                        String payloadHash) throws AuthException {
+        try {
+            String canonicalRequest = SigV4Utils.buildCanonicalRequest(
+                    request.getMethod(), request.getRequestURI(), request.getQueryString(), signedHeaders, payloadHash);
+            return SigV4Utils.sha256Hex(canonicalRequest.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+        } catch (IllegalArgumentException e) {
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "The query string is malformed.");
         }
     }
 
@@ -363,15 +476,24 @@ public class SigV4Filter extends OncePerRequestFilter {
         return result;
     }
 
-    private Map<String, String> parseQueryParams(String queryString) {
+    private Map<String, String> parseQueryParams(String queryString) throws AuthException {
         Map<String, String> map = new LinkedHashMap<>();
         if (queryString == null) return map;
         for (String pair : queryString.split("&")) {
             int eq = pair.indexOf('=');
             if (eq > 0) {
-                String key = java.net.URLDecoder.decode(pair.substring(0, eq), java.nio.charset.StandardCharsets.UTF_8);
-                String val = java.net.URLDecoder.decode(pair.substring(eq + 1), java.nio.charset.StandardCharsets.UTF_8);
-                map.put(key, val);
+                String key;
+                String val;
+                try {
+                    key = S3Support.decodeQueryComponent(pair.substring(0, eq));
+                    val = S3Support.decodeQueryComponent(pair.substring(eq + 1));
+                } catch (IllegalArgumentException e) {
+                    throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "The query string is malformed.");
+                }
+                if (map.put(key, val) != null && key.startsWith("X-Amz-")) {
+                    throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "AuthorizationQueryParametersError",
+                            "Query parameter " + sanitize(key) + " must appear only once.");
+                }
             }
         }
         return map;
@@ -406,7 +528,7 @@ public class SigV4Filter extends OncePerRequestFilter {
                         "The difference between the request time and the current time is too large.");
             }
         } catch (java.time.format.DateTimeParseException e) {
-            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Cannot parse timestamp: " + timestamp);
+            throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Cannot parse timestamp: " + sanitize(timestamp));
         }
     }
 
@@ -509,15 +631,10 @@ public class SigV4Filter extends OncePerRequestFilter {
         try (PrintWriter w = response.getWriter()) {
             w.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
             w.write("<Error><Code>" + code + "</Code>");
-            w.write("<Message>" + escapeXml(message) + "</Message>");
+            w.write("<Message>" + S3Support.xmlEscape(message) + "</Message>");
             w.write("<RequestId>" + requestId + "</RequestId>");
             w.write("</Error>");
         }
-    }
-
-    private static String escapeXml(String s) {
-        if (s == null) return "";
-        return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
 
     // ── Inner exception ───────────────────────────────────────────────────────
