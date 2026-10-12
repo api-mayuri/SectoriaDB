@@ -16,33 +16,44 @@ services:
       SECTORIADB_S3_AUTH_ALLOW_OPEN_SETUP: ${SECTORIADB_S3_AUTH_ALLOW_OPEN_SETUP:-false}
       SECTORIADB_S3_AUTH_ALLOW_UNSIGNED_PAYLOAD: ${SECTORIADB_S3_AUTH_ALLOW_UNSIGNED_PAYLOAD:-true}
       SECTORIADB_S3_REGION: ${SECTORIADB_S3_REGION:-us-east-1}
-      SECTORIADB_S3_ACCESS_KEY: ${SECTORIADB_S3_ACCESS_KEY}
-      SECTORIADB_S3_SECRET_KEY: ${SECTORIADB_S3_SECRET_KEY}
-      SECTORIADB_S3_CREDENTIALS: ${SECTORIADB_S3_CREDENTIALS}
+      SECTORIADB_S3_ACCESS_KEY: ${SECTORIADB_S3_ACCESS_KEY:-}
+      SECTORIADB_S3_SECRET_KEY: ${SECTORIADB_S3_SECRET_KEY:-}
+      SECTORIADB_S3_CREDENTIALS: ${SECTORIADB_S3_CREDENTIALS:-}
+      SECTORIADB_CACHE_MAX_RESIDENT_TABLES: ${SECTORIADB_CACHE_MAX_RESIDENT_TABLES:-64}
       SERVER_PORT: ${SERVER_PORT:-8080}
       MANAGEMENT_SERVER_PORT: ${MANAGEMENT_SERVER_PORT:-9464}
-      JAVA_OPTS: ${JAVA_OPTS:--Xmx512m -XX:+UseG1GC}
+      JAVA_OPTS: ${JAVA_OPTS:--XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError -XX:+UseG1GC}
       SPRING_SHELL_INTERACTIVE_ENABLED: ${SPRING_SHELL_INTERACTIVE_ENABLED:-true}
     volumes:
       - sectoriadb-meta:/data/meta
       - sectoriadb-data:/data/storage
     restart: unless-stopped
+    # finish running requests on `docker stop` (server.shutdown=graceful, 30 s)
+    stop_grace_period: 40s
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -T 4 -O /dev/null http://127.0.0.1:$${MANAGEMENT_SERVER_PORT:-9464}/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
 
   s3manager:
-    image: cloudlena/s3manager:latest
+    image: cloudlena/s3manager:v0.5.0
     container_name: s3manager
     ports:
-      - "8081:8080"
+      # loopback only: the manager can delete objects with the S3 keys below
+      - "127.0.0.1:8081:8080"
     environment:
       ENDPOINT: sectoriadb:8080
       REGION: ${SECTORIADB_S3_REGION:-us-east-1}
-      ACCESS_KEY_ID: ${SECTORIADB_S3_ACCESS_KEY}
-      SECRET_ACCESS_KEY: ${SECTORIADB_S3_SECRET_KEY}
+      ACCESS_KEY_ID: ${SECTORIADB_S3_ACCESS_KEY:-}
+      SECRET_ACCESS_KEY: ${SECTORIADB_S3_SECRET_KEY:-}
       USE_SSL: "false"
       SIGNATURE_TYPE: "V4"
       ALLOW_DELETE: "true"
     depends_on:
-      - sectoriadb
+      sectoriadb:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

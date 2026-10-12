@@ -4,6 +4,12 @@
 .vscode/
 .claude/
 
+# Not needed to build the image (bench alone is ~90 MB with its Python venv)
+bench/
+docs/
+**/work/
+.env
+
 # Runtime data (never bake into image)
 sectoriadb-meta/
 sectoriadb-data/
@@ -16,9 +22,6 @@ output/
 
 # Logs
 *.log
-
-# Env secrets
-.env
 
 # Docker files themselves (avoid infinite context)
 docker-compose.override.yml

@@ -84,4 +84,12 @@ class VerifyCommandsTest {
         assertTrue(Application.isCliMode(new String[]{"verify", "--id", "x"}));
         assertFalse(Application.isCliMode(new String[]{"--server.port=1"}));
     }
+
+    /** Only the key commands work next to a running server; the metastore commands are offline-only. */
+    @Test
+    void onlyKeyCommandsAreOnline() {
+        assertEquals(java.util.Set.of("mk-key", "keys", "rm-key", "enable-key", "disable-key"), Application.ONLINE_COMMANDS);
+        assertEquals(java.util.Set.of("bucket-acl", "object-acl", "public-list", "verify-all", "verify"), Application.OFFLINE_ONLY_COMMANDS);
+        for (String c : Application.OFFLINE_ONLY_COMMANDS) assertFalse(Application.ONLINE_COMMANDS.contains(c));
+    }
 }

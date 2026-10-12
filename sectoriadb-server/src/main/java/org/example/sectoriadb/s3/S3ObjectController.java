@@ -443,7 +443,7 @@ public class S3ObjectController {
                 ? (contentType != null ? contentType : "application/octet-stream")
                 : srcEntity.getContentType();
 
-        Path tmp = Files.createTempFile("sectoriadb-copy-", ".tmp");
+        Path tmp = Files.createTempFile(fileService.uploadTmpDir(), "sectoriadb-copy-", ".tmp");
         try {
             try (OutputStream out = Files.newOutputStream(tmp)) {
                 fileService.streamToOutput(srcEntity, out);

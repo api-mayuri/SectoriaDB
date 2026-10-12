@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.service.CredentialService;
+import org.example.sectoriadb.service.FileStorageService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationRunner;
@@ -27,10 +28,11 @@ public class Application {
         SpringApplication app = new SpringApplication(Application.class);
 
         // CLI mode: first non-option arg is a credential command (mk-key, keys, ...).
-        // System properties win over application.properties, so no web server is started
-        // and the command can run next to an already-running server (shared credentials.json).
+        // System properties win over application.properties, so no web server is started.
+        // Key commands can run next to an already-running server (shared credentials.json); the others need it stopped.
         boolean cli = isCliMode(args);
         if (cli) {
+            failFastIfStoreIsHeld(args);
             System.setProperty("spring.main.web-application-type", "none");
             System.setProperty("spring.main.banner-mode", "off");
             System.setProperty("spring.shell.interactive.enabled", "false");
@@ -50,20 +52,86 @@ public class Application {
         }
     }
 
-    private static final java.util.Set<String> CLI_COMMANDS = java.util.Set.of(
-            "mk-key", "keys", "rm-key", "enable-key", "disable-key",
-            "bucket-acl", "object-acl", "public-list",
-            // offline integrity check: `java -jar sectoriadb.jar verify-all [--pool NAME]` with the server stopped
-            // (the metastore is single-process); prints "RESULT: OK" or "RESULT: FAILED (...)"
-            "verify-all", "verify");
+    /**
+     * Commands that work next to a running server: they only touch credentials.json (and never open the metastore).
+     */
+    static final java.util.Set<String> ONLINE_COMMANDS = java.util.Set.of(
+            "mk-key", "keys", "rm-key", "enable-key", "disable-key");
+
+    /**
+     * Commands that need the single-process metastore: they work only while the server is STOPPED (or from the server's
+     * own interactive shell). Started next to a running server they fail at once with a clear message instead of a
+     * stack trace deep in the context start-up.
+     */
+    static final java.util.Set<String> OFFLINE_ONLY_COMMANDS = java.util.Set.of(
+            "bucket-acl", "object-acl", "public-list", "verify-all", "verify");
 
     static boolean isCliMode(String[] args) {
+        String command = firstCommand(args);
+        return command != null && (ONLINE_COMMANDS.contains(command) || OFFLINE_ONLY_COMMANDS.contains(command));
+    }
+
+    static String firstCommand(String[] args) {
         for (String arg : args) {
-            if (!arg.startsWith("-")) {
-                return CLI_COMMANDS.contains(arg);
+            if (!arg.startsWith("-")) return arg;
+        }
+        return null;
+    }
+
+    /** Exits with a one-line explanation when an offline-only command is started while a server holds the metastore. */
+    private static void failFastIfStoreIsHeld(String[] args) {
+        String command = firstCommand(args);
+        if (command == null || !OFFLINE_ONLY_COMMANDS.contains(command)) return;
+        String metaDir = System.getProperty("sectoriadb.meta-dir");
+        if (metaDir == null) {
+            for (String arg : args) {
+                if (arg.startsWith("--sectoriadb.meta-dir=")) metaDir = arg.substring("--sectoriadb.meta-dir=".length());
             }
         }
-        return false;
+        if (metaDir == null) metaDir = System.getenv("SECTORIADB_META_DIR");
+        if (metaDir == null) metaDir = "./sectoriadb-meta";
+        java.nio.file.Path file = java.nio.file.Path.of(metaDir).resolve("sectoria.db");
+        if (!java.nio.file.Files.exists(file)) return;
+        try (var ch = java.nio.channels.FileChannel.open(file, java.nio.file.StandardOpenOption.READ,
+                java.nio.file.StandardOpenOption.WRITE)) {
+            java.nio.channels.FileLock lock = null;
+            try {
+                lock = ch.tryLock();
+            } catch (java.nio.channels.OverlappingFileLockException e) {
+                // held inside this JVM: treated as held
+            }
+            if (lock == null) {
+                System.err.println("Error: '" + command + "' needs exclusive access to the metadata store " + file.toAbsolutePath()
+                        + ", which the running server holds.\nStop the server first, or run the command in the server's interactive shell"
+                        + " (docker attach sectoriadb). Only the key commands (mk-key, keys, rm-key, enable-key, disable-key)"
+                        + " work next to a running server.");
+                System.exit(2);
+            }
+            lock.release();
+        } catch (java.io.IOException e) {
+            // let the normal start-up report the problem
+        }
+    }
+
+    /**
+     * Removes upload spool files left behind by a crash or kill -9 (nothing of this process can be using them yet).
+     * Not run in CLI mode: a command next to a running server must not delete that server's live uploads.
+     */
+    @Bean
+    public ApplicationRunner cleanUploadSpool(FileStorageService fileService) {
+        return args -> {
+            if (System.getProperty("sectoriadb.metastore.lazy") != null) return;
+            java.nio.file.Path dir = fileService.uploadTmpDir();
+            int removed = 0;
+            try (var files = java.nio.file.Files.newDirectoryStream(dir, "sectoriadb-{upload,copy}-*.tmp")) {
+                for (java.nio.file.Path f : files) {
+                    if (java.nio.file.Files.deleteIfExists(f)) removed++;
+                }
+            } catch (java.io.IOException e) {
+                log.warn("Could not clean the upload spool directory {}: {}", dir, e.toString());
+            }
+            if (removed > 0) log.info("Removed {} stale upload spool file(s) from {}", removed, dir);
+        };
     }
 
     /**

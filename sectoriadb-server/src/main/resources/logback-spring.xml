@@ -2,6 +2,9 @@
 <configuration>
     <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
 
+    <!-- The log lives next to the metadata (sectoriadb.meta-dir), i.e. on the volume in Docker -->
+    <springProperty scope="context" name="LOG_DIR" source="sectoriadb.meta-dir" defaultValue="./sectoriadb-meta"/>
+
     <!-- Console: concise format for shell readability -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
@@ -11,9 +14,9 @@
 
     <!-- Rolling file: full format, daily roll, 30 days retention, 500 MB cap -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>./sectoriadb-meta/sectoriadb.log</file>
+        <file>${LOG_DIR}/sectoriadb.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
-            <fileNamePattern>./sectoriadb-meta/sectoriadb.%d{yyyy-MM-dd}.log</fileNamePattern>
+            <fileNamePattern>${LOG_DIR}/sectoriadb.%d{yyyy-MM-dd}.log</fileNamePattern>
             <maxHistory>30</maxHistory>
             <totalSizeCap>500MB</totalSizeCap>
         </rollingPolicy>

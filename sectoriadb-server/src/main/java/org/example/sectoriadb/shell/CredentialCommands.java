@@ -74,7 +74,7 @@ public class CredentialCommands {
         List<CredentialEntity> list = credentialService.listAll();
         if (list.isEmpty()) {
             return "No access keys. Use 'mk-key' to create one.\n" +
-                   "Note: when no keys exist, auth is disabled and all requests are allowed.";
+                   "Note: while no keys exist every S3 request is denied (unless sectoriadb.s3.auth.allow-open-setup=true).";
         }
         StringBuilder sb = new StringBuilder();
         if (secret) {

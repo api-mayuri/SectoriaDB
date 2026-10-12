@@ -120,7 +120,7 @@ public class StatusCommands {
     public String logsTail(
             @ShellOption(defaultValue = "50", help = "Number of lines to show") int n) throws IOException {
         int lines = n;
-        Path logFile = Path.of("./sectoriadb-meta/sectoriadb.log");
+        Path logFile = Path.of(props.getMetaDir()).resolve("sectoriadb.log");   // same directory logback writes to
         if (!Files.exists(logFile)) {
             return "Log file not found: " + logFile.toAbsolutePath() +
                    "\nThe log file is created on first activity.";
