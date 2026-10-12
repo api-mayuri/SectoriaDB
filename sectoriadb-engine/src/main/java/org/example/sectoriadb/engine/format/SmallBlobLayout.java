@@ -88,10 +88,6 @@ public final class SmallBlobLayout {
         return (RECORD_HEADER_SIZE + (long) dataLength + ALIGNMENT - 1) / ALIGNMENT * ALIGNMENT;
     }
 
-    public static long alignUp(long v) {
-        return (v + ALIGNMENT - 1) / ALIGNMENT * ALIGNMENT;
-    }
-
     // ── File header ────────────────────────────────────────────────────────────
 
     public static ByteBuffer encodeHeader(long createdMillis) {

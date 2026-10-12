@@ -2,7 +2,6 @@ package org.example.sectoriadb.storage;
 
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.engine.format.BlobLayout;
-import org.example.sectoriadb.engine.io.BlobFile;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.engine.placement.RendezvousPlacement;
 import org.example.sectoriadb.catalog.BlobKind;
@@ -415,12 +414,6 @@ public class BlobService {
                 Map.of("poolId", entity.getPoolId()),
                 System.currentTimeMillis() - t0);
         log.info("Blob deleted: id={} path={}", blobId, entity.getFilePath());
-    }
-
-    // ── Static helpers (also used by ResizeService) ───────────────────────────
-
-    public static BlobFile toEngineBlob(BlobFileEntity entity) {
-        return new BlobFile(entity.getId(), Path.of(entity.getFilePath()), entity.getTotalBytes());
     }
 
     private static String humanSize(long bytes) {

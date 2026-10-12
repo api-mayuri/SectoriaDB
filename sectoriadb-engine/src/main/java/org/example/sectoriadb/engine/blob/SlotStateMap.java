@@ -17,13 +17,4 @@ public enum SlotStateMap {
     public byte getValue() {
         return value;
     }
-
-    private static final SlotStateMap[] CACHE = values();
-
-    public static SlotStateMap fromValue(int value) {
-        if (value < 0 || value >= CACHE.length) {
-            throw new IllegalArgumentException("Unknown slot state value: " + value);
-        }
-        return CACHE[value];
-    }
 }

@@ -59,10 +59,6 @@ class ShellTable {
                "─".repeat(100) + "\n";
     }
 
-    static String kindLabel(ManifestEntity m) {
-        return m.getStorageKind() == null ? "CHUNKED" : m.getStorageKind().name();
-    }
-
     static String fileTableRow(ManifestEntity m) {
         return String.format("%-36s  %-40s  %8d  %12s%n",
                 m.getId(), truncate(m.getSourceFileName(), 40),

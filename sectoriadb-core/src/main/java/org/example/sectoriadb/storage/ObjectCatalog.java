@@ -29,23 +29,11 @@ public class ObjectCatalog {
         return manifestRepo.findCurrent(bucket, key);
     }
 
-    /**
-     * Read-modify-write of the current version of an object in one transaction (ACL changes).
-     */
-    public java.util.Optional<ManifestEntity> updateObject(String bucket, String key,
-                                                           java.util.function.Consumer<ManifestEntity> mutator) {
-        return manifestRepo.updateCurrent(bucket, key, mutator);
-    }
-
     // ── List / Info ───────────────────────────────────────────────────────────
 
     /** Every live manifest (administrative full scan: shell {@code ls}, {@code verify-all}). */
     public List<ManifestEntity> listAll() {
         return manifestRepo.findAllLive();
-    }
-
-    public List<ManifestEntity> listByBlobFileId(String blobFileId) {
-        return manifestRepo.findByBlobId(blobFileId, true);
     }
 
     public ManifestEntity getActiveManifest(String id) {

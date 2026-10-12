@@ -112,10 +112,6 @@ public enum ChecksumAlgorithm {
         return ByteBuffer.allocate(4).putInt(crc).array();
     }
 
-    public static int crc32FromBytes(byte[] b) {
-        return ByteBuffer.wrap(b).getInt();
-    }
-
     private static final class ChecksumBased implements ChecksumCalculator {
         private final Checksum checksum;
         private final int length;

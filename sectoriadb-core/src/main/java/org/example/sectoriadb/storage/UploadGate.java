@@ -4,7 +4,6 @@ import org.example.sectoriadb.catalog.UploadHold;
 
 import java.util.ArrayList;
 import java.util.HashSet;
-import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -97,16 +96,9 @@ public final class UploadGate {
     /** The exclusive side, held by the collector while it frees a batch of stray copies. Closing lets uploads in again. */
     public final class Sweep implements AutoCloseable {
         private final PoolGate gate;
-        private final int revoked;
 
-        private Sweep(PoolGate gate, int revoked) {
+        private Sweep(PoolGate gate) {
             this.gate = gate;
-            this.revoked = revoked;
-        }
-
-        /** Holds that were revoked (older than the time-to-live) to get this gate. */
-        public int revokedHolds() {
-            return revoked;
         }
 
         @Override
@@ -152,7 +144,6 @@ public final class UploadGate {
     public Sweep tryBegin(String poolId, long waitMillis, long ttlMillis) {
         PoolGate g = gate(poolId);
         long deadline = System.nanoTime() + waitMillis * 1_000_000L;
-        int revoked = 0;
         synchronized (g) {
             if (g.sweeping) return null;
             g.sweeping = true;
@@ -163,10 +154,9 @@ public final class UploadGate {
                         if (h.state == ACTIVE && now - h.startedNanos > ttlMillis * 1_000_000L) {
                             h.state = REVOKED;
                             g.holds.remove(h);
-                            revoked++;
                         }
                     }
-                    if (g.holds.isEmpty()) return new Sweep(g, revoked);
+                    if (g.holds.isEmpty()) return new Sweep(g);
                     long left = deadline - now;
                     if (left <= 0) break;
                     g.wait(Math.max(1, left / 1_000_000L));
@@ -198,16 +188,5 @@ public final class UploadGate {
             }
         }
         return n;
-    }
-
-    /** Pools that have uploads in flight (diagnostics). */
-    public List<String> poolsInFlight() {
-        List<String> out = new ArrayList<>();
-        pools.forEach((id, g) -> {
-            synchronized (g) {
-                if (!g.holds.isEmpty()) out.add(id);
-            }
-        });
-        return out;
     }
 }
