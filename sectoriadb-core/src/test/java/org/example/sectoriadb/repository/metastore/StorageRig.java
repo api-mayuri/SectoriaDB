@@ -90,7 +90,7 @@ public final class StorageRig implements AutoCloseable {
         smallCache = new SmallBlobCache(props);
         opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         blobService = new BlobService(blobs, cache, smallCache, props, opLog);
-        poolService = new PoolService(pools, blobs, opLog, props, cache, smallCache);
+        poolService = new PoolService(pools, blobs, opLog, props, cache, smallCache, blobService);
         chunks = new MetaStoreChunkRepository(stores);
         chunkStore = new ChunkStore(chunks, blobService, cache);
         files = new FileStorageService(manifests, blobService, cache, smallCache, chunkStore, opLog, props);

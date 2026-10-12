@@ -14,14 +14,8 @@ import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PlacedChunk;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.model.UploadHold;
-import org.example.sectoriadb.model.FileManifest;
 import org.example.sectoriadb.repository.ManifestRepository;
-import org.example.sectoriadb.service.impl.BlobFileWriteService;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
-import org.example.sectoriadb.service.impl.ChunkNotFoundException;
-import org.example.sectoriadb.service.impl.DefaultChunkingService;
 import org.example.sectoriadb.service.impl.ObjectCorruptedException;
-import org.example.sectoriadb.tools.XxHash64BytesHasher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -199,8 +193,9 @@ public class FileStorageService {
         if (blobId != null) details.put("blobFileId", blobId);
         if (entity.getStorageKind() == StorageKind.SMALL) details.put("offset", entity.getSmallOffset());
         if (entity.getStorageKind() == StorageKind.CHUNKED) {
+            // a compact summary only: the chunk keys live in the manifest, a per-PUT key list made the log grow by
+            // about 1 MB per GiB stored and was written under the log's global write lock
             details.put("totalChunks", entity.getTotalChunks());
-            details.put("chunkKeys", entity.parseChunkKeys().stream().map(k -> String.format("%016x", k)).toList());
         }
         opLog.success("STORE", entity.getId(), entity.getSourceFileName(), details, ms);
         log.info("Stored: id={} file={} size={} kind={} blob={}", entity.getId(), entity.getSourceFileName(),

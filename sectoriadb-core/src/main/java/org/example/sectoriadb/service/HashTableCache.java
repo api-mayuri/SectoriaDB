@@ -223,6 +223,8 @@ public class HashTableCache {
     /** Removes a blob file from the cache (call before deleting or replacing it); the table closes when its last handle is released. */
     public void evict(String blobId) {
         evictedStats.remove(blobId);
+        gates.remove(blobId);                                  // a stale handle keeps the gate object it already holds
+        if (!redirects.containsKey(blobId)) frozen.remove(blobId);   // a replaced blob stays frozen for good
         cache.evict(blobId);
         log.info("Evicted table from cache: blobId={}", blobId);
     }

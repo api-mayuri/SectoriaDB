@@ -28,16 +28,18 @@ public class PoolService {
     private final HashTableCache cache;
     private final SmallBlobCache smallCache;
     private final StorageProperties props;
+    private final BlobService blobService;
 
     public PoolService(PoolRepository poolRepo, BlobFileRepository blobRepo,
                        OperationLogService opLog, StorageProperties props,
-                       HashTableCache cache, SmallBlobCache smallCache) {
+                       HashTableCache cache, SmallBlobCache smallCache, BlobService blobService) {
         this.poolRepo     = poolRepo;
         this.blobRepo     = blobRepo;
         this.opLog        = opLog;
         this.props        = props;
         this.cache        = cache;
         this.smallCache   = smallCache;
+        this.blobService  = blobService;
     }
 
     public PoolEntity create(String name, String basePath) throws IOException {
@@ -138,6 +140,7 @@ public class PoolService {
                     " blob file(s). Delete them first with 'blob-delete'.");
         }
         poolRepo.delete(pool);
+        blobService.forgetPool(pool.getId());
         opLog.success("POOL_DELETE", pool.getId(), name, Map.of("name", name),
                 System.currentTimeMillis() - t0);
         log.info("Pool deleted: id={} name={}", pool.getId(), name);
@@ -153,6 +156,7 @@ public class PoolService {
         PoolEntity pool = getByName(bucketName);
 
         List<BlobFileEntity> removed = poolRepo.deleteBucket(pool.getId());   // throws IllegalStateException BucketNotEmpty
+        blobService.forgetPool(pool.getId());
         for (BlobFileEntity blob : removed) {
             cache.evict(blob.getId());
             smallCache.evict(blob.getId());

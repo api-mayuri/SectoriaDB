@@ -15,11 +15,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
@@ -34,7 +31,7 @@ public class BlobService {
     private final BlobFileRepository blobRepo;
     private final HashTableCache cache;
     private final SmallBlobCache smallCache;
-    private final Object smallChooseLock = new Object();
+    private final java.util.concurrent.ConcurrentHashMap<String, Object> smallLocks = new java.util.concurrent.ConcurrentHashMap<>();
     /** One lock per pool serialises every decision that adds blobs (first blobs, growth): exactly one creator wins. */
     private final java.util.concurrent.ConcurrentHashMap<String, Object> poolLocks = new java.util.concurrent.ConcurrentHashMap<>();
     private final StorageProperties props;
@@ -135,7 +132,7 @@ public class BlobService {
      * {@code dataLength} bytes (newest first); creates a new one when none has (rollover).
      */
     public BlobFileEntity chooseSmallBlobForWrite(PoolEntity pool, int dataLength) throws IOException {
-        synchronized (smallChooseLock) {
+        synchronized (smallLock(pool.getId())) {
             List<BlobFileEntity> blobs = blobRepo.findByPoolId(pool.getId()).stream()
                     .filter(b -> b.getKind() == BlobKind.SMALL)
                     .sorted(Comparator.comparing(BlobFileEntity::getCreatedAt).reversed())
@@ -159,7 +156,7 @@ public class BlobService {
      * pool has none (the next small write creates one). Mirrors {@link #chooseSmallBlobForWrite} without creating.
      */
     public java.util.Optional<BlobFileEntity> smallAppendTarget(PoolEntity pool) {
-        synchronized (smallChooseLock) {
+        synchronized (smallLock(pool.getId())) {
             return blobRepo.findByPoolId(pool.getId()).stream()
                     .filter(b -> b.getKind() == BlobKind.SMALL)
                     .sorted(Comparator.comparing(BlobFileEntity::getCreatedAt).reversed())
@@ -218,6 +215,17 @@ public class BlobService {
             /** {@code sectoriadb.pool.max-blobs} reached and nothing has room */
             AT_MAX
         }
+    }
+
+    /** Serialises the choice of the small-object blob per pool: pools do not wait for each other's rollovers. */
+    private Object smallLock(String poolId) {
+        return smallLocks.computeIfAbsent(poolId, k -> new Object());
+    }
+
+    /** Drops the in-memory per-pool locks (the pool is gone). */
+    public void forgetPool(String poolId) {
+        smallLocks.remove(poolId);
+        poolLocks.remove(poolId);
     }
 
     private Object poolLock(String poolId) {

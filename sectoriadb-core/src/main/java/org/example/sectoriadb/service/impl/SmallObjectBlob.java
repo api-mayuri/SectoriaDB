@@ -117,7 +117,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         }
         try (FileChannel fc = FileChannel.open(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)) {
             ByteBuffer header = encodeHeader(System.currentTimeMillis());
-            FileChannelWrites.writeFully(fc, header, 0);
+            FileChannelStorageIOEngine.writeFully(fc::write, header, 0);
             fc.force(true);
         }
         org.example.sectoriadb.format.BlobLayout.syncDirectory(path);
@@ -709,7 +709,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         int start = src.position();
         onChannel(ch -> {
             src.position(start);
-            FileChannelWrites.writeFully(ch, src, position);
+            FileChannelStorageIOEngine.writeFully(ch::write, src, position);
             return null;
         });
     }

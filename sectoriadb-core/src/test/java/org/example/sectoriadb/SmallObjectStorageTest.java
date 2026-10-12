@@ -130,7 +130,7 @@ class SmallObjectStorageTest {
         var blobs = blobRepo.findByPoolId(pool.getId());
         assertEquals(1, blobs.size());
         assertEquals(BlobKind.SMALL, blobs.get(0).getKind());
-        assertTrue(blobs.get(0).getFileName().matches("small_[0-9a-f]{8}\\.sob"));
+        assertTrue(blobs.get(0).getFileName().matches("small_[0-9a-f-]{36}\\.sob"));
 
         // the first chunked object creates a cuckoo blob; chooseBlobFileForWrite never returns the SOB
         put(bytes(CHUNK * 3));
