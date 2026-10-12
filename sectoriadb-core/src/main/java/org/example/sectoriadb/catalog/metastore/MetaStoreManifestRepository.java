@@ -323,7 +323,7 @@ public class MetaStoreManifestRepository implements ManifestRepository {
             try (Cursor c = tx.tree(Trees.MANIFESTS).scan()) {
                 while (c.next()) {
                     ManifestEntity m = ManifestCodec.decode(c.value());
-                    if (!m.isDeleted()) out.add(m);
+                    if (!m.isDeleted() && !m.isMultipartPart()) out.add(m);
                 }
             }
             for (ManifestEntity m : out) Trees.resolve(tx, m);

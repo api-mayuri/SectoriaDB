@@ -143,7 +143,10 @@ public interface ManifestRepository {
 
     // ---- blob / admin queries -------------------------------------------------------------------------------
 
-    /** All live manifests, including the ones stored from the shell (administrative full scan). */
+    /**
+     * All live manifests, including the ones stored from the shell (administrative full scan); the hidden manifests of
+     * parts of open multipart uploads are not listed.
+     */
     List<ManifestEntity> findAllLive();
 
     /** Manifests referencing the blob (cuckoo or small-object), via the {@code manifests_by_blob} index. */

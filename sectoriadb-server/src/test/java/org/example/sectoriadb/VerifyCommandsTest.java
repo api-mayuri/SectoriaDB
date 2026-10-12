@@ -41,6 +41,7 @@ class VerifyCommandsTest {
     @Autowired ObjectWriter writer;
     @Autowired PoolService poolService;
     @Autowired ManifestRepository manifestRepo;
+    @Autowired org.example.sectoriadb.storage.multipart.MultipartService multipart;
 
     private ManifestEntity put(PoolEntity pool, String key, int size) throws Exception {
         byte[] b = new byte[size];
@@ -74,6 +75,39 @@ class VerifyCommandsTest {
         assertTrue(failed.contains("Verified 2 object(s): ok=1 corrupt=1 missing=0"), failed);
         assertTrue(failed.contains("CORRUPT: vbkt/small"), failed);
         assertTrue(failed.endsWith("RESULT: FAILED (corrupt=1, missing=0)"), failed);
+    }
+
+    /** A multipart object is verified like any other (part boundaries are in the manifest); parts of an open upload are not listed. */
+    @Test
+    void verifyAllCoversMultipartObjectsAndSkipsOpenParts() throws Exception {
+        PoolEntity pool = poolService.existsByName("mpvbkt") ? poolService.getByName("mpvbkt") : poolService.createBucket("mpvbkt");
+        var up = new org.example.sectoriadb.catalog.MultipartUpload();
+        up.setKey("mp");
+        up = multipart.create(pool, up);
+        var parts = new java.util.ArrayList<org.example.sectoriadb.catalog.MultipartRepository.RequestedPart>();
+        for (int i = 1; i <= 3; i++) {
+            byte[] b = new byte[i == 2 ? 100 : 9000];
+            new Random(i).nextBytes(b);
+            var p = multipart.uploadPart(multipart.requireOpen(up.getUploadId(), "mpvbkt", "mp"), i, new ByteArrayInputStream(b),
+                    org.example.sectoriadb.checksum.UploadChecksums.none());
+            parts.add(new org.example.sectoriadb.catalog.MultipartRepository.RequestedPart(i, p.etag(), java.util.Map.of()));
+        }
+        // a part of an upload that stays open
+        var open = new org.example.sectoriadb.catalog.MultipartUpload();
+        open.setKey("pending");
+        open = multipart.create(pool, open);
+        multipart.uploadPart(multipart.requireOpen(open.getUploadId(), "mpvbkt", "pending"), 1, new ByteArrayInputStream(new byte[5000]),
+                org.example.sectoriadb.checksum.UploadChecksums.none());
+        multipart.complete(new org.example.sectoriadb.catalog.MultipartRepository.CompleteCommand(up.getUploadId(), "mpvbkt", "mp",
+                parts, ManifestRepository.CommitPrecondition.NONE, java.util.Map.of(), System.currentTimeMillis()));
+
+        String all = commands.verifyAll("mpvbkt");
+        assertTrue(all.contains("Verified 1 object(s): ok=1 corrupt=0 missing=0"), all);
+        assertTrue(all.endsWith("RESULT: OK"), all);
+        String one = commands.verify(manifestRepo.findCurrent("mpvbkt", "mp").orElseThrow().getId());
+        assertTrue(one.startsWith("OK: mpvbkt/mp"), one);
+        assertTrue(one.contains("whole-object CRC32C: ok"), one);
+        assertTrue(one.contains("not applicable (multipart"), one);
     }
 
     /** `java -jar sectoriadb.jar verify-all` must run as a one-shot CLI command (no web server, JVM exits). */
