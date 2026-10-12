@@ -1,27 +1,36 @@
 package org.example.sectoriadb.engine.blob;
 
-import org.example.sectoriadb.engine.format.BlobLayout;
-import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
-import org.example.sectoriadb.engine.io.BlobFile;
 import org.example.sectoriadb.engine.error.ChunkCorruptedException;
-import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
+import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
 import org.example.sectoriadb.engine.error.TableFullException;
+import org.example.sectoriadb.engine.format.BlobLayout;
 import org.example.sectoriadb.engine.hash.BytesHasher;
 import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
+import org.example.sectoriadb.engine.io.BlobFile;
+import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Random;
 import java.util.zip.CRC32C;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /** Stage 03: header, per-slot CRC32C, quarantine, collision re-keying, fill factor. */
 class ChunkIntegrityTest {
@@ -94,8 +103,8 @@ class ChunkIntegrityTest {
     }
 
     /** Measured: ~98% for every geometry below; asserted bound leaves room for seed variance. */
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(ints = {1000, 1024, 1280, 8192})
+    @ParameterizedTest
+    @ValueSource(ints = {1000, 1024, 1280, 8192})
     void fillFactor_reachesAtLeast95Percent_beforeTableFull(int buckets) throws IOException {
         assertTrue(fillUntilFull(buckets) >= 95.0);
     }
@@ -152,7 +161,7 @@ class ChunkIntegrityTest {
         long k = xxh.hash64(small);
         t.insert(k, ByteBuffer.wrap(small));
         assertArrayEquals(small, read(t, k, 10));
-        assertArrayEquals(java.util.Arrays.copyOf(small, 4), read(t, k, 4));
+        assertArrayEquals(Arrays.copyOf(small, 4), read(t, k, 4));
         assertThrows(ChunkCorruptedException.class, () -> t.readChunkByKey(k, 11));
         assertThrows(IllegalArgumentException.class, () -> t.insert(1L, ByteBuffer.allocate(0)));
         assertThrows(IllegalArgumentException.class, () -> t.insert(1L, ByteBuffer.allocate(CHUNK + 1)));

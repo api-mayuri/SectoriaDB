@@ -1,13 +1,13 @@
 package org.example.sectoriadb.catalog.metastore;
 
+import org.example.sectoriadb.catalog.ChunkEntry;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.PlacedChunk;
 import org.example.sectoriadb.metastore.BTree;
 import org.example.sectoriadb.metastore.Cursor;
 import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.ReadTxn;
 import org.example.sectoriadb.metastore.WriteTxn;
-import org.example.sectoriadb.catalog.ChunkEntry;
-import org.example.sectoriadb.catalog.PlacedChunk;
-import org.example.sectoriadb.catalog.ChunkRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

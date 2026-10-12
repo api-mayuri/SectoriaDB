@@ -1,12 +1,14 @@
 package org.example.sectoriadb.catalog.metastore;
 
-import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ChunkEntry;
+import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PlacedChunk;
 import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.checksum.UploadChecksums;
+import org.example.sectoriadb.metastore.Keys;
+import org.example.sectoriadb.storage.StorageRig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,12 +18,24 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
-import java.util.concurrent.*;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.storage.StorageRig;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The pool-wide chunk index: deduplication, reference counts, retirement, revival, orphans (doc 09). */
 class ChunkIndexTest {
@@ -131,7 +145,7 @@ class ChunkIndexTest {
         assertEquals(2, stats().refs());
         List<Long> queued = rig.chunks.gcQueue(10).stream().map(ChunkRepository.GcRow::chunkKey).toList();
         assertEquals(1, queued.size(), "only a lost its reference; b never passed through zero");
-        assertFalse(java.util.Arrays.stream(v2.chunkKeyArray()).anyMatch(k -> k == queued.get(0)));
+        assertFalse(Arrays.stream(v2.chunkKeyArray()).anyMatch(k -> k == queued.get(0)));
         assertArrayEquals(concat(b, c), get("k"));
 
         // overwriting with identical content changes nothing
@@ -161,7 +175,7 @@ class ChunkIndexTest {
         put("x", data);
         // the upload finds the chunks in the index (indexed = true) and does not write them
         ManifestEntity staged = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "y", null,
-                org.example.sectoriadb.checksum.UploadChecksums.none());
+                UploadChecksums.none());
         assertTrue(staged.getStagedChunks().stream().allMatch(PlacedChunk::indexed));
         // ... then the object that held them goes away and a (future) collector removes the entries
         rig.catalog.deleteObject("bkt", "x");
@@ -195,15 +209,15 @@ class ChunkIndexTest {
 
         // two uploads of the same new content stage concurrently: neither sees the other's chunks in the index
         ManifestEntity first = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "a", null,
-                org.example.sectoriadb.checksum.UploadChecksums.none());
+                UploadChecksums.none());
         // the second one is steered to the other blob(s): the blobs the first used are frozen for its placement
-        java.util.Set<String> used = new java.util.HashSet<>();
+        Set<String> used = new HashSet<>();
         first.getStagedChunks().forEach(p -> used.add(p.blobId()));
         used.forEach(rig.blobGate::freeze);
         ManifestEntity second;
         try {
             second = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "b", null,
-                    org.example.sectoriadb.checksum.UploadChecksums.none());
+                    UploadChecksums.none());
         } finally {
             used.forEach(rig.blobGate::unfreeze);
         }

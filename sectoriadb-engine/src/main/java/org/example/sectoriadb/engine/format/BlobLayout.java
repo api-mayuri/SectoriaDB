@@ -1,5 +1,6 @@
 package org.example.sectoriadb.engine.format;
 
+import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
 import org.example.sectoriadb.engine.hash.Crc32c;
 import org.example.sectoriadb.engine.hash.Mix64;
 
@@ -10,7 +11,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
-import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
 
 /**
  * On-disk blob layout (all integers big-endian).

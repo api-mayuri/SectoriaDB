@@ -17,12 +17,15 @@ import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Downloads must survive slow/paused readers (video players) and must work with small chunks (16 KiB).
@@ -95,7 +98,7 @@ class S3StreamingTest {
         upload("many-bkt", "f.bin", data);
 
         // 12 paused readers (more than the old 8-thread async pool) hold their connections open...
-        var open = new java.util.ArrayList<HttpResponse<InputStream>>();
+        var open = new ArrayList<HttpResponse<InputStream>>();
         for (int i = 0; i < 12; i++) {
             var r = http.send(HttpRequest.newBuilder(uri("/many-bkt/f.bin")).GET().build(), BodyHandlers.ofInputStream());
             r.body().readNBytes(1024);
@@ -104,7 +107,7 @@ class S3StreamingTest {
         // ...and an unrelated request must still be answered promptly
         CompletableFuture<HttpResponse<String>> other = http.sendAsync(
                 HttpRequest.newBuilder(uri("/many-bkt?list-type=2")).GET().build(), BodyHandlers.ofString());
-        assertEquals(200, other.get(5, java.util.concurrent.TimeUnit.SECONDS).statusCode());
+        assertEquals(200, other.get(5, TimeUnit.SECONDS).statusCode());
 
         for (var r : open) {
             byte[] rest = r.body().readAllBytes();

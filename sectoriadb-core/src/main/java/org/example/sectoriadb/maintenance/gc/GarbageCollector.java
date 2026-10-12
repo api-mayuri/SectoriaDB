@@ -1,15 +1,8 @@
 package org.example.sectoriadb.maintenance.gc;
 
-import org.example.sectoriadb.storage.BlobGate;
-import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.BlobKind;
-import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PartSegment;
-import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.GcRepository;
 import org.example.sectoriadb.catalog.GcRepository.ChunkBatchResult;
@@ -17,28 +10,36 @@ import org.example.sectoriadb.catalog.GcRepository.ChunkRef;
 import org.example.sectoriadb.catalog.GcRepository.SlotFree;
 import org.example.sectoriadb.catalog.GcRepository.StrayBatchResult;
 import org.example.sectoriadb.catalog.GcRepository.Tombstone;
+import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PartSegment;
+import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.PoolRepository;
+import org.example.sectoriadb.catalog.StorageKind;
+import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.engine.blob.CuckooHashTable;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
+import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
 import org.example.sectoriadb.maintenance.BlobFileReaper;
-import org.example.sectoriadb.storage.BlobService;
-import org.example.sectoriadb.storage.ChunkStore;
-import org.example.sectoriadb.storage.ResidentHandle;
-import org.example.sectoriadb.storage.HashTableCache;
-import org.example.sectoriadb.storage.SmallBlobCache;
-import org.example.sectoriadb.storage.UploadGate;
 import org.example.sectoriadb.maintenance.gc.GcReports.CompactionReport;
 import org.example.sectoriadb.maintenance.gc.GcReports.Options;
 import org.example.sectoriadb.maintenance.gc.GcReports.RunReport;
 import org.example.sectoriadb.maintenance.gc.GcReports.SweepReport;
-import org.example.sectoriadb.engine.blob.CuckooHashTable;
-import org.example.sectoriadb.engine.blob.SmallObjectBlob;
-import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
+import org.example.sectoriadb.metrics.StorageMetrics;
+import org.example.sectoriadb.storage.BlobGate;
+import org.example.sectoriadb.storage.BlobService;
+import org.example.sectoriadb.storage.ChunkStore;
+import org.example.sectoriadb.storage.HashTableCache;
+import org.example.sectoriadb.storage.ResidentHandle;
+import org.example.sectoriadb.storage.SmallBlobCache;
+import org.example.sectoriadb.storage.UploadGate;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -169,10 +170,10 @@ public class GarbageCollector {
     private void collectChunks(String poolId, long cutoff, int max, RunReport r) {
         List<ChunkRef> due = gcRepo.dueChunks(poolId, cutoff, max);
         // The upload gate is per pool: group the due chunks by pool and run every batch under its pool's gate.
-        java.util.Map<String, List<ChunkRef>> byPool = new java.util.LinkedHashMap<>();
-        for (ChunkRef c : due) byPool.computeIfAbsent(c.poolId(), k -> new java.util.ArrayList<>()).add(c);
+        Map<String, List<ChunkRef>> byPool = new LinkedHashMap<>();
+        for (ChunkRef c : due) byPool.computeIfAbsent(c.poolId(), k -> new ArrayList<>()).add(c);
         int batch = props.getGc().getBatchSize();
-        for (java.util.Map.Entry<String, List<ChunkRef>> e : byPool.entrySet()) {
+        for (Map.Entry<String, List<ChunkRef>> e : byPool.entrySet()) {
             List<ChunkRef> list = e.getValue();
             for (int i = 0; i < list.size(); i += batch) {
                 List<ChunkRef> part = list.subList(i, Math.min(list.size(), i + batch));
@@ -261,7 +262,7 @@ public class GarbageCollector {
         long bytes = 0;
         int batch = props.getGc().getBatchSize();
         for (int i = 0; i < keys.length; i += batch) {
-            long[] part = java.util.Arrays.copyOfRange(keys, i, Math.min(keys.length, i + batch));
+            long[] part = Arrays.copyOfRange(keys, i, Math.min(keys.length, i + batch));
             UploadGate.Sweep gate = poolId == null ? null : chunkStore.gate().tryBegin(poolId,
                     props.getGc().getSweepGateWait().toMillis(), props.getGc().getUploadTicketTtl().toMillis());
             if (poolId != null && gate == null) {

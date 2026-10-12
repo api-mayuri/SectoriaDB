@@ -1,13 +1,17 @@
 package org.example.sectoriadb;
 
+import org.example.sectoriadb.catalog.CatalogUnavailableException;
+import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.s3.error.S3ExceptionHandler;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.net.SocketTimeoutException;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 
 /** Mapping of unexpected exceptions to S3 error responses (no Spring context needed). */
 class S3ExceptionHandlerTest {
@@ -55,7 +59,7 @@ class S3ExceptionHandlerTest {
 
     @Test
     void aSlowBodyIsRequestTimeoutNotAnInternalError() {
-        var r = handler.handleSocketTimeout(new java.net.SocketTimeoutException("Read timed out"));
+        var r = handler.handleSocketTimeout(new SocketTimeoutException("Read timed out"));
         assertEquals(400, r.getStatusCode().value());
         assertEquals("RequestTimeout", r.getBody().getCode());
     }
@@ -63,8 +67,8 @@ class S3ExceptionHandlerTest {
     /** Doc 10: a chunk the upload deduplicated against was collected before its commit; the client simply retries. */
     @Test
     void aCollectedChunkIsARetryable503() {
-        var r = handler.handleChunkPlacement(new org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException(
-                org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException.Reason.COLLECTED, "collected meanwhile"));
+        var r = handler.handleChunkPlacement(new ChunkRepository.ChunkPlacementException(
+                ChunkRepository.ChunkPlacementException.Reason.COLLECTED, "collected meanwhile"));
         assertEquals(503, r.getStatusCode().value());
         assertEquals("ServiceUnavailable", r.getBody().getCode());
         assertEquals("1", r.getHeaders().getFirst("Retry-After"));
@@ -73,13 +77,13 @@ class S3ExceptionHandlerTest {
     /** Doc 10, part B: the metadata store refuses writes after a failed commit (reads still work): 507 for a full disk, else 503 SlowDown. */
     @Test
     void aStoreThatIsRecoveringIsSlowDownAndAFullMetadataDiskIsInsufficientStorage() {
-        var full = new org.example.sectoriadb.catalog.CatalogUnavailableException("read-only",
-                new java.io.UncheckedIOException(new IOException("No space left on device")));
+        var full = new CatalogUnavailableException("read-only",
+                new UncheckedIOException(new IOException("No space left on device")));
         var r507 = handler.handleCatalogUnavailable(full);
         assertEquals(507, r507.getStatusCode().value());
         assertEquals("InsufficientStorage", r507.getBody().getCode());
-        var other = new org.example.sectoriadb.catalog.CatalogUnavailableException("read-only",
-                new java.io.UncheckedIOException(new IOException("Input/output error")));
+        var other = new CatalogUnavailableException("read-only",
+                new UncheckedIOException(new IOException("Input/output error")));
         var r503 = handler.handleCatalogUnavailable(other);
         assertEquals(503, r503.getStatusCode().value());
         assertEquals("SlowDown", r503.getBody().getCode());

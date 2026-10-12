@@ -1,6 +1,9 @@
 package org.example.sectoriadb.s3.http;
 
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 
 /** Percent-encoding and -decoding of keys and query strings, the way S3 does it (not {@code URLDecoder}). */
@@ -12,7 +15,7 @@ public final class UrlCodec {
     public static String urlEncodeKey(String s) {
         if (s == null) return null;
         StringBuilder sb = new StringBuilder(s.length() + 8);
-        for (byte b : s.getBytes(java.nio.charset.StandardCharsets.UTF_8)) {
+        for (byte b : s.getBytes(StandardCharsets.UTF_8)) {
             int c = b & 0xFF;
             if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
                     || c == '-' || c == '_' || c == '.' || c == '~' || c == '/') {
@@ -73,10 +76,10 @@ public final class UrlCodec {
         }
         try {
             return StandardCharsets.UTF_8.newDecoder()
-                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
-                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
-                    .decode(java.nio.ByteBuffer.wrap(out.toByteArray())).toString();
-        } catch (java.nio.charset.CharacterCodingException e) {
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(out.toByteArray())).toString();
+        } catch (CharacterCodingException e) {
             throw new IllegalArgumentException("invalid UTF-8 in query string", e);
         }
     }

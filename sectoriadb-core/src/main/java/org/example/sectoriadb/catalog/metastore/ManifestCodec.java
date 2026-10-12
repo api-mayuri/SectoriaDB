@@ -1,10 +1,10 @@
 package org.example.sectoriadb.catalog.metastore;
 
 import org.example.sectoriadb.catalog.ManifestEntity;
-
 import org.example.sectoriadb.catalog.PartSegment;
 import org.example.sectoriadb.catalog.StorageKind;
 
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -116,7 +116,7 @@ public final class ManifestCodec {
                 m.setSegments(segments);
             }
             return m;
-        } catch (java.nio.BufferUnderflowException e) {
+        } catch (BufferUnderflowException e) {
             throw new IllegalStateException("truncated manifest record", e);
         }
     }

@@ -4,9 +4,11 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -134,7 +136,7 @@ public final class SourceGuard {
         Map<String, Integer> index = new HashMap<>();
         Map<String, Integer> low = new HashMap<>();
         Set<String> onStack = new HashSet<>();
-        java.util.Deque<String> stack = new java.util.ArrayDeque<>();
+        Deque<String> stack = new ArrayDeque<>();
         int[] counter = {0};
         for (String v : g.keySet()) {
             if (!index.containsKey(v)) strong(v, g, index, low, onStack, stack, counter, result);
@@ -143,7 +145,7 @@ public final class SourceGuard {
     }
 
     private static void strong(String v, Map<String, Set<String>> g, Map<String, Integer> index, Map<String, Integer> low,
-                               Set<String> onStack, java.util.Deque<String> stack, int[] counter, List<List<String>> out) {
+                               Set<String> onStack, Deque<String> stack, int[] counter, List<List<String>> out) {
         index.put(v, counter[0]);
         low.put(v, counter[0]);
         counter[0]++;

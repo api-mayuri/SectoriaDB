@@ -6,7 +6,15 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 
-import static org.example.sectoriadb.engine.SourceGuard.*;
+import static org.example.sectoriadb.engine.SourceGuard.BASE;
+import static org.example.sectoriadb.engine.SourceGuard.Import;
+import static org.example.sectoriadb.engine.SourceGuard.cycles;
+import static org.example.sectoriadb.engine.SourceGuard.describe;
+import static org.example.sectoriadb.engine.SourceGuard.importing;
+import static org.example.sectoriadb.engine.SourceGuard.inPackage;
+import static org.example.sectoriadb.engine.SourceGuard.mainImports;
+import static org.example.sectoriadb.engine.SourceGuard.outsideOf;
+import static org.example.sectoriadb.engine.SourceGuard.packageGraph;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

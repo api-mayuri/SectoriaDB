@@ -1,7 +1,8 @@
 package org.example.sectoriadb.catalog.metastore;
 
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository.BucketStats;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.storage.StorageRig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,7 +12,6 @@ import java.io.ByteArrayInputStream;
 import java.nio.file.Path;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import org.example.sectoriadb.storage.StorageRig;
 
 /** Object count / stored bytes are maintained inside the commit transactions, never by scanning on read. */
 class ObjectTotalsTest {

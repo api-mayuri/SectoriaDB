@@ -1,10 +1,11 @@
 package org.example.sectoriadb.storage;
 
-import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.audit.OperationLogService;
 import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.PoolRepository;
+import org.example.sectoriadb.config.StorageProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,8 +15,9 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
-import org.example.sectoriadb.audit.OperationLogService;
+import java.util.function.Consumer;
 
 public class PoolService {
 
@@ -83,7 +85,7 @@ public class PoolService {
                 .orElseThrow(() -> new IllegalArgumentException("Pool not found: " + name));
     }
 
-    public java.util.Optional<PoolEntity> findByName(String name) {
+    public Optional<PoolEntity> findByName(String name) {
         return poolRepo.findByName(name);
     }
 
@@ -124,7 +126,7 @@ public class PoolService {
         update(bucket, p -> p.setPolicy(null));
     }
 
-    private void update(String bucket, java.util.function.Consumer<PoolEntity> change) {
+    private void update(String bucket, Consumer<PoolEntity> change) {
         poolRepo.updateByName(bucket, change)
                 .orElseThrow(() -> new IllegalArgumentException("Pool not found: " + bucket));
     }

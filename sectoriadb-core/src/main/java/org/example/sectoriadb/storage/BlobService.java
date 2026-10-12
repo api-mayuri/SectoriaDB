@@ -1,14 +1,16 @@
 package org.example.sectoriadb.storage;
 
-import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.engine.format.BlobLayout;
+import org.example.sectoriadb.audit.OperationLogService;
 import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.engine.placement.RendezvousPlacement;
-import org.example.sectoriadb.catalog.BlobKind;
-import org.example.sectoriadb.engine.blob.SmallObjectBlob;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.BlobKind;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
+import org.example.sectoriadb.engine.format.BlobLayout;
+import org.example.sectoriadb.engine.format.SmallBlobLayout;
+import org.example.sectoriadb.engine.placement.RendezvousPlacement;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -19,8 +21,10 @@ import java.time.Instant;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
-import org.example.sectoriadb.audit.OperationLogService;
+import java.util.concurrent.ConcurrentHashMap;
 
 public class BlobService {
 
@@ -30,9 +34,9 @@ public class BlobService {
     private final HashTableCache cache;
     private final BlobGate blobGate;
     private final SmallBlobCache smallCache;
-    private final java.util.concurrent.ConcurrentHashMap<String, Object> smallLocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Object> smallLocks = new ConcurrentHashMap<>();
     /** One lock per pool serialises every decision that adds blobs (first blobs, growth): exactly one creator wins. */
-    private final java.util.concurrent.ConcurrentHashMap<String, Object> poolLocks = new java.util.concurrent.ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Object> poolLocks = new ConcurrentHashMap<>();
     private final StorageProperties props;
     private final OperationLogService opLog;
 
@@ -111,7 +115,7 @@ public class BlobService {
         entity.setFilePath(filePath.toString());
         entity.setNumBuckets(0);
         entity.setChunkSize(0);
-        entity.setTotalBytes(org.example.sectoriadb.engine.format.SmallBlobLayout.HEADER_SIZE);
+        entity.setTotalBytes(SmallBlobLayout.HEADER_SIZE);
         entity.setCreatedAt(Instant.now());
         if (sealed) {   // opened (and sealed) from the file before the registry knows it; a sealed blob is never evicted
             try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(entity)) {
@@ -155,7 +159,7 @@ public class BlobService {
      * The small-object blob that ordinary writes of the pool go to now: the newest one that has room. Empty when the
      * pool has none (the next small write creates one). Mirrors {@link #chooseSmallBlobForWrite} without creating.
      */
-    public java.util.Optional<BlobFileEntity> smallAppendTarget(PoolEntity pool) {
+    public Optional<BlobFileEntity> smallAppendTarget(PoolEntity pool) {
         synchronized (smallLock(pool.getId())) {
             return blobRepo.findByPoolId(pool.getId()).stream()
                     .filter(b -> b.getKind() == BlobKind.SMALL)
@@ -283,21 +287,21 @@ public class BlobService {
      * (re-evaluated under the pool's lock, so concurrent callers create one blob, not one each). Empty when there is
      * nothing to do or the pool is at {@code max-blobs}.
      */
-    public java.util.Optional<BlobFileEntity> growIfOverThreshold(PoolEntity pool) throws IOException {
+    public Optional<BlobFileEntity> growIfOverThreshold(PoolEntity pool) throws IOException {
         PoolFill quick = poolFill(pool);
         if (quick.blobs() == 0 || quick.fillPercent() < props.getPool().getGrowThresholdPercent()) {
-            return java.util.Optional.empty();
+            return Optional.empty();
         }
         synchronized (poolLock(pool.getId())) {
             PoolFill fill = poolFill(pool);
             if (fill.blobs() == 0 || fill.fillPercent() < props.getPool().getGrowThresholdPercent()
                     || fill.blobs() >= props.getPool().getMaxBlobs()) {
-                return java.util.Optional.empty();
+                return Optional.empty();
             }
             log.info("Pool '{}' is {}% full (threshold {}%): adding a blob ({} -> {})", pool.getName(),
                     String.format("%.1f", fill.fillPercent()), props.getPool().getGrowThresholdPercent(),
                     fill.blobs(), fill.blobs() + 1);
-            return java.util.Optional.of(addBlob(pool));
+            return Optional.of(addBlob(pool));
         }
     }
 
@@ -306,7 +310,7 @@ public class BlobService {
      * other blob can take chunks (a concurrent writer already grew the pool) the caller just retries; else a new blob
      * is created, unless the pool is at {@code max-blobs}. Exactly one of N concurrent callers creates the blob.
      */
-    public Growth growIfNeeded(PoolEntity pool, java.util.Set<String> refused) throws IOException {
+    public Growth growIfNeeded(PoolEntity pool, Set<String> refused) throws IOException {
         synchronized (poolLock(pool.getId())) {
             List<BlobFileEntity> blobs = cuckooBlobsOf(pool);
             for (BlobFileEntity b : blobs) {

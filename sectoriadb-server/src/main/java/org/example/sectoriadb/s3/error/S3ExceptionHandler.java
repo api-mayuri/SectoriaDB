@@ -1,32 +1,39 @@
 package org.example.sectoriadb.s3.error;
 
-import org.example.sectoriadb.checksum.ChecksumMismatchException;
-import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.observability.ObservabilityAttributes;
-import org.example.sectoriadb.observability.AuthFailure;
-import org.example.sectoriadb.s3.xml.S3Error;
 import org.apache.catalina.connector.ClientAbortException;
+import org.example.sectoriadb.catalog.CatalogUnavailableException;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.MultipartException;
+import org.example.sectoriadb.checksum.ChecksumMismatchException;
+import org.example.sectoriadb.observability.AuthFailure;
+import org.example.sectoriadb.observability.ObservabilityAttributes;
+import org.example.sectoriadb.observability.RequestIds;
+import org.example.sectoriadb.s3.xml.S3Error;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.TypeMismatchException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.ErrorResponse;
 import org.springframework.web.HttpMediaTypeNotAcceptableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.ServletRequestBindingException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
+import org.springframework.web.method.annotation.MethodArgumentTypeMismatchException;
 import org.springframework.web.servlet.NoHandlerFoundException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
-import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.example.sectoriadb.s3.error.ResponseAbortedException;
-import org.example.sectoriadb.observability.RequestIds;
+
+import java.io.IOException;
+import java.net.SocketTimeoutException;
 
 
 @RestControllerAdvice(basePackages = "org.example.sectoriadb.s3")
@@ -106,8 +113,8 @@ public class S3ExceptionHandler {
      * The client stopped sending the body (Tomcat connection timeout): not a server fault. Answered 400 RequestTimeout like S3
      * (the connection is usually gone, so the write may fail silently); logged at INFO without a stack trace.
      */
-    @ExceptionHandler(java.net.SocketTimeoutException.class)
-    public ResponseEntity<S3Error> handleSocketTimeout(java.net.SocketTimeoutException ex) {
+    @ExceptionHandler(SocketTimeoutException.class)
+    public ResponseEntity<S3Error> handleSocketTimeout(SocketTimeoutException ex) {
         log.info("Request body timed out [{}]", RequestIds.current());
         ObservabilityAttributes.noteErrorCode("RequestTimeout");
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
@@ -131,8 +138,8 @@ public class S3ExceptionHandler {
     }
 
     /** A multipart request the state of the upload does not allow; each kind is an S3 error code of its own. */
-    @ExceptionHandler(org.example.sectoriadb.catalog.MultipartException.class)
-    public ResponseEntity<S3Error> handleMultipart(org.example.sectoriadb.catalog.MultipartException ex) {
+    @ExceptionHandler(MultipartException.class)
+    public ResponseEntity<S3Error> handleMultipart(MultipartException ex) {
         String requestId = RequestIds.current();
         HttpStatus status = HttpStatus.BAD_REQUEST;
         String code;
@@ -153,7 +160,7 @@ public class S3ExceptionHandler {
         log.debug("Multipart request refused [{}]: {} ({})", requestId, code, ex.getMessage());
         ObservabilityAttributes.noteErrorCode(code);
         S3Error body = new S3Error(code, message, null, requestId);
-        if (ex.kind() == org.example.sectoriadb.catalog.MultipartException.Kind.ENTITY_TOO_SMALL) {
+        if (ex.kind() == MultipartException.Kind.ENTITY_TOO_SMALL) {
             body.withPartSizes(ex.partNumber(), ex.proposedSize(), ex.minSizeAllowed());
         }
         return ResponseEntity.status(status)
@@ -176,8 +183,8 @@ public class S3ExceptionHandler {
      * index (COLLECTED), or a resize / key collision raced with it. Nothing was written; the client retries the whole
      * request, which is what S3 clients do on a 503 (doc 09, 10).
      */
-    @ExceptionHandler(org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException.class)
-    public ResponseEntity<S3Error> handleChunkPlacement(org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException ex) {
+    @ExceptionHandler(ChunkRepository.ChunkPlacementException.class)
+    public ResponseEntity<S3Error> handleChunkPlacement(ChunkRepository.ChunkPlacementException ex) {
         String requestId = RequestIds.current();
         log.warn("Upload rejected, retry expected [{}]: {} ({})", requestId, ex.reason(), ex.getMessage());
         ObservabilityAttributes.noteErrorCode("ServiceUnavailable");
@@ -194,8 +201,8 @@ public class S3ExceptionHandler {
      * affected and keep working). A full disk is {@code 507 InsufficientStorage}; any other fault is
      * {@code 503 SlowDown} with {@code Retry-After}: the store recovers by itself once the disk works, a retry is meaningful.
      */
-    @ExceptionHandler(org.example.sectoriadb.catalog.CatalogUnavailableException.class)
-    public ResponseEntity<S3Error> handleCatalogUnavailable(org.example.sectoriadb.catalog.CatalogUnavailableException ex) {
+    @ExceptionHandler(CatalogUnavailableException.class)
+    public ResponseEntity<S3Error> handleCatalogUnavailable(CatalogUnavailableException ex) {
         String requestId = RequestIds.current();
         if (isNoSpaceLeft(ex)) {
             log.warn("Write refused, the metadata disk is full [{}]: {}", requestId, ex.getMessage());
@@ -258,8 +265,8 @@ public class S3ExceptionHandler {
             // bad or missing parameter values are InvalidArgument in S3; an unreadable body is InvalidRequest
             boolean body = ex instanceof HttpMessageNotReadableException;
             code = body ? "InvalidRequest" : "InvalidArgument";
-            String name = ex instanceof org.springframework.web.method.annotation.MethodArgumentTypeMismatchException m ? m.getName()
-                    : ex instanceof org.springframework.web.bind.MissingServletRequestParameterException m ? m.getParameterName() : null;
+            String name = ex instanceof MethodArgumentTypeMismatchException m ? m.getName()
+                    : ex instanceof MissingServletRequestParameterException m ? m.getParameterName() : null;
             message = body ? "The request body could not be read."
                     : name != null ? "Invalid or missing value of the request parameter '" + name + "'"
                     : "Invalid request parameter or header.";
@@ -302,7 +309,7 @@ public class S3ExceptionHandler {
     /** java.io.IOException "No space left on device" (ENOSPC) anywhere in the cause chain. */
     static boolean isNoSpaceLeft(Throwable t) {
         for (int depth = 0; t != null && depth < 8; t = t.getCause(), depth++) {
-            if (t instanceof java.io.IOException && t.getMessage() != null
+            if (t instanceof IOException && t.getMessage() != null
                     && t.getMessage().contains("No space left on device")) {
                 return true;
             }

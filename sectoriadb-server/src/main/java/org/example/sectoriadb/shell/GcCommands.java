@@ -1,12 +1,12 @@
 package org.example.sectoriadb.shell;
 
 import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.storage.PoolService;
 import org.example.sectoriadb.maintenance.gc.GarbageCollector;
 import org.example.sectoriadb.maintenance.gc.GcReports.CompactionReport;
 import org.example.sectoriadb.maintenance.gc.GcReports.Options;
 import org.example.sectoriadb.maintenance.gc.GcReports.RunReport;
 import org.example.sectoriadb.maintenance.gc.GcReports.SweepReport;
+import org.example.sectoriadb.storage.PoolService;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;
@@ -14,6 +14,7 @@ import org.springframework.shell.standard.ShellOption;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Locale;
 
 /** Garbage collection from the shell (doc 10): {@code gc status}, {@code gc run}, {@code gc sweep}, {@code gc compact}. */
 @ShellComponent
@@ -87,9 +88,9 @@ public class GcCommands {
 
     /** {@code 0}, {@code 0s}, {@code 30s}, {@code 5m}, {@code 2h}, {@code 1d} or ISO-8601 ({@code PT5M}). */
     static Duration parseDuration(String text) {
-        String t = text.trim().toLowerCase(java.util.Locale.ROOT);
+        String t = text.trim().toLowerCase(Locale.ROOT);
         try {
-            if (t.startsWith("p")) return Duration.parse(t.toUpperCase(java.util.Locale.ROOT));
+            if (t.startsWith("p")) return Duration.parse(t.toUpperCase(Locale.ROOT));
             if (t.matches("\\d+")) return Duration.ofMillis(Long.parseLong(t));
             long n = Long.parseLong(t.substring(0, t.length() - (t.endsWith("ms") ? 2 : 1)));
             return switch (t.endsWith("ms") ? "ms" : t.substring(t.length() - 1)) {

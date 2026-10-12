@@ -1,18 +1,20 @@
 package org.example.sectoriadb.metastore;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.Random;
 import java.util.TreeMap;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CrashSafetyTest {
     @TempDir
@@ -33,7 +35,7 @@ class CrashSafetyTest {
         try (RandomAccessFile raf = new RandomAccessFile(f.toFile(), "rw")) {
             raf.seek(pos);
             byte[] b = new byte[len];
-            java.util.Arrays.fill(b, (byte) fill);
+            Arrays.fill(b, (byte) fill);
             raf.write(b);
         }
     }

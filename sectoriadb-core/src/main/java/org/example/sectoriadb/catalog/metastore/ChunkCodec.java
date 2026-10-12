@@ -2,6 +2,7 @@ package org.example.sectoriadb.catalog.metastore;
 
 import org.example.sectoriadb.catalog.ChunkEntry;
 
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 
@@ -40,7 +41,7 @@ public final class ChunkCodec {
             byte[] blob = new byte[n];
             b.get(blob);
             return new ChunkEntry(new String(blob, StandardCharsets.UTF_8), b.getInt(), b.getInt(), b.getLong());
-        } catch (java.nio.BufferUnderflowException e) {
+        } catch (BufferUnderflowException e) {
             throw new IllegalStateException("truncated chunk index record", e);
         }
     }

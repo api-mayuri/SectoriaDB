@@ -1,21 +1,24 @@
 package org.example.sectoriadb.engine.blob;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import java.nio.ByteBuffer;
-import java.nio.file.Path;
-import java.util.Random;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
 import org.example.sectoriadb.engine.io.BlobFile;
 import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
+import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
+import java.nio.file.Path;
+import java.util.Random;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** A thread interrupted inside channel IO closes the shared FileChannel; the engines must reopen it and carry on. */
 @Timeout(60)
@@ -74,7 +77,7 @@ class InterruptSurvivalTest {
         FileChannelStorageIOEngine e = new FileChannelStorageIOEngine(false);
         e.writeChunk(bf, 0, ByteBuffer.wrap(new byte[16]));
         e.close();
-        org.junit.jupiter.api.Assertions.assertThrows(java.nio.channels.ClosedChannelException.class,
+        Assertions.assertThrows(ClosedChannelException.class,
                 () -> e.readChunk(bf, 0, 16));
     }
 

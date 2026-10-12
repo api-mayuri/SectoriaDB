@@ -1,19 +1,22 @@
 package org.example.sectoriadb.catalog.metastore;
 
+import org.example.sectoriadb.catalog.ChunkEntry;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.metastore.Cursor;
 import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.ReadTxn;
-import org.example.sectoriadb.catalog.ChunkEntry;
-import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.StorageKind;
 
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Cross-tree invariants of the chunk index: the reference count of every chunk is exactly the number of positions

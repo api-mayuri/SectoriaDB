@@ -1,23 +1,27 @@
 package org.example.sectoriadb.metastore;
 
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.RandomAccessFile;
+import java.io.UncheckedIOException;
+import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.ConcurrentModificationException;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import java.io.RandomAccessFile;
-import java.lang.reflect.Proxy;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.Timeout;
-import org.junit.jupiter.api.io.TempDir;
 
 /** Regression tests for edge cases found in the metastore review. */
 @Timeout(60)
@@ -44,10 +48,10 @@ class MetaStoreHardeningTest {
                 for (int len : new int[]{1, max / 8, max / 2, max - 1, max}) {
                     for (int vlen : new int[]{0, 1, 5, 100}) {
                         byte[] key = new byte[len];
-                        java.util.Arrays.fill(key, (byte) (vlen + 1));
+                        Arrays.fill(key, (byte) (vlen + 1));
                         key[0] = (byte) (len & 0x7f);
                         byte[] val = new byte[vlen];
-                        java.util.Arrays.fill(val, (byte) 7);
+                        Arrays.fill(val, (byte) 7);
                         s.writeVoid(tx -> tx.tree("t").put(key, val));
                         assertArrayEquals(val, s.read(tx -> tx.tree("t").get(key)).orElseThrow());
                     }
@@ -154,9 +158,9 @@ class MetaStoreHardeningTest {
                     assertTrue(c.next());
                     assertEquals(5000, c.value().length);
                     t.put(k("a"), k("small"));             // frees the overflow chain the cursor points at
-                    assertThrows(java.util.ConcurrentModificationException.class, c::value);
-                    assertThrows(java.util.ConcurrentModificationException.class, c::key);
-                    assertThrows(java.util.ConcurrentModificationException.class, c::next);
+                    assertThrows(ConcurrentModificationException.class, c::value);
+                    assertThrows(ConcurrentModificationException.class, c::key);
+                    assertThrows(ConcurrentModificationException.class, c::next);
                 }
             });
         }
@@ -251,7 +255,7 @@ class MetaStoreHardeningTest {
                         return;
                     } catch (RuntimeException other) {
                         // a reader that registered before close may see the channel closed under it
-                        if (!(other instanceof java.io.UncheckedIOException)) failure.set(other);
+                        if (!(other instanceof UncheckedIOException)) failure.set(other);
                         return;
                     }
                 }

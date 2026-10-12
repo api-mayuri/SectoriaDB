@@ -1,34 +1,40 @@
 package org.example.sectoriadb.storage;
 
+import org.example.sectoriadb.audit.OperationLogService;
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PlacedChunk;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.StorageKind;
+import org.example.sectoriadb.catalog.UploadHold;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.MultiDigest;
 import org.example.sectoriadb.checksum.MultiDigestInputStream;
 import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.engine.blob.SmallObjectBlob;
-import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PlacedChunk;
-import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.UploadHold;
-import org.example.sectoriadb.catalog.ManifestRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.HexFormat;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.EnumSet;
 import java.util.UUID;
-import java.util.zip.CRC32C;
-import org.example.sectoriadb.audit.OperationLogService;
+import java.util.function.Supplier;
 
 /**
  * The write side of object storage: stages the bytes of an upload into the blobs and commits the manifest.
@@ -76,7 +82,7 @@ public class ObjectWriter {
         }
         MultiDigest digest = new MultiDigest(false, EnumSet.of(ChecksumAlgorithm.CRC32C));
         try (InputStream in = new MultiDigestInputStream(Files.newInputStream(filePath), digest)) {
-            in.transferTo(java.io.OutputStream.nullOutputStream());
+            in.transferTo(OutputStream.nullOutputStream());
         }
         ManifestEntity entity = stage(filePath, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
         committing(entity, () -> withRedirects(entity, () -> manifestRepo.saveNew(entity)));
@@ -178,7 +184,7 @@ public class ObjectWriter {
     /** Audit entry for a stored manifest; written after the commit, failures never affect the operation. */
     private void logStored(ManifestEntity entity) {
         long ms = Math.max(0, System.currentTimeMillis() - entity.getCreatedAt().toEpochMilli());
-        Map<String, Object> details = new java.util.LinkedHashMap<>();
+        Map<String, Object> details = new LinkedHashMap<>();
         details.put("poolId", entity.getPoolId());
         details.put("totalBytes", entity.getTotalBytes());
         details.put("storageKind", entity.getStorageKind().name());
@@ -201,7 +207,7 @@ public class ObjectWriter {
         try {
             return Files.createDirectories(dir);
         } catch (IOException e) {
-            throw new java.io.UncheckedIOException(e);
+            throw new UncheckedIOException(e);
         }
     }
 
@@ -255,7 +261,7 @@ public class ObjectWriter {
         if (declared.algorithm() != null) algorithms.add(declared.algorithm());
         MultiDigest digest = new MultiDigest(true, algorithms);
         try (MultiDigestInputStream dis = new MultiDigestInputStream(in, digest)) {
-            Files.copy(dis, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            Files.copy(dis, tmp, StandardCopyOption.REPLACE_EXISTING);
         }
         digest.finish();
         declared.verify(digest);   // throws ChecksumMismatchException: nothing has been written anywhere yet
@@ -305,7 +311,7 @@ public class ObjectWriter {
      * and released around it, the chunks are forced before the transaction, placements are re-pointed after a resize.
      * {@code commit} must read {@link ManifestEntity#getStagedChunks()} (and the entity) lazily, at call time.
      */
-    public <T> T commitStaged(ManifestEntity entity, java.util.function.Supplier<T> commit) {
+    public <T> T commitStaged(ManifestEntity entity, Supplier<T> commit) {
         return committing(entity, () -> withRedirects(entity, commit));
     }
 
@@ -344,12 +350,12 @@ public class ObjectWriter {
         }
     }
 
-    private <T> T committing(ManifestEntity entity, java.util.function.Supplier<T> commit) {
+    private <T> T committing(ManifestEntity entity, Supplier<T> commit) {
         UploadHold hold = entity.getUploadHold();
         try {
             if (hold != null && !hold.beginCommit()) {
-                throw new org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException(
-                        org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException.Reason.COLLECTED,
+                throw new ChunkRepository.ChunkPlacementException(
+                        ChunkRepository.ChunkPlacementException.Reason.COLLECTED,
                         "The upload waited too long between writing its data and committing: the garbage collector"
                                 + " revoked its hold and may have freed the data, the upload must be retried");
             }
@@ -358,7 +364,7 @@ public class ObjectWriter {
             try {
                 chunkStore.barrier(entity.getStagedChunks());
             } catch (IOException e) {
-                throw new java.io.UncheckedIOException(e);
+                throw new UncheckedIOException(e);
             }
             return commit.get();
         } finally {
@@ -373,14 +379,14 @@ public class ObjectWriter {
      * A resize may have replaced a blob between the moment this upload placed chunks into it and now: the data was
      * migrated with the rest of the blob, so the placement is re-pointed at the replacement.
      */
-    private <T> T withRedirects(ManifestEntity entity, java.util.function.Supplier<T> commit) {
+    private <T> T withRedirects(ManifestEntity entity, Supplier<T> commit) {
         for (int attempt = 0; ; attempt++) {
             redirectStagedChunks(entity);
             try {
                 return commit.get();
-            } catch (org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException e) {
+            } catch (ChunkRepository.ChunkPlacementException e) {
                 // BLOB_GONE right after a resize committed: the replacement is registered a moment later, look again
-                if (e.reason() != org.example.sectoriadb.catalog.ChunkRepository.ChunkPlacementException.Reason.BLOB_GONE
+                if (e.reason() != ChunkRepository.ChunkPlacementException.Reason.BLOB_GONE
                         || attempt >= 50) {
                     throw e;
                 }
@@ -397,7 +403,7 @@ public class ObjectWriter {
     private void redirectStagedChunks(ManifestEntity entity) {
         List<PlacedChunk> staged = entity.getStagedChunks();
         if (staged.isEmpty()) return;
-        List<PlacedChunk> fixed = new java.util.ArrayList<>(staged.size());
+        List<PlacedChunk> fixed = new ArrayList<>(staged.size());
         for (PlacedChunk p : staged) {
             String now = blobGate.resolveRedirect(p.blobId());
             fixed.add(now.equals(p.blobId()) ? p : p.withBlob(now));

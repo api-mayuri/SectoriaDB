@@ -8,6 +8,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 import java.io.ByteArrayOutputStream;
+import java.net.Socket;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -18,13 +19,18 @@ import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Regression tests for S3 API bugs found in real use (auth disabled, so requests need no signature).
@@ -165,7 +171,7 @@ class S3ApiRegressionTest {
         assertEquals("bytes 4090-8200/50000", part.headers().firstValue("Content-Range").orElse(""));
         assertEquals("bytes", part.headers().firstValue("Accept-Ranges").orElse(""),
                 "players need Accept-Ranges on 206 responses");
-        assertArrayEquals(java.util.Arrays.copyOfRange(data, 4090, 8201), part.body());
+        assertArrayEquals(Arrays.copyOfRange(data, 4090, 8201), part.body());
 
         // end beyond size is clamped, start beyond size is 416
         var tail = send(HttpRequest.newBuilder(uri("/range-test/v.bin")).header("Range", "bytes=49990-99999").GET());
@@ -463,8 +469,8 @@ class S3ApiRegressionTest {
         // a part of a multipart object is not the whole object, and the whole object is still the concatenation
         var whole = get("partnum", "mp");
         assertEquals(200, whole.statusCode());
-        assertArrayEquals(java.util.stream.Stream.of(p1, p2).reduce(new byte[0], (a, b) -> {
-            byte[] c = java.util.Arrays.copyOf(a, a.length + b.length);
+        assertArrayEquals(Stream.of(p1, p2).reduce(new byte[0], (a, b) -> {
+            byte[] c = Arrays.copyOf(a, a.length + b.length);
             System.arraycopy(b, 0, c, a.length, b.length);
             return c;
         }), whole.body());
@@ -567,7 +573,7 @@ class S3ApiRegressionTest {
     @Test
     void declaredUploadSizeOverFiveGiBIsRefusedImmediately() throws Exception {
         mkBucket("too-big");
-        try (java.net.Socket sock = new java.net.Socket("localhost", port)) {
+        try (Socket sock = new Socket("localhost", port)) {
             sock.setSoTimeout(5000);
             sock.getOutputStream().write(("PUT /too-big/huge HTTP/1.1\r\nHost: localhost\r\nContent-Length: "
                     + 6L * 1024 * 1024 * 1024 * 1024 + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));

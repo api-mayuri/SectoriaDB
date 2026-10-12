@@ -2,7 +2,9 @@ package org.example.sectoriadb.checksum;
 
 import org.junit.jupiter.api.Test;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
@@ -24,8 +26,8 @@ class CrcCombineTest {
                 byte[] data = new byte[rnd.nextInt(5000)];
                 rnd.nextBytes(data);
                 int cut = data.length == 0 ? 0 : rnd.nextInt(data.length + 1);
-                byte[] a = java.util.Arrays.copyOfRange(data, 0, cut);
-                byte[] b = java.util.Arrays.copyOfRange(data, cut, data.length);
+                byte[] a = Arrays.copyOfRange(data, 0, cut);
+                byte[] b = Arrays.copyOfRange(data, cut, data.length);
                 assertArrayEquals(alg.compute(data), CrcCombine.combine(alg, alg.compute(a), alg.compute(b), b.length),
                         alg + " cut " + cut + " of " + data.length);
             }
@@ -43,7 +45,7 @@ class CrcCombineTest {
             int pos = 0;
             while (pos < data.length) {
                 int len = Math.min(data.length - pos, rnd.nextInt(40_000));   // includes empty pieces
-                byte[] piece = java.util.Arrays.copyOfRange(data, pos, pos + len);
+                byte[] piece = Arrays.copyOfRange(data, pos, pos + len);
                 digests.add(alg.compute(piece));
                 lengths.add((long) len);
                 pos += len;
@@ -97,7 +99,7 @@ class CrcCombineTest {
 
     private static long crc(ChecksumAlgorithm alg, byte[] data) {
         byte[] d = alg.compute(data);
-        java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(d);
+        ByteBuffer b = ByteBuffer.wrap(d);
         return d.length == 4 ? b.getInt() : b.getLong();
     }
 }

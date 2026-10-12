@@ -3,13 +3,19 @@ package org.example.sectoriadb.checksum;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.EnumSet;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Random;
 import java.util.zip.CRC32;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ChecksumAlgorithmTest {
 
@@ -54,7 +60,7 @@ class ChecksumAlgorithmTest {
     @Test
     void incrementalUpdatesEqualOneShot() {
         byte[] data = new byte[100_000];
-        new java.util.Random(1).nextBytes(data);
+        new Random(1).nextBytes(data);
         for (ChecksumAlgorithm a : ChecksumAlgorithm.values()) {
             var c = a.newCalculator();
             c.update(data, 0, 7);
@@ -67,7 +73,7 @@ class ChecksumAlgorithmTest {
     @Test
     void crc64MatchesTableFreeBitwiseReference() {
         byte[] data = new byte[1000];
-        new java.util.Random(2).nextBytes(data);
+        new Random(2).nextBytes(data);
         long crc = -1L;
         for (byte b : data) {
             crc ^= (b & 0xFF);
@@ -112,7 +118,7 @@ class ChecksumAlgorithmTest {
         try (var in = new MultiDigestInputStream(new ByteArrayInputStream(CHECK), d)) {
             in.read();                       // single-byte path
             in.skip(2);                      // skipped bytes are still digested
-            in.transferTo(java.io.OutputStream.nullOutputStream());
+            in.transferTo(OutputStream.nullOutputStream());
         }
         d.finish();
         assertEquals(9, d.count());

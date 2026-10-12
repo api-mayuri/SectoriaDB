@@ -1,16 +1,12 @@
 package org.example.sectoriadb.storage;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
+import java.nio.channels.ClosedChannelException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
@@ -19,7 +15,14 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The reference-counted LRU behind the table cache and the small-blob cache (doc 10, part B). */
 class ResidentCacheTest {
@@ -37,7 +40,7 @@ class ResidentCacheTest {
         }
 
         void use() throws IOException {
-            if (closed) throw new java.nio.channels.ClosedChannelException();
+            if (closed) throw new ClosedChannelException();
         }
     }
 
@@ -218,7 +221,7 @@ class ResidentCacheTest {
         for (int t = 0; t < threads; t++) {
             final int seed = t;
             fs.add(ex.submit(() -> {
-                java.util.Random r = new java.util.Random(seed);
+                Random r = new Random(seed);
                 for (int i = 0; i < 20_000; i++) {
                     try (ResidentHandle<Res> h = c.acquire("r" + r.nextInt(ids), loader(loads, 1))) {
                         h.get().use();

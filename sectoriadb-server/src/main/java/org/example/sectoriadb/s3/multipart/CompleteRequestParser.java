@@ -8,13 +8,13 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
-import javax.xml.parsers.DocumentBuilder;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import javax.xml.parsers.DocumentBuilder;
 
 /** Reads the {@code <CompleteMultipartUpload>} document (the body is size-bounded by the caller). */
 final class CompleteRequestParser {

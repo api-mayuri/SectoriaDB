@@ -2,29 +2,31 @@ package org.example.sectoriadb.observability;
 
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
-import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.catalog.CatalogInfo;
+import jakarta.annotation.PostConstruct;
 import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.BlobKind;
+import org.example.sectoriadb.catalog.CatalogInfo;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.MultipartRepository;
 import org.example.sectoriadb.catalog.MultipartUpload;
-import org.example.sectoriadb.storage.ChunkStore;
-import org.example.sectoriadb.storage.HashTableCache;
-import org.example.sectoriadb.maintenance.gc.SmallBlobCompactor;
-import org.example.sectoriadb.storage.SmallBlobCache;
+import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.example.sectoriadb.engine.blob.SmallObjectBlob;
+import org.example.sectoriadb.maintenance.gc.SmallBlobCompactor;
+import org.example.sectoriadb.storage.ChunkStore;
+import org.example.sectoriadb.storage.HashTableCache;
+import org.example.sectoriadb.storage.SmallBlobCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import jakarta.annotation.PostConstruct;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.function.ToDoubleFunction;
 
 /**
@@ -179,7 +181,7 @@ public class StorageGauges {
             smallOpen++;
         }
         long cuckooBlobs = 0, smallBlobCount = 0, capacity = 0, poolBlobsMax = 0;
-        java.util.Map<String, Long> perPool = new java.util.HashMap<>();
+        Map<String, Long> perPool = new HashMap<>();
         for (BlobFileEntity e : blobs.findAll()) {
             if (e.getKind() == BlobKind.CUCKOO) {
                 cuckooBlobs++;

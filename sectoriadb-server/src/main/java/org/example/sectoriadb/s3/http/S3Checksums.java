@@ -1,11 +1,12 @@
 package org.example.sectoriadb.s3.http;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.UploadChecksums;
-import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.s3.error.PayloadVerificationException;
+import org.example.sectoriadb.s3.error.S3Exception;
 import org.springframework.http.HttpStatus;
 
 import java.io.IOException;
@@ -17,7 +18,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
-import org.example.sectoriadb.s3.error.S3Exception;
 
 /**
  * Reads the S3 "additional checksum" request headers (AWS "Checking object integrity") into an

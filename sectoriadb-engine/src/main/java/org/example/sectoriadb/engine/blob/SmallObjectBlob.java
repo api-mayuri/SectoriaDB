@@ -1,16 +1,20 @@
 package org.example.sectoriadb.engine.blob;
 
-import org.example.sectoriadb.engine.hash.Crc32c;
 import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
+import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
+import org.example.sectoriadb.engine.format.BlobLayout;
 import org.example.sectoriadb.engine.format.SmallBlobLayout;
 import org.example.sectoriadb.engine.format.SmallBlobLayout.Checkpoint;
 import org.example.sectoriadb.engine.format.SmallBlobLayout.RecordHeader;
+import org.example.sectoriadb.engine.hash.Crc32c;
+import org.example.sectoriadb.engine.io.PositionalIo;
 import org.example.sectoriadb.engine.metrics.EngineListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,9 +24,23 @@ import java.util.List;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static org.example.sectoriadb.engine.format.SmallBlobLayout.*;
-import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
-import org.example.sectoriadb.engine.io.PositionalIo;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.ALIGNMENT;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.CHECKPOINT_SLOT_A;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.CHECKPOINT_SLOT_B;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.DATA_START;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.HEADER_SIZE;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.RECORD_HEADER_SIZE;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.RECORD_MAGIC;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.STATE_ACTIVE;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.STATE_DELETED;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.STATE_OFFSET;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.decodeCheckpoint;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.encodeCheckpoint;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.encodeHeader;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.encodeRecordHeader;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.parseRecordHeader;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.recordSpan;
+import static org.example.sectoriadb.engine.format.SmallBlobLayout.verifyHeader;
 
 /**
  * An append-only, log-structured file holding whole small objects (see {@link SmallBlobLayout} for the format and
@@ -123,7 +141,7 @@ public final class SmallObjectBlob implements AutoCloseable {
             PositionalIo.writeFully(fc::write, header, 0);
             fc.force(true);
         }
-        org.example.sectoriadb.engine.format.BlobLayout.syncDirectory(path);
+        BlobLayout.syncDirectory(path);
     }
 
     /** Opens an existing blob and runs recovery. */
@@ -294,7 +312,7 @@ public final class SmallObjectBlob implements AutoCloseable {
                             + " the record was dropped and the blob is now read-only until it is reopened");
                 }
                 if (closed) {
-                    throw new java.nio.channels.ClosedChannelException();
+                    throw new ClosedChannelException();
                 }
                 if (forcing) {
                     durableChanged.awaitUninterruptibly();
@@ -684,7 +702,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         FileChannel ch = channel;
         try {
             return op.run(ch);
-        } catch (java.nio.channels.ClosedChannelException e) {
+        } catch (ClosedChannelException e) {
             if (closed) throw e;
             boolean interrupted = Thread.interrupted();
             try {
@@ -697,7 +715,7 @@ public final class SmallObjectBlob implements AutoCloseable {
 
     private synchronized FileChannel reopenAfterInterrupt(FileChannel broken) throws IOException {
         if (channel == broken) {
-            if (closed) throw new java.nio.channels.ClosedChannelException();
+            if (closed) throw new ClosedChannelException();
             try {
                 broken.close();
             } catch (IOException ignored) {
@@ -723,7 +741,7 @@ public final class SmallObjectBlob implements AutoCloseable {
 
     private void ensureOpen() throws IOException {
         if (closed) {
-            throw new java.nio.channels.ClosedChannelException();
+            throw new ClosedChannelException();
         }
     }
 

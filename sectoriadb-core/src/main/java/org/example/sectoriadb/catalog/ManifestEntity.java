@@ -7,8 +7,11 @@ import org.example.sectoriadb.checksum.ChecksumType;
 
 import java.time.Instant;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
 
 /**
  * Metadata record describing how a stored object is laid out in the blobs, plus its S3 attributes.
@@ -180,8 +183,8 @@ public class ManifestEntity {
 
     /** Blob ids named by SMALL segments (and by a SMALL manifest itself), without duplicates. */
     @JsonIgnore
-    public java.util.Set<String> smallBlobIds() {
-        java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+    public Set<String> smallBlobIds() {
+        Set<String> ids = new LinkedHashSet<>();
         if (smallBlobId != null) ids.add(smallBlobId);
         for (PartSegment s : segments) if (s.kind() == StorageKind.SMALL) ids.add(s.smallBlobId());
         return ids;
@@ -202,13 +205,13 @@ public class ManifestEntity {
     }
 
     /** Byte extent of the part the client uploaded as {@code partNumber}; empty if this is no multipart object or has no such part. */
-    public java.util.Optional<Extent> partExtent(int partNumber) {
+    public Optional<Extent> partExtent(int partNumber) {
         long pos = 0;
         for (PartSegment s : segments) {
-            if (s.partNumber() == partNumber) return java.util.Optional.of(new Extent(pos, s.length()));
+            if (s.partNumber() == partNumber) return Optional.of(new Extent(pos, s.length()));
             pos += s.length();
         }
-        return java.util.Optional.empty();
+        return Optional.empty();
     }
 
     /** Index into the chunk key list where the chunks of segment {@code segmentIndex} start. */

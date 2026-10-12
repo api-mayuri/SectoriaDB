@@ -2,6 +2,7 @@ package org.example.sectoriadb.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 
@@ -46,8 +47,8 @@ public class StorageProperties {
     public void setUploadTmpDir(String v) { this.uploadTmpDir = v == null ? "" : v; }
 
     /** The resolved spool directory for uploads (not created). */
-    public java.nio.file.Path uploadTmpPath() {
-        return uploadTmpDir.isBlank() ? java.nio.file.Path.of(dataDir).resolve(".tmp") : java.nio.file.Path.of(uploadTmpDir);
+    public Path uploadTmpPath() {
+        return uploadTmpDir.isBlank() ? Path.of(dataDir).resolve(".tmp") : Path.of(uploadTmpDir);
     }
 
     public boolean isFsync() { return fsync; }

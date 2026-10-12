@@ -3,12 +3,11 @@ package org.example.sectoriadb.storage.multipart;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.MultipartPart;
-import org.example.sectoriadb.catalog.MultipartRepository;
 import org.example.sectoriadb.catalog.MultipartRepository.CompleteCommand;
 import org.example.sectoriadb.catalog.MultipartRepository.RequestedPart;
 import org.example.sectoriadb.catalog.MultipartUpload;
-import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.metastore.MetaInvariants;
@@ -24,12 +23,17 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.TreeSet;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Multipart objects and open uploads next to the maintenance jobs: resize repoints chunk locations through the chunk index,
@@ -201,7 +205,7 @@ class MultipartMaintenanceTest {
         long from = 2L * CHUNK + 5, len = p1.length + 100 - from;                 // crosses the boundary of parts 1 and 2
         MultipartPart c2 = rig.multipart.uploadPartCopy(open, 2, source, new long[]{from, len});
         complete(dst, c1, c2);
-        byte[] expected = concat(whole, java.util.Arrays.copyOfRange(whole, (int) from, (int) (from + len)));
+        byte[] expected = concat(whole, Arrays.copyOfRange(whole, (int) from, (int) (from + len)));
         assertArrayEquals(expected, get("dst"));
         assertEquals(whole.length, c1.size());
 
@@ -266,7 +270,7 @@ class MultipartMaintenanceTest {
             // same content as one request; order within a page is uploads first, then prefixes, so compare as sets
             unpaged.commonPrefixes().forEach(p -> expected.add("P:" + p));
             unpaged.uploads().forEach(u -> expected.add(u.getKey() + "#" + u.getUploadId()));
-            assertEquals(new java.util.TreeSet<>(expected), new java.util.TreeSet<>(seen), "delimiter " + delimiter);
+            assertEquals(new TreeSet<>(expected), new TreeSet<>(seen), "delimiter " + delimiter);
             assertEquals(expected.size(), seen.size(), "nothing is listed twice");
         }
 

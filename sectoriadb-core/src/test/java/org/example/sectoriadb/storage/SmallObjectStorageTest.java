@@ -1,32 +1,16 @@
 package org.example.sectoriadb.storage;
 
-import org.example.sectoriadb.metrics.StorageMetrics;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.audit.JsonOperationLogRepository;
+import org.example.sectoriadb.audit.OperationLogService;
 import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.BlobFileRepository;
 import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.StorageKind;
-import org.example.sectoriadb.metastore.MetaStore;
-import org.example.sectoriadb.metastore.MetaStoreOptions;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-
-import java.io.ByteArrayOutputStream;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Arrays;
-import java.util.Random;
-
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.catalog.BlobFileRepository;
-import org.example.sectoriadb.audit.JsonOperationLogRepository;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.PoolRepository;
+import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.metastore.BlobCodec;
 import org.example.sectoriadb.catalog.metastore.ManifestCodec;
 import org.example.sectoriadb.catalog.metastore.MetaStoreBlobFileRepository;
@@ -34,7 +18,38 @@ import org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreManifestRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStorePoolRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
-import org.example.sectoriadb.audit.OperationLogService;
+import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.metastore.MetaStore;
+import org.example.sectoriadb.metastore.MetaStoreOptions;
+import org.example.sectoriadb.metrics.StorageMetrics;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Random;
+import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ForkJoinPool;
+import java.util.concurrent.Future;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** FileStorageService routing: empty / small (whole record) / chunked, and all read paths for each kind. */
 class SmallObjectStorageTest {
@@ -73,7 +88,7 @@ class SmallObjectStorageTest {
         props.setDefaultNumBuckets(64);
         props.setFsync(false);
         wire();
-        pool = new PoolEntity("pool-1", "bkt", root.resolve("data/bkt").toString(), java.time.Instant.now());
+        pool = new PoolEntity("pool-1", "bkt", root.resolve("data/bkt").toString(), Instant.now());
         Files.createDirectories(Path.of(pool.getBasePath()));
         poolRepo.save(pool);
     }
@@ -84,8 +99,8 @@ class SmallObjectStorageTest {
         if (store != null) store.close();
         try {
             Files.createDirectories(root.resolve("meta"));
-        } catch (java.io.IOException e) {
-            throw new java.io.UncheckedIOException(e);
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
         store = MetaStore.open(root.resolve("meta/sectoria.db"), MetaStoreOptions.defaults().fsync(false));
         MetaStoreProvider stores = MetaStoreProvider.of(store);
@@ -97,7 +112,7 @@ class SmallObjectStorageTest {
         smallCache = new SmallBlobCache(props, StorageMetrics.NOOP);
         OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         blobService = new BlobService(blobRepo, cache, blobGate, smallCache, props, opLog);
-        var chunkStore = new org.example.sectoriadb.storage.ChunkStore(new org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository(stores), blobService, cache, blobGate, props);
+        var chunkStore = new ChunkStore(new MetaStoreChunkRepository(stores), blobService, cache, blobGate, props);
         catalog = new ObjectCatalog(manifestRepo, opLog);
         writer = new ObjectWriter(manifestRepo, blobService, cache, blobGate, smallCache, chunkStore, opLog, props);
         reader = new ObjectReader(chunkStore, smallCache, catalog, opLog, StorageMetrics.NOOP);
@@ -110,7 +125,7 @@ class SmallObjectStorageTest {
     }
 
     private ManifestEntity put(byte[] data) throws Exception {
-        return writer.storeStream(new java.io.ByteArrayInputStream(data), pool, "k" + data.length, null);
+        return writer.storeStream(new ByteArrayInputStream(data), pool, "k" + data.length, null);
     }
 
     private byte[] get(ManifestEntity m) throws Exception {
@@ -189,7 +204,7 @@ class SmallObjectStorageTest {
     @Test
     void deleteLeavesTheRecordForTheCollector() throws Exception {
         ManifestEntity a = put(bytes(100));
-        ManifestEntity b = writer.storeStream(new java.io.ByteArrayInputStream(bytes(200)), pool, "other", null);
+        ManifestEntity b = writer.storeStream(new ByteArrayInputStream(bytes(200)), pool, "other", null);
         BlobFileEntity sob = manifestRepo.findById(a.getId()).orElseThrow().getSmallBlob();
         assertEquals(2, blobService.getSmallStats(sob).liveRecords());
 
@@ -233,7 +248,7 @@ class SmallObjectStorageTest {
         props.getSmallObject().setMaxFileBytes(4096 + 3 * 144);       // header + three 100-byte records
         ManifestEntity[] ms = new ManifestEntity[7];
         for (int i = 0; i < ms.length; i++) {
-            ms[i] = writer.storeStream(new java.io.ByteArrayInputStream(bytes(100 + i)), pool, "r" + i, null);
+            ms[i] = writer.storeStream(new ByteArrayInputStream(bytes(100 + i)), pool, "r" + i, null);
         }
         long soBlobs = blobRepo.findByPoolId(pool.getId()).stream().filter(b -> b.getKind() == BlobKind.SMALL).count();
         assertTrue(soBlobs >= 2, "expected rollover, got " + soBlobs + " blob(s)");
@@ -248,14 +263,14 @@ class SmallObjectStorageTest {
         ManifestEntity bare = new ManifestEntity();
         bare.setId("x");
         bare.setPoolId("p");
-        bare.setChunkKeys(java.util.List.of(1L));
+        bare.setChunkKeys(List.of(1L));
         bare.setTotalChunks(1);
         bare.setTotalBytes(10);
         bare.setLastChunkSize(10);
         ManifestEntity m = ManifestCodec.decode(ManifestCodec.encode(bare));
         assertEquals(StorageKind.CHUNKED, m.getStorageKind());
         assertNull(m.getSmallBlobId());
-        assertEquals(java.util.List.of(1L), m.parseChunkKeys());
+        assertEquals(List.of(1L), m.parseChunkKeys());
         BlobFileEntity b = BlobCodec.decode(BlobCodec.encode(new BlobFileEntity()));
         assertEquals(BlobKind.CUCKOO, b.getKind());
     }
@@ -264,10 +279,10 @@ class SmallObjectStorageTest {
     @Test
     void concurrentFirstWritesCreateExactlyOneCuckooBlob() throws Exception {
         int threads = 16;
-        var start = new java.util.concurrent.CountDownLatch(1);
-        var pool2 = new java.util.concurrent.ForkJoinPool(threads);
+        var start = new CountDownLatch(1);
+        var pool2 = new ForkJoinPool(threads);
         try {
-            var futures = new java.util.ArrayList<java.util.concurrent.Future<String>>();
+            var futures = new ArrayList<Future<String>>();
             for (int t = 0; t < threads; t++) {
                 futures.add(pool2.submit(() -> {
                     start.await();
@@ -275,7 +290,7 @@ class SmallObjectStorageTest {
                 }));
             }
             start.countDown();
-            java.util.Set<String> ids = new java.util.HashSet<>();
+            Set<String> ids = new HashSet<>();
             for (var f : futures) ids.add(f.get());
             assertEquals(1, ids.size(), "all writers must be given the same blob");
         } finally {

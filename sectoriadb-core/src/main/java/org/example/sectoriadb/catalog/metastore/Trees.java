@@ -1,20 +1,23 @@
 package org.example.sectoriadb.catalog.metastore;
 
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.metastore.BTree;
 import org.example.sectoriadb.metastore.Cursor;
 import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.ReadTxn;
 import org.example.sectoriadb.metastore.WriteTxn;
-import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.StorageKind;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -169,7 +172,7 @@ final class Trees {
     static ManifestEntity resolve(ReadTxn tx, ManifestEntity m) {
         if (m.getSmallBlobId() != null) blob(tx, m.getSmallBlobId(), true).ifPresent(m::setSmallBlob);
         if (!m.getSegments().isEmpty()) {
-            java.util.Map<String, BlobFileEntity> blobs = new java.util.HashMap<>();
+            Map<String, BlobFileEntity> blobs = new HashMap<>();
             for (String id : m.smallBlobIds()) blob(tx, id, true).ifPresent(b -> blobs.put(id, b));
             m.setSegmentBlobs(blobs);
         }
@@ -214,7 +217,7 @@ final class Trees {
     static void enqueueDeleted(WriteTxn tx, String manifestId) {
         // the value is the queueing time: the collector waits for the grace period before it removes the tombstone
         tx.tree(DELETED_MANIFESTS).put(gcKey(tx.txId() + 1, manifestId),
-                java.nio.ByteBuffer.allocate(8).putLong(System.currentTimeMillis()).array());
+                ByteBuffer.allocate(8).putLong(System.currentTimeMillis()).array());
     }
 
     /**
@@ -289,7 +292,7 @@ final class Trees {
     /** {objects, bytes} as last committed, or null if the totals have never been initialized. */
     static long[] totals(ReadTxn tx) {
         return tx.tree(STATS).get(TOTALS_KEY).map(v -> {
-            java.nio.ByteBuffer b = java.nio.ByteBuffer.wrap(v);
+            ByteBuffer b = ByteBuffer.wrap(v);
             return new long[]{b.getLong(0), b.getLong(8)};
         }).orElse(null);
     }
@@ -321,7 +324,7 @@ final class Trees {
     }
 
     private static void putTotals(WriteTxn tx, long objects, long bytes) {
-        byte[] v = java.nio.ByteBuffer.allocate(16).putLong(objects).putLong(bytes).array();
+        byte[] v = ByteBuffer.allocate(16).putLong(objects).putLong(bytes).array();
         tx.tree(STATS).put(TOTALS_KEY, v);
     }
 

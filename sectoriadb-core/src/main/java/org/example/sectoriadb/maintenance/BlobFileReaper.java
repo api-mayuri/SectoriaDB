@@ -1,10 +1,11 @@
 package org.example.sectoriadb.maintenance;
 
 import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.BlobFileRepository;
 import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.BlobFileRepository;
 import org.example.sectoriadb.catalog.PoolRepository;
+import org.example.sectoriadb.storage.HashTableCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,7 +18,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import org.example.sectoriadb.storage.HashTableCache;
 
 /**
  * Removes {@code blob_*.raw} files that nobody needs any more (doc 10, part B).

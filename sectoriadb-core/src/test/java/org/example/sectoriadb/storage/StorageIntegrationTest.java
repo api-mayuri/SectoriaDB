@@ -1,8 +1,10 @@
 package org.example.sectoriadb.storage;
 
 import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import org.example.sectoriadb.checksum.UploadChecksums;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,6 +15,7 @@ import java.io.ByteArrayOutputStream;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
@@ -23,8 +26,10 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The storage stack over the MetaStore: concurrent overwrites, restart persistence, blob-written-but-not-committed. */
 class StorageIntegrationTest {
@@ -98,7 +103,7 @@ class StorageIntegrationTest {
         assertTrue(committedIds.contains(live.getId()));
         byte[] content = get(live);
         int winner = -1;
-        for (int i = 0; i < threads; i++) if (java.util.Arrays.equals(bodies.get(i), content)) winner = i;
+        for (int i = 0; i < threads; i++) if (Arrays.equals(bodies.get(i), content)) winner = i;
         assertTrue(winner >= 0, "the body is exactly one of the uploaded bodies, intact");
         assertEquals(md5(bodies.get(winner)), live.getEtag(), "ETag belongs to the returned body");
 
@@ -145,9 +150,9 @@ class StorageIntegrationTest {
 
         // the data of a replacement reaches the blobs, then "the process dies" before commitObject
         ManifestEntity staged = rig.writer.stageStream(new ByteArrayInputStream(body(6, StorageRig.CHUNK * 2)), pool, "k",
-                "application/octet-stream", org.example.sectoriadb.checksum.UploadChecksums.none());
+                "application/octet-stream", UploadChecksums.none());
         ManifestEntity staged2 = rig.writer.stageStream(new ByteArrayInputStream(body(7, 500)), pool, "never", "x",
-                org.example.sectoriadb.checksum.UploadChecksums.none());
+                UploadChecksums.none());
         assertNotNull(staged.getId());
         assertNotNull(staged2.getId());
 

@@ -1,9 +1,9 @@
 package org.example.sectoriadb.engine.blob;
 
 import org.example.sectoriadb.engine.format.BlobLayout;
+import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
 import org.example.sectoriadb.engine.io.BlobFile;
 import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
-import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -15,7 +15,10 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CuckooHashTableTest {
 

@@ -1,15 +1,21 @@
 package org.example.sectoriadb.s3.auth;
 
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
+import org.example.sectoriadb.s3.http.UrlCodec;
+
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HexFormat;
-import org.example.sectoriadb.s3.http.UrlCodec;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * AWS Signature Version 4 computation utilities.

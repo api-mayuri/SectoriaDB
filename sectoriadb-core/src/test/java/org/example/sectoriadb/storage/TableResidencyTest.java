@@ -3,6 +3,8 @@ package org.example.sectoriadb.storage;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.metastore.ChunkInvariants;
+import org.example.sectoriadb.catalog.metastore.MetaInvariants;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +13,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -24,9 +27,12 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.catalog.metastore.ChunkInvariants;
-import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Blob tables are loaded lazily, bounded by {@code sectoriadb.cache.max-resident-tables} and evicted LRU; a table that a
@@ -201,7 +207,7 @@ class TableResidencyTest {
         CuckooHashTable dirty;
         try (var h = rig.cache.acquire(blobs.get(0))) {
             dirty = h.get();
-            dirty.insertPreservingKey(1L, java.nio.ByteBuffer.wrap(bytes(CHUNK, 1)));
+            dirty.insertPreservingKey(1L, ByteBuffer.wrap(bytes(CHUNK, 1)));
             assertTrue(dirty.hasUnforcedWrites());
         }
         for (int round = 0; round < 3; round++) {

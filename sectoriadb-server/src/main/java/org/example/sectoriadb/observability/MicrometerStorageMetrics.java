@@ -2,6 +2,7 @@ package org.example.sectoriadb.observability;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.DistributionSummary;
+import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import org.example.sectoriadb.metrics.StorageMetrics;
@@ -12,6 +13,7 @@ import java.time.Duration;
 import java.util.EnumMap;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Micrometer adapter of the core {@link StorageMetrics} SPI. Every meter is created once in the constructor, so the
@@ -66,7 +68,7 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     private final Counter gcReclaimed;
     private final Map<GcDeferral, Counter> gcDeferred = new EnumMap<>(GcDeferral.class);
     private final Counter gcErrors;
-    private final java.util.concurrent.atomic.AtomicLong gcLastRunSeconds = new java.util.concurrent.atomic.AtomicLong();
+    private final AtomicLong gcLastRunSeconds = new AtomicLong();
 
     public MicrometerStorageMetrics(MeterRegistry r) {
         for (Target t : Target.values()) {
@@ -151,7 +153,7 @@ public class MicrometerStorageMetrics implements StorageMetrics {
                     .description("Collector work left for a later pass, by reason").tag("reason", d.label()).register(r));
         }
         gcErrors = Counter.builder("sectoriadb.gc.errors").description("Collector steps that failed and are retried").register(r);
-        io.micrometer.core.instrument.Gauge.builder("sectoriadb.gc.last.run.timestamp.seconds", gcLastRunSeconds, java.util.concurrent.atomic.AtomicLong::get)
+        Gauge.builder("sectoriadb.gc.last.run.timestamp.seconds", gcLastRunSeconds, AtomicLong::get)
                 .description("Unix time of the last finished collector pass (0 = none yet)").baseUnit("seconds").register(r);
         smallDurabilityWait = timer(r, "sectoriadb.small.durability.wait", "Time a small-object append waited from taking the lock until its record was durable", Buckets.FSYNC);
     }

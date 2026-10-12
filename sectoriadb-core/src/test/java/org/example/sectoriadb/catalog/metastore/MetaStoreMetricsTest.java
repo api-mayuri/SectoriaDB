@@ -2,14 +2,16 @@ package org.example.sectoriadb.catalog.metastore;
 
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
+import org.example.sectoriadb.metrics.RecordingMetrics;
 import org.example.sectoriadb.metrics.StorageMetrics.Target;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.metrics.RecordingMetrics;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The metadata store's events reach {@link org.example.sectoriadb.metrics.StorageMetrics} through the adapter. */
 class MetaStoreMetricsTest {

@@ -1,11 +1,14 @@
 package org.example.sectoriadb.storage;
 
-import org.example.sectoriadb.engine.io.CrashSimulation;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.metastore.ChunkInvariants;
+import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
+import org.example.sectoriadb.engine.io.CrashSimulation;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -13,9 +16,15 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -26,9 +35,10 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.catalog.metastore.ChunkInvariants;
-import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Cuckoo insert durability without fsync under the table lock (doc 10, part B): a chunk is written without an fsync and
@@ -82,12 +92,12 @@ class CuckooDurabilityTest {
 
     /** Wraps a ManifestRepository so that a hook runs right before every commit. */
     static ManifestRepository spy(ManifestRepository real, Runnable beforeCommit) {
-        return (ManifestRepository) java.lang.reflect.Proxy.newProxyInstance(ManifestRepository.class.getClassLoader(),
+        return (ManifestRepository) Proxy.newProxyInstance(ManifestRepository.class.getClassLoader(),
                 new Class<?>[]{ManifestRepository.class}, (proxy, method, args) -> {
                     if (method.getName().equals("commitObject") || method.getName().equals("saveNew")) beforeCommit.run();
                     try {
                         return method.invoke(real, args);
-                    } catch (java.lang.reflect.InvocationTargetException e) {
+                    } catch (InvocationTargetException e) {
                         throw e.getCause();
                     }
                 });
@@ -121,12 +131,12 @@ class CuckooDurabilityTest {
         byte[] data = bytes(4 * CHUNK, 77);
         // upload A writes its chunks (no fsync) and has not committed
         ManifestEntity a = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "a", null,
-                org.example.sectoriadb.checksum.UploadChecksums.none());
+                UploadChecksums.none());
         assertTrue(disk.unforced() > 0, "A's chunks sit in the page cache");
         // upload B has the same content: its chunks are found in the table (not in the index) and nothing is written
         int writesBefore = disk.writes.get();
         ManifestEntity b = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "b", null,
-                org.example.sectoriadb.checksum.UploadChecksums.none());
+                UploadChecksums.none());
         assertEquals(writesBefore, disk.writes.get(), "B deduplicated against the table, it wrote nothing");
         assertTrue(disk.unforced() > 0);
         // B commits first: its barrier must make A's chunks durable, although it wrote none of them
@@ -260,13 +270,13 @@ class CuckooDurabilityTest {
     @Test
     void aSlotWhoseDataWasLostIsDetectedAndHealedByTheNextUpload() throws Exception {
         byte[] data = bytes(CHUNK + 10, 3);
-        rig.writer.stageStream(new ByteArrayInputStream(data), pool, "x", null, org.example.sectoriadb.checksum.UploadChecksums.none());
+        rig.writer.stageStream(new ByteArrayInputStream(data), pool, "x", null, UploadChecksums.none());
         // the crash keeps the meta entries and drops the data: every unforced write is decided by the coin; try seeds until the
         // meta entry survived and the data did not
         boolean damaged = false;
         for (int seed = 0; seed < 200 && !damaged; seed++) {
             setUpFresh();
-            rig.writer.stageStream(new ByteArrayInputStream(data), pool, "x", null, org.example.sectoriadb.checksum.UploadChecksums.none());
+            rig.writer.stageStream(new ByteArrayInputStream(data), pool, "x", null, UploadChecksums.none());
             disk.crash(seed, 0.5);
             disk.revive();
             rig.reopen();
@@ -293,10 +303,10 @@ class CuckooDurabilityTest {
     }
 
     private static void deleteRecursively(Path p) {
-        try (var s = java.nio.file.Files.walk(p)) {
-            s.sorted(java.util.Comparator.reverseOrder()).filter(x -> !x.equals(p)).forEach(x -> x.toFile().delete());
-        } catch (java.io.IOException e) {
-            throw new java.io.UncheckedIOException(e);
+        try (var s = Files.walk(p)) {
+            s.sorted(Comparator.reverseOrder()).filter(x -> !x.equals(p)).forEach(x -> x.toFile().delete());
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 }

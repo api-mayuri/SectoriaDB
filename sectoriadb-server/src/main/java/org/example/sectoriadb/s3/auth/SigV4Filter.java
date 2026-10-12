@@ -7,9 +7,14 @@ import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
-import org.example.sectoriadb.security.CredentialEntity;
+import org.example.sectoriadb.observability.AuthFailure;
 import org.example.sectoriadb.observability.ObservabilityAttributes;
+import org.example.sectoriadb.observability.RequestIds;
 import org.example.sectoriadb.s3.access.AccessControlService;
+import org.example.sectoriadb.s3.http.S3Request;
+import org.example.sectoriadb.s3.http.UrlCodec;
+import org.example.sectoriadb.s3.xml.XmlSupport;
+import org.example.sectoriadb.security.CredentialEntity;
 import org.example.sectoriadb.security.CredentialService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,23 +22,27 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
+import java.io.BufferedReader;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.io.PrintWriter;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
-import org.example.sectoriadb.observability.AuthFailure;
-import org.example.sectoriadb.observability.RequestIds;
-import org.example.sectoriadb.s3.http.S3Request;
-import org.example.sectoriadb.s3.http.UrlCodec;
-import org.example.sectoriadb.s3.xml.XmlSupport;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Semaphore;
+import java.util.regex.Pattern;
 
 /**
  * Validates AWS Signature Version 4 on every S3 API request.
@@ -58,7 +67,7 @@ public class SigV4Filter extends OncePerRequestFilter {
     private static final String STREAMING_SIGNED = SigV4Utils.STREAMING_PAYLOAD;
     private static final String STREAMING_SIGNED_TRAILER = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
     private static final String STREAMING_UNSIGNED_TRAILER = "STREAMING-UNSIGNED-PAYLOAD-TRAILER";
-    private static final java.util.regex.Pattern HEX_SHA256 = java.util.regex.Pattern.compile("[0-9a-fA-F]{64}");
+    private static final Pattern HEX_SHA256 = Pattern.compile("[0-9a-fA-F]{64}");
 
     private final CredentialService credentialService;
     private final AccessControlService accessControlService;
@@ -70,10 +79,10 @@ public class SigV4Filter extends OncePerRequestFilter {
     private final boolean requireSignedHeaders;
     private final int maxInflightWrites;
     private final int maxInflightReads;
-    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.Semaphore> writeSlots =
-            new java.util.concurrent.ConcurrentHashMap<>();
-    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.Semaphore> readSlots =
-            new java.util.concurrent.ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Semaphore> writeSlots =
+            new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Semaphore> readSlots =
+            new ConcurrentHashMap<>();
 
     public SigV4Filter(
             CredentialService credentialService,
@@ -185,7 +194,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             return;
         }
         var slots = (write ? writeSlots : readSlots)
-                .computeIfAbsent(accessKey, k -> new java.util.concurrent.Semaphore(limit));
+                .computeIfAbsent(accessKey, k -> new Semaphore(limit));
         if (!slots.tryAcquire()) {
             response.setHeader("Retry-After", "1");
             sendError(request, response, 503, "SlowDown",
@@ -400,7 +409,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         }
         Map<String, String> signedHeaders = new TreeMap<>();
         for (String h : signedHeadersStr.split(";")) {
-            String name = h.toLowerCase(java.util.Locale.ROOT);
+            String name = h.toLowerCase(Locale.ROOT);
             String val = joinedHeader(request, h);
             if (val == null && name.equals("host")) {
                 val = request.getServerName() + (request.getServerPort() != 80 && request.getServerPort() != 443
@@ -412,7 +421,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             List<String> missing = new ArrayList<>();
             if (!signedHeaders.containsKey("host")) missing.add("host");
             for (Enumeration<String> names = request.getHeaderNames(); names != null && names.hasMoreElements(); ) {
-                String n = names.nextElement().toLowerCase(java.util.Locale.ROOT);
+                String n = names.nextElement().toLowerCase(Locale.ROOT);
                 if (n.startsWith("x-amz-") && !signedHeaders.containsKey(n)) missing.add(n);
             }
             if (!missing.isEmpty()) {
@@ -442,7 +451,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         try {
             String canonicalRequest = SigV4Utils.buildCanonicalRequest(
                     request.getMethod(), request.getRequestURI(), request.getQueryString(), signedHeaders, payloadHash);
-            return SigV4Utils.sha256Hex(canonicalRequest.getBytes(java.nio.charset.StandardCharsets.ISO_8859_1));
+            return SigV4Utils.sha256Hex(canonicalRequest.getBytes(StandardCharsets.ISO_8859_1));
         } catch (IllegalArgumentException e) {
             throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "The query string is malformed.");
         }
@@ -510,7 +519,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             try {
                 Instant instant = Instant.from(RFC_1123_DATE_TIME.parse(date));
                 return DATE_FMT.format(instant);
-            } catch (java.time.format.DateTimeParseException e) {
+            } catch (DateTimeParseException e) {
                 log.debug("Failed to parse Date header: {}", date);
                 throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "MissingSecurityHeader",
                         "Request must include x-amz-date or Date header");
@@ -529,7 +538,7 @@ public class SigV4Filter extends OncePerRequestFilter {
                 throw new AuthException(AuthFailure.CLOCK_SKEW, 403, "RequestTimeTooSkewed",
                         "The difference between the request time and the current time is too large.");
             }
-        } catch (java.time.format.DateTimeParseException e) {
+        } catch (DateTimeParseException e) {
             throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Cannot parse timestamp: " + sanitize(timestamp));
         }
     }
@@ -558,7 +567,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             if (Instant.now().isAfter(expiry)) {
                 throw new AuthException(AuthFailure.EXPIRED_PRESIGN, 403, "ExpiredToken", "The provided token has expired.");
             }
-        } catch (NumberFormatException | java.time.format.DateTimeParseException e) {
+        } catch (NumberFormatException | DateTimeParseException e) {
             throw new AuthException(AuthFailure.MALFORMED_HEADER, 400, "InvalidArgument", "Cannot parse presigned URL parameters");
         }
     }
@@ -574,8 +583,8 @@ public class SigV4Filter extends OncePerRequestFilter {
 
     private static boolean constantTimeEquals(String a, String b) {
         if (a == null || b == null) return false;
-        return MessageDigest.isEqual(a.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                b.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return MessageDigest.isEqual(a.getBytes(StandardCharsets.UTF_8),
+                b.getBytes(StandardCharsets.UTF_8));
     }
 
     /** Strips control characters from client-supplied text before it is logged (log injection). */
@@ -616,11 +625,11 @@ public class SigV4Filter extends OncePerRequestFilter {
         }
 
         @Override
-        public java.io.BufferedReader getReader() throws IOException {
+        public BufferedReader getReader() throws IOException {
             String enc = getCharacterEncoding();
-            java.nio.charset.Charset cs = enc != null ? java.nio.charset.Charset.forName(enc)
-                    : java.nio.charset.StandardCharsets.ISO_8859_1;
-            return new java.io.BufferedReader(new java.io.InputStreamReader(getInputStream(), cs));
+            Charset cs = enc != null ? Charset.forName(enc)
+                    : StandardCharsets.ISO_8859_1;
+            return new BufferedReader(new InputStreamReader(getInputStream(), cs));
         }
     }
 

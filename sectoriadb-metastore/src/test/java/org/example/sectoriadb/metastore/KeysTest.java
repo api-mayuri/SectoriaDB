@@ -1,13 +1,17 @@
 package org.example.sectoriadb.metastore;
 
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.Random;
+
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import java.util.Arrays;
-import java.util.Random;
-import org.junit.jupiter.api.Test;
 
 class KeysTest {
     private static String randString(Random r) {
@@ -31,8 +35,8 @@ class KeysTest {
             byte[] k1 = Keys.builder().string(s1).longSigned(l1).build();
             byte[] k2 = Keys.builder().string(s2).longSigned(l2).build();
             // String.compareTo orders UTF-16 units, so compare code points as UTF-8 bytes do
-            int cmpS = Arrays.compareUnsigned(s1.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                    s2.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            int cmpS = Arrays.compareUnsigned(s1.getBytes(StandardCharsets.UTF_8),
+                    s2.getBytes(StandardCharsets.UTF_8));
             int expected = cmpS != 0 ? Integer.signum(cmpS) : Long.signum(l1 - l2);
             assertEquals(expected, Integer.signum(Arrays.compareUnsigned(k1, k2)), s1 + "/" + l1 + " vs " + s2 + "/" + l2);
         }
@@ -63,7 +67,7 @@ class KeysTest {
     }
 
     @Test
-    void prefixScanOnTree(@org.junit.jupiter.api.io.TempDir java.nio.file.Path dir) {
+    void prefixScanOnTree(@TempDir Path dir) {
         try (MetaStore s = MetaStore.open(dir.resolve("k.db"), MetaStoreOptions.defaults().pageSize(512).fsync(false))) {
             s.writeVoid(tx -> {
                 BTree t = tx.tree("objects");

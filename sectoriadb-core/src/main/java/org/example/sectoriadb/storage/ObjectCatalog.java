@@ -1,12 +1,14 @@
 package org.example.sectoriadb.storage;
 
+import org.example.sectoriadb.audit.OperationLogService;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import java.util.List;
 import java.util.Map;
-import org.example.sectoriadb.audit.OperationLogService;
+import java.util.Optional;
 
 /**
  * Lookup, listing and deletion of stored objects (manifests): the metadata operations that need no blob IO.
@@ -25,7 +27,7 @@ public class ObjectCatalog {
 
 
     /** Result of an S3 PUT as seen by a later read, used by tests and the shell. */
-    public java.util.Optional<ManifestEntity> findObject(String bucket, String key) {
+    public Optional<ManifestEntity> findObject(String bucket, String key) {
         return manifestRepo.findCurrent(bucket, key);
     }
 
@@ -48,7 +50,7 @@ public class ObjectCatalog {
     /** S3 DeleteObject: one transaction unlinks the current version and queues it for GC. */
     public boolean deleteObject(String bucket, String key) {
         long t0 = System.currentTimeMillis();
-        java.util.Optional<ManifestEntity> removed = manifestRepo.deleteObject(bucket, key);
+        Optional<ManifestEntity> removed = manifestRepo.deleteObject(bucket, key);
         removed.ifPresent(m -> afterDelete(m, t0));
         return removed.isPresent();
     }

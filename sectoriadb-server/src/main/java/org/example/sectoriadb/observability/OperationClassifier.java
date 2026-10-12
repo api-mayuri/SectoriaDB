@@ -1,6 +1,7 @@
 package org.example.sectoriadb.observability;
 
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -25,7 +26,7 @@ public final class OperationClassifier {
      */
     public static S3Operation classify(String method, String requestUri, String queryString, boolean copySource) {
         if (method == null || requestUri == null) return S3Operation.Other;
-        String m = method.toUpperCase(java.util.Locale.ROOT);
+        String m = method.toUpperCase(Locale.ROOT);
         Map<String, String> q = parseQuery(queryString);
 
         int depth = depth(requestUri);

@@ -1,11 +1,15 @@
 package org.example.sectoriadb;
 
 import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.MultipartRepository;
+import org.example.sectoriadb.catalog.MultipartUpload;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.checksum.UploadChecksums;
+import org.example.sectoriadb.shell.FileCommands;
 import org.example.sectoriadb.storage.ObjectWriter;
 import org.example.sectoriadb.storage.PoolService;
-import org.example.sectoriadb.shell.FileCommands;
+import org.example.sectoriadb.storage.multipart.MultipartService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,9 +19,14 @@ import org.springframework.test.context.DynamicPropertySource;
 
 import java.io.ByteArrayInputStream;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Shell commands 'verify' and 'verify-all' (output format and RESULT line). */
 @SpringBootTest
@@ -42,7 +51,7 @@ class VerifyCommandsTest {
     @Autowired ObjectWriter writer;
     @Autowired PoolService poolService;
     @Autowired ManifestRepository manifestRepo;
-    @Autowired org.example.sectoriadb.storage.multipart.MultipartService multipart;
+    @Autowired MultipartService multipart;
 
     private ManifestEntity put(PoolEntity pool, String key, int size) throws Exception {
         byte[] b = new byte[size];
@@ -82,25 +91,25 @@ class VerifyCommandsTest {
     @Test
     void verifyAllCoversMultipartObjectsAndSkipsOpenParts() throws Exception {
         PoolEntity pool = poolService.existsByName("mpvbkt") ? poolService.getByName("mpvbkt") : poolService.createBucket("mpvbkt");
-        var up = new org.example.sectoriadb.catalog.MultipartUpload();
+        var up = new MultipartUpload();
         up.setKey("mp");
         up = multipart.create(pool, up);
-        var parts = new java.util.ArrayList<org.example.sectoriadb.catalog.MultipartRepository.RequestedPart>();
+        var parts = new ArrayList<MultipartRepository.RequestedPart>();
         for (int i = 1; i <= 3; i++) {
             byte[] b = new byte[i == 2 ? 100 : 9000];
             new Random(i).nextBytes(b);
             var p = multipart.uploadPart(multipart.requireOpen(up.getUploadId(), "mpvbkt", "mp"), i, new ByteArrayInputStream(b),
-                    org.example.sectoriadb.checksum.UploadChecksums.none());
-            parts.add(new org.example.sectoriadb.catalog.MultipartRepository.RequestedPart(i, p.etag(), java.util.Map.of()));
+                    UploadChecksums.none());
+            parts.add(new MultipartRepository.RequestedPart(i, p.etag(), Map.of()));
         }
         // a part of an upload that stays open
-        var open = new org.example.sectoriadb.catalog.MultipartUpload();
+        var open = new MultipartUpload();
         open.setKey("pending");
         open = multipart.create(pool, open);
         multipart.uploadPart(multipart.requireOpen(open.getUploadId(), "mpvbkt", "pending"), 1, new ByteArrayInputStream(new byte[5000]),
-                org.example.sectoriadb.checksum.UploadChecksums.none());
-        multipart.complete(new org.example.sectoriadb.catalog.MultipartRepository.CompleteCommand(up.getUploadId(), "mpvbkt", "mp",
-                parts, ManifestRepository.CommitPrecondition.NONE, java.util.Map.of(), System.currentTimeMillis()));
+                UploadChecksums.none());
+        multipart.complete(new MultipartRepository.CompleteCommand(up.getUploadId(), "mpvbkt", "mp",
+                parts, ManifestRepository.CommitPrecondition.NONE, Map.of(), System.currentTimeMillis()));
 
         String all = commands.verifyAll("mpvbkt");
         assertTrue(all.contains("Verified 1 object(s): ok=1 corrupt=0 missing=0"), all);
@@ -123,8 +132,8 @@ class VerifyCommandsTest {
     /** Only the key commands work next to a running server; the metastore commands are offline-only. */
     @Test
     void onlyKeyCommandsAreOnline() {
-        assertEquals(java.util.Set.of("mk-key", "keys", "rm-key", "enable-key", "disable-key"), Application.ONLINE_COMMANDS);
-        assertEquals(java.util.Set.of("bucket-acl", "object-acl", "public-list", "verify-all", "verify"), Application.OFFLINE_ONLY_COMMANDS);
+        assertEquals(Set.of("mk-key", "keys", "rm-key", "enable-key", "disable-key"), Application.ONLINE_COMMANDS);
+        assertEquals(Set.of("bucket-acl", "object-acl", "public-list", "verify-all", "verify"), Application.OFFLINE_ONLY_COMMANDS);
         for (String c : Application.OFFLINE_ONLY_COMMANDS) assertFalse(Application.ONLINE_COMMANDS.contains(c));
     }
 }

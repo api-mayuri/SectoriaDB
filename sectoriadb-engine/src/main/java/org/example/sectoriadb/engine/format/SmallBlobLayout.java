@@ -1,11 +1,11 @@
 package org.example.sectoriadb.engine.format;
 
+import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
 import org.example.sectoriadb.engine.hash.Crc32c;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.zip.CRC32C;
-import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
 
 /**
  * On-disk layout of a small-object blob ({@code small_<8hex>.sob}), all integers big-endian.

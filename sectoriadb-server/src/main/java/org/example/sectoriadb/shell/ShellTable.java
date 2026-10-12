@@ -3,13 +3,15 @@ package org.example.sectoriadb.shell;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.ChunkRepository;
-import org.example.sectoriadb.storage.BlobService;
-import org.example.sectoriadb.engine.blob.SmallObjectBlob;
-
-import java.io.IOException;
-import java.util.List;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
+import org.example.sectoriadb.storage.BlobService;
+
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 
 /** Formatting helpers shared across shell command classes. */
 class ShellTable {
@@ -27,7 +29,7 @@ class ShellTable {
      */
     static String poolBlobTable(BlobService blobService, ChunkRepository chunks, List<BlobFileEntity> blobs)
             throws IOException {
-        java.util.Map<String, Double> weight = new java.util.HashMap<>();
+        Map<String, Double> weight = new HashMap<>();
         double sum = 0;
         for (BlobFileEntity b : blobs) {
             if (b.getKind() != BlobKind.CUCKOO) continue;

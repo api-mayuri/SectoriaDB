@@ -1,8 +1,10 @@
 package org.example.sectoriadb;
 
-import org.example.sectoriadb.checksum.ChecksumAlgorithm;
+import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -21,6 +23,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
 import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -33,7 +36,12 @@ import java.util.regex.Pattern;
 import java.util.zip.CRC32;
 import java.util.zip.CRC32C;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * S3 additional checksums end to end (auth disabled; chunk size 4096): upload verification for every algorithm,
@@ -59,8 +67,8 @@ class S3ChecksumsTest {
 
     @LocalServerPort int port;
     @Autowired ManifestRepository manifestRepo;
-    @Autowired org.example.sectoriadb.catalog.ChunkRepository chunkRepo;
-    @Autowired org.example.sectoriadb.catalog.BlobFileRepository blobRepo;
+    @Autowired ChunkRepository chunkRepo;
+    @Autowired BlobFileRepository blobRepo;
     private final HttpClient http = HttpClient.newHttpClient();
     private static final String B = "ckbkt";
     private boolean bucketMade;
@@ -304,7 +312,7 @@ class S3ChecksumsTest {
         for (int i = 0; i < 3; i++) {
             CRC32C c = new CRC32C();               // independent of the production code
             c.update(parts[i]);
-            byte[] crcBytes = java.nio.ByteBuffer.allocate(4).putInt((int) c.getValue()).array();
+            byte[] crcBytes = ByteBuffer.allocate(4).putInt((int) c.getValue()).array();
             concatOfCrcs.write(crcBytes);
             sums[i] = b64(crcBytes);
             var r = uploadPart(key, id, i + 1, parts[i], "x-amz-checksum-crc32c", sums[i]);
@@ -314,7 +322,7 @@ class S3ChecksumsTest {
         }
         CRC32C comp = new CRC32C();
         comp.update(concatOfCrcs.toByteArray());
-        String expected = b64(java.nio.ByteBuffer.allocate(4).putInt((int) comp.getValue()).array()) + "-3";
+        String expected = b64(ByteBuffer.allocate(4).putInt((int) comp.getValue()).array()) + "-3";
 
         var done = complete(key, id, completeXml(etags, "ChecksumCRC32C", sums));
         assertEquals(200, done.statusCode(), text(done));
@@ -333,7 +341,7 @@ class S3ChecksumsTest {
         System.arraycopy(p3, 0, all, p1.length + p2.length, p3.length);
         CRC32C whole = new CRC32C();
         whole.update(all);
-        assertEquals(b64(java.nio.ByteBuffer.allocate(4).putInt((int) whole.getValue()).array()), m.getCrc32c());
+        assertEquals(b64(ByteBuffer.allocate(4).putInt((int) whole.getValue()).array()), m.getCrc32c());
         assertArrayEquals(all, get(key).body());
     }
 
@@ -373,7 +381,7 @@ class S3ChecksumsTest {
         System.arraycopy(p2, 0, all, 5000, 5000);
         CRC32 ref = new CRC32();
         ref.update(all);
-        String expected = b64(java.nio.ByteBuffer.allocate(4).putInt((int) ref.getValue()).array());
+        String expected = b64(ByteBuffer.allocate(4).putInt((int) ref.getValue()).array());
 
         // a wrong whole-object checksum in the Complete request is rejected, nothing committed
         var bad = complete(key, id, completeXml(new String[]{e1, e2}, null, null),

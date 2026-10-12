@@ -4,6 +4,12 @@ import org.example.sectoriadb.config.StorageProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Comparator;
+
 /**
  * Cleans up what a crash can leave behind, once, when the application context is up and before requests are served: the
  * half-built new blob of a resize that never committed, the old blob of a resize that committed but did not get to delete
@@ -42,25 +48,25 @@ public class StartupReconciler {
      * deleted once, with a log line saying how many.
      */
     void removeLegacyMultipartDirectory() {
-        java.nio.file.Path dir = java.nio.file.Path.of(props.getDataDir()).resolve(".multipart");
-        if (!java.nio.file.Files.isDirectory(dir)) return;
+        Path dir = Path.of(props.getDataDir()).resolve(".multipart");
+        if (!Files.isDirectory(dir)) return;
         int uploads = 0;
-        try (var entries = java.nio.file.Files.list(dir)) {
-            uploads = (int) entries.filter(java.nio.file.Files::isDirectory).count();
-        } catch (java.io.IOException ignored) {
+        try (var entries = Files.list(dir)) {
+            uploads = (int) entries.filter(Files::isDirectory).count();
+        } catch (IOException ignored) {
             // only used for the log line
         }
-        try (var walk = java.nio.file.Files.walk(dir)) {
-            walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+        try (var walk = Files.walk(dir)) {
+            walk.sorted(Comparator.reverseOrder()).forEach(p -> {
                 try {
-                    java.nio.file.Files.deleteIfExists(p);
-                } catch (java.io.IOException e) {
-                    throw new java.io.UncheckedIOException(e);
+                    Files.deleteIfExists(p);
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
                 }
             });
             log.warn("Removed the legacy multipart directory {} ({} upload(s) that were in flight before the upgrade are dropped;"
                     + " multipart state now lives in the metadata store)", dir, uploads);
-        } catch (java.io.IOException | java.io.UncheckedIOException e) {
+        } catch (IOException | UncheckedIOException e) {
             log.warn("Could not remove the legacy multipart directory {}: {}", dir, e.toString());
         }
     }

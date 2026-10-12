@@ -1,7 +1,8 @@
 package org.example.sectoriadb;
 
-import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
+import org.example.sectoriadb.metastore.MetaStore;
+import org.example.sectoriadb.metastore.MetaStoreFaults;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -19,7 +20,10 @@ import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.file.Path;
 import java.util.Random;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Doc 10, part B: the metadata store recovers in place. While its disk fails, reads keep answering (200), writes are
@@ -68,7 +72,7 @@ class MetaStoreRecoveryS3Test {
         assertEquals(200, put("/rec-bkt/before", data).statusCode());
 
         MetaStore store = stores.get();
-        org.example.sectoriadb.metastore.MetaStoreFaults.failDisk(store, Integer.MAX_VALUE, 0, "No space left on device");
+        MetaStoreFaults.failDisk(store, Integer.MAX_VALUE, 0, "No space left on device");
         HttpResponse<byte[]> first = put("/rec-bkt/during", data);        // fails in its own commit
         assertTrue(first.statusCode() >= 500, "status " + first.statusCode());
         HttpResponse<byte[]> refused = put("/rec-bkt/during2", data);     // refused by the read-only store
@@ -80,12 +84,12 @@ class MetaStoreRecoveryS3Test {
         assertArrayEquals(data, read.body());
         assertEquals(404, get("/rec-bkt/during").statusCode());
 
-        org.example.sectoriadb.metastore.MetaStoreFaults.failDisk(store, Integer.MAX_VALUE, 0, "Input/output error");
+        MetaStoreFaults.failDisk(store, Integer.MAX_VALUE, 0, "Input/output error");
         HttpResponse<byte[]> other = put("/rec-bkt/during3", data);
         assertEquals(503, other.statusCode());
         assertTrue(new String(other.body()).contains("SlowDown"), new String(other.body()));
 
-        org.example.sectoriadb.metastore.MetaStoreFaults.failDisk(store, 0, 0, "");                           // the disk works again: no restart
+        MetaStoreFaults.failDisk(store, 0, 0, "");                           // the disk works again: no restart
         assertEquals(200, put("/rec-bkt/after", data).statusCode());
         assertArrayEquals(data, get("/rec-bkt/after").body());
         assertArrayEquals(data, get("/rec-bkt/before").body());

@@ -1,10 +1,10 @@
 package org.example.sectoriadb.storage;
 
+import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.MultiDigest;
 import org.example.sectoriadb.checksum.MultiDigestOutputStream;
-import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.engine.error.ChunkCorruptedException;
 import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
 

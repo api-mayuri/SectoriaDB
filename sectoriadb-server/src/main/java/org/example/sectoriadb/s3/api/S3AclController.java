@@ -1,20 +1,26 @@
 package org.example.sectoriadb.s3.api;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.s3.access.AccessControlService;
+import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.s3.http.S3Request;
 import org.example.sectoriadb.storage.PoolService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
-import org.example.sectoriadb.s3.error.S3Exception;
-import org.example.sectoriadb.s3.http.S3Request;
+import java.nio.charset.StandardCharsets;
 
 /**
  * S3 ACL and configuration endpoints:
@@ -139,12 +145,12 @@ public class S3AclController {
 
         byte[] body = RequestBodies.readLimited(request, RequestBodies.MAX_POLICY_BYTES, HttpStatus.BAD_REQUEST,
                 "PolicyTooLarge", "Policies must be 20 KiB or smaller");
-        String policyJson = new String(body, java.nio.charset.StandardCharsets.UTF_8);
+        String policyJson = new String(body, StandardCharsets.UTF_8);
 
         // Validate JSON (simple check)
         try {
             // Just ensure it's valid JSON
-            var tree = new com.fasterxml.jackson.databind.ObjectMapper().readTree(policyJson);
+            var tree = new ObjectMapper().readTree(policyJson);
             if (!tree.isObject() || !tree.path("Statement").isArray()) {
                 throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedPolicy",
                         "Policy must be a JSON object with a Statement array");

@@ -43,8 +43,10 @@ import org.example.sectoriadb.storage.PoolService;
 import org.example.sectoriadb.storage.SmallBlobCache;
 import org.example.sectoriadb.storage.multipart.MultipartService;
 import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.util.unit.DataSize;
 
 /**
  * The composition root of the core module: every core component is a plain Java class and is wired here, in one place.
@@ -119,8 +121,8 @@ public class CoreConfiguration {
 
     @Bean
     public MultipartRepository multipartRepository(MetaStoreProvider stores,
-            @org.springframework.beans.factory.annotation.Value("${sectoriadb.multipart.min-part-size:5MB}")
-            org.springframework.util.unit.DataSize minPartSize) {
+            @Value("${sectoriadb.multipart.min-part-size:5MB}")
+            DataSize minPartSize) {
         return CatalogGuard.guard(MultipartRepository.class,
                 new MetaStoreMultipartRepository(stores, minPartSize.toBytes()));
     }

@@ -12,6 +12,7 @@ import org.springframework.shell.command.CommandCatalog;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import java.lang.reflect.InvocationTargetException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -19,10 +20,14 @@ import java.net.http.HttpRequest.BodyPublishers;
 import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Garbage collection through the S3 API and the shell (doc 10): space comes back, the shell commands work, a collected chunk is a retryable 503. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -102,19 +107,19 @@ class GarbageCollectionS3Test {
 
     @Test
     void durationsOfTheShellAreParsed() {
-        assertEquals(java.time.Duration.ZERO, parse("0s"));
-        assertEquals(java.time.Duration.ofMinutes(5), parse("5m"));
-        assertEquals(java.time.Duration.ofMillis(250), parse("250ms"));
-        assertEquals(java.time.Duration.ofHours(2), parse("PT2H"));
+        assertEquals(Duration.ZERO, parse("0s"));
+        assertEquals(Duration.ofMinutes(5), parse("5m"));
+        assertEquals(Duration.ofMillis(250), parse("250ms"));
+        assertEquals(Duration.ofHours(2), parse("PT2H"));
         assertThrows(IllegalArgumentException.class, () -> parse("soon"));
     }
 
-    private static java.time.Duration parse(String s) {
+    private static Duration parse(String s) {
         try {
             var m = GcCommands.class.getDeclaredMethod("parseDuration", String.class);
             m.setAccessible(true);
-            return (java.time.Duration) m.invoke(null, s);
-        } catch (java.lang.reflect.InvocationTargetException e) {
+            return (Duration) m.invoke(null, s);
+        } catch (InvocationTargetException e) {
             throw (RuntimeException) e.getCause();
         } catch (ReflectiveOperationException e) {
             throw new AssertionError(e);

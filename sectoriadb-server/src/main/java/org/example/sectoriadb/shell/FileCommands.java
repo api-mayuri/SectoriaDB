@@ -1,12 +1,13 @@
 package org.example.sectoriadb.shell;
 
+import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.ChunkRepository;
-import org.example.sectoriadb.storage.ObjectWriter;
-import org.example.sectoriadb.storage.ObjectReader;
+import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.storage.ObjectCatalog;
+import org.example.sectoriadb.storage.ObjectReader;
 import org.example.sectoriadb.storage.ObjectVerificationService;
+import org.example.sectoriadb.storage.ObjectWriter;
 import org.example.sectoriadb.storage.PoolService;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
@@ -15,6 +16,7 @@ import org.springframework.shell.standard.ShellOption;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.TreeSet;
 import java.util.function.Predicate;
 
 @ShellComponent
@@ -80,11 +82,11 @@ public class FileCommands {
                 : poolService.listAll().stream().filter(p -> p.getId().equals(m.getPoolId()))
                         .map(PoolEntity::getName).findFirst().orElse(m.getPoolId());
         String blobs = phys != null ? phys.getId() : "-";
-        if ((m.getStorageKind() == org.example.sectoriadb.catalog.StorageKind.CHUNKED
-                || m.getStorageKind() == org.example.sectoriadb.catalog.StorageKind.MULTIPART) && m.getPoolId() != null) {
+        if ((m.getStorageKind() == StorageKind.CHUNKED
+                || m.getStorageKind() == StorageKind.MULTIPART) && m.getPoolId() != null) {
             // the chunks of an object are spread over the pool's blobs: the chunk index says where
             var entries = chunkRepo.findAll(m.getPoolId(), m.chunkKeyArray());
-            var distinct = new java.util.TreeSet<String>();
+            var distinct = new TreeSet<String>();
             entries.values().forEach(e -> distinct.add(e.blobId()));
             blobs = distinct.size() + " blob(s) via the chunk index" + (distinct.isEmpty() ? "" : ": " + String.join(", ", distinct));
         }
@@ -96,7 +98,7 @@ public class FileCommands {
                     ShellTable.humanSize(m.getChunkSize()), ShellTable.humanSize(m.getLastChunkSize()));
             case MULTIPART -> String.format("%d part(s), %d chunk(s) and %d small record(s) in object order",
                     m.getSegments().size(), m.chunkKeyArray().length,
-                    m.getSegments().stream().filter(sg -> sg.kind() == org.example.sectoriadb.catalog.StorageKind.SMALL).count());
+                    m.getSegments().stream().filter(sg -> sg.kind() == StorageKind.SMALL).count());
         };
         return String.format(
                 "File: %s%n" +

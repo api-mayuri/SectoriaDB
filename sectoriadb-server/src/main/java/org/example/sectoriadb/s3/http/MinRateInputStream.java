@@ -1,10 +1,12 @@
 package org.example.sectoriadb.s3.http;
 
+import org.example.sectoriadb.s3.error.S3Exception;
+import org.springframework.http.HttpStatus;
+
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.function.LongSupplier;
-import org.example.sectoriadb.s3.error.S3Exception;
 
 /**
  * Slow-body guard: after a grace period the average rate since the stream was opened must stay above a minimum,
@@ -50,7 +52,7 @@ public final class MinRateInputStream extends FilterInputStream {
         if (minBytesPerSec <= 0) return;
         long elapsed = nanoClock.getAsLong() - start;
         if (elapsed > graceNanos && total * 1e9 / elapsed < minBytesPerSec) {
-            throw new S3Exception(org.springframework.http.HttpStatus.BAD_REQUEST, "RequestTimeout",
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "RequestTimeout",
                     "Your socket connection to the server was not read from or written to within the timeout period.");
         }
     }

@@ -1,22 +1,22 @@
 package org.example.sectoriadb.catalog.metastore;
 
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.ChunkEntry;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.GcRepository;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PartSegment;
+import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.metastore.BTree;
 import org.example.sectoriadb.metastore.Cursor;
 import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.WriteTxn;
-import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.ChunkEntry;
-import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PartSegment;
-import org.example.sectoriadb.catalog.StorageKind;
-import org.example.sectoriadb.catalog.ChunkRepository;
-import org.example.sectoriadb.catalog.GcRepository;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -173,7 +173,7 @@ public class MetaStoreGcRepository implements GcRepository {
                 Optional<byte[]> v = chunks.get(Chunks.key(poolId, k));
                 if (v.isEmpty() || !ChunkCodec.decode(v.get()).blobId().equals(blobId)) out[n++] = k;
             }
-            return java.util.Arrays.copyOf(out, n);
+            return Arrays.copyOf(out, n);
         });
     }
 

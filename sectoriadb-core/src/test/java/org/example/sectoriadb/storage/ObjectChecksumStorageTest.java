@@ -1,19 +1,29 @@
 package org.example.sectoriadb.storage;
 
-import org.example.sectoriadb.metrics.StorageMetrics;
-
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.sectoriadb.audit.JsonOperationLogRepository;
+import org.example.sectoriadb.audit.OperationLogService;
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.PoolRepository;
+import org.example.sectoriadb.catalog.StorageKind;
+import org.example.sectoriadb.catalog.metastore.MetaStoreBlobFileRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreManifestRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStorePoolRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.checksum.ChecksumMismatchException;
 import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,21 +35,18 @@ import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.MessageDigest;
+import java.time.Instant;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Random;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.catalog.BlobFileRepository;
-import org.example.sectoriadb.catalog.ChunkRepository;
-import org.example.sectoriadb.audit.JsonOperationLogRepository;
-import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.catalog.PoolRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStoreBlobFileRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStoreManifestRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStorePoolRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
-import org.example.sectoriadb.audit.OperationLogService;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Upload-side checksum verification, stored whole-object checksums, read-side verification, verify / verify-all. */
 class ObjectChecksumStorageTest {
@@ -51,7 +58,7 @@ class ObjectChecksumStorageTest {
 
     StorageProperties props;
     BlobFileRepository blobRepo;
-    org.example.sectoriadb.catalog.ChunkRepository chunkRepo;
+    ChunkRepository chunkRepo;
     ManifestRepository manifestRepo;
     PoolRepository poolRepo;
     ObjectWriter writer;
@@ -87,13 +94,13 @@ class ObjectChecksumStorageTest {
         var smallCache = new SmallBlobCache(props, StorageMetrics.NOOP);
         OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         BlobService blobService = new BlobService(blobRepo, cache, blobGate, smallCache, props, opLog);
-        chunkRepo = new org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository(stores);
-        var chunkStore = new org.example.sectoriadb.storage.ChunkStore(chunkRepo, blobService, cache, blobGate, props);
+        chunkRepo = new MetaStoreChunkRepository(stores);
+        var chunkStore = new ChunkStore(chunkRepo, blobService, cache, blobGate, props);
         catalog = new ObjectCatalog(manifestRepo, opLog);
         writer = new ObjectWriter(manifestRepo, blobService, cache, blobGate, smallCache, chunkStore, opLog, props);
         reader = new ObjectReader(chunkStore, smallCache, catalog, opLog, StorageMetrics.NOOP);
         verifier = new ObjectVerificationService(catalog, reader);
-        pool = new PoolEntity("pool-1", "bkt", root.resolve("data/bkt").toString(), java.time.Instant.now());
+        pool = new PoolEntity("pool-1", "bkt", root.resolve("data/bkt").toString(), Instant.now());
         Files.createDirectories(Path.of(pool.getBasePath()));
         poolRepo.save(pool);
     }
@@ -311,7 +318,7 @@ class ObjectChecksumStorageTest {
         flipDataByte(manifestRepo.findById(corruptChunk.getId()).orElseThrow(), chunked);
         flipDataByte(manifestRepo.findById(corruptSmall.getId()).orElseThrow(), bytes(200, 62));
         ManifestEntity mm = manifestRepo.findById(missing.getId()).orElseThrow();
-        mm.setChunkKeys(java.util.List.of(0x1111L, 0x2222L));   // keys not in the blob
+        mm.setChunkKeys(List.of(0x1111L, 0x2222L));   // keys not in the blob
         manifestRepo.save(mm);
 
         var s = verifier.verifyAll(m -> true);

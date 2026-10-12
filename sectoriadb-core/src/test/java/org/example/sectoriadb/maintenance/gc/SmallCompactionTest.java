@@ -1,14 +1,16 @@
 package org.example.sectoriadb.maintenance.gc;
 
-import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.BlobKind;
+import org.example.sectoriadb.catalog.GcRepository;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.GcRepository;
+import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import org.example.sectoriadb.checksum.UploadChecksums;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.example.sectoriadb.maintenance.gc.GcReports.CompactionReport;
 import org.example.sectoriadb.maintenance.gc.GcReports.Options;
-import org.example.sectoriadb.engine.blob.SmallObjectBlob;
+import org.example.sectoriadb.storage.StorageRig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,20 +21,27 @@ import java.io.ByteArrayOutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.catalog.metastore.MetaInvariants;
-import org.example.sectoriadb.storage.StorageRig;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Compaction of small-object blobs (doc 10): live records are copied, manifests repointed in one transaction, the old file kept for readers. */
 class SmallCompactionTest {
@@ -192,7 +201,7 @@ class SmallCompactionTest {
 
     @Test
     void compactionWaitsForSmallUploadsInFlight() throws Exception {
-        rig.props.getGc().setSweepGateWait(java.time.Duration.ofMillis(100));
+        rig.props.getGc().setSweepGateWait(Duration.ofMillis(100));
         Map<String, byte[]> model = fill(50);
         deleteMostOfTheFirstBlob(model, 3);
         gc0();
@@ -232,7 +241,7 @@ class SmallCompactionTest {
 
         AtomicBoolean stop = new AtomicBoolean();
         AtomicInteger reads = new AtomicInteger(), writes = new AtomicInteger();
-        java.util.concurrent.ExecutorService exec = java.util.concurrent.Executors.newFixedThreadPool(4);   // not the common pool: spinning workers would starve it
+        ExecutorService exec = Executors.newFixedThreadPool(4);   // not the common pool: spinning workers would starve it
         List<CompletableFuture<Void>> workers = new ArrayList<>();
         for (int t = 0; t < 3; t++) {
             final int id = t;
@@ -248,7 +257,7 @@ class SmallCompactionTest {
                             byte[] got = get(k);
                             if (model.get(k) == expected) assertArrayEquals(expected, got, k);
                             reads.incrementAndGet();
-                        } catch (java.util.NoSuchElementException deletedMeanwhile) {
+                        } catch (NoSuchElementException deletedMeanwhile) {
                             // deleted by the writer thread below
                         }
                     }
@@ -325,7 +334,7 @@ class SmallCompactionTest {
     @Test
     void aCompactionThatCrashedBeforeItsSwapLeavesStraysThatTheSweepReclaims() throws Exception {
         Map<String, byte[]> model = fill(50);
-        rig.props.getGc().setSweepGateWait(java.time.Duration.ofMillis(200));
+        rig.props.getGc().setSweepGateWait(Duration.ofMillis(200));
         String oldId = blobOf("o0");
         BlobFileEntity old = rig.blobs.findById(oldId).orElseThrow();
         // the copy phase of a compaction ran, the process died before the swap: the new blob holds unreferenced copies
@@ -396,7 +405,7 @@ class SmallCompactionTest {
     }
 
     /** Small helper so that {@code gc0().filesDeleted} reads naturally. */
-    record RunReportHolder(org.example.sectoriadb.maintenance.gc.GcReports.RunReport r) {
+    record RunReportHolder(GcReports.RunReport r) {
         long filesDeleted() { return r.filesDeleted; }
     }
 }

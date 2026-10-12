@@ -1,22 +1,25 @@
 package org.example.sectoriadb.storage;
 
+import jakarta.annotation.PreDestroy;
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.engine.blob.CuckooHashTable;
+import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
+import org.example.sectoriadb.engine.io.BlobFile;
+import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
+import org.example.sectoriadb.engine.io.StorageIOEngine;
 import org.example.sectoriadb.engine.metrics.EngineListener;
 import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.metrics.StorageMetricsEngineListener;
-import org.example.sectoriadb.engine.io.BlobFile;
-import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.engine.blob.CuckooHashTable;
-import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
-import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
-import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.concurrent.ConcurrentHashMap;
-import org.example.sectoriadb.engine.io.StorageIOEngine;
+import java.util.function.Supplier;
 
 /**
  * Cache of live CuckooHashTable instances keyed by blob file id, with reference-counted handles and LRU eviction.
@@ -43,7 +46,7 @@ public class HashTableCache {
     private final StorageMetrics metrics;
     private final EngineListener engineListener;
     private final BlobGate gate;
-    private volatile java.util.function.Supplier<StorageIOEngine> engineFactory;
+    private volatile Supplier<StorageIOEngine> engineFactory;
 
     public HashTableCache(StorageProperties props, StorageMetrics metrics, BlobGate gate) {
         this.props = props;
@@ -63,7 +66,7 @@ public class HashTableCache {
      * The tables currently resident (a snapshot, not pinned: use it only to read plain state such as the fill statistics,
      * which needs no file access). Used for aggregate gauges.
      */
-    public java.util.Collection<CuckooHashTable> residentTables() {
+    public Collection<CuckooHashTable> residentTables() {
         return cache.snapshot();
     }
 
@@ -83,7 +86,7 @@ public class HashTableCache {
     }
 
     /** Test hook: the IO engine given to every table loaded or built from now on (default: a file channel engine). */
-    public void setEngineFactory(java.util.function.Supplier<StorageIOEngine> factory) {
+    public void setEngineFactory(Supplier<StorageIOEngine> factory) {
         this.engineFactory = factory;
     }
 
@@ -128,7 +131,7 @@ public class HashTableCache {
      * @throws BlobService.BlobGoneException if a resize replaced the blob
      */
     public ResidentHandle<CuckooHashTable> acquire(BlobFileEntity entity) throws IOException {
-        if (entity.getKind() != org.example.sectoriadb.catalog.BlobKind.CUCKOO) {
+        if (entity.getKind() != BlobKind.CUCKOO) {
             throw new IllegalArgumentException("Blob " + entity.getId() + " is a " + entity.getKind()
                     + " blob, not a cuckoo table");
         }

@@ -3,6 +3,7 @@ package org.example.sectoriadb.s3.error;
 import jakarta.servlet.RequestDispatcher;
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.observability.ObservabilityAttributes;
+import org.example.sectoriadb.observability.RequestIds;
 import org.example.sectoriadb.s3.xml.S3Error;
 import org.springframework.boot.web.servlet.error.ErrorController;
 import org.springframework.http.HttpStatus;
@@ -10,7 +11,6 @@ import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Controller;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.example.sectoriadb.observability.RequestIds;
 
 /**
  * Replaces Spring Boot's JSON error page. Errors raised before a controller is chosen (405 for a method nobody

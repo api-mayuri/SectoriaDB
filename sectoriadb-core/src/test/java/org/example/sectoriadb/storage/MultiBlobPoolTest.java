@@ -1,9 +1,11 @@
 package org.example.sectoriadb.storage;
 
 import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.example.sectoriadb.engine.error.TableFullException;
 import org.example.sectoriadb.engine.hash.BytesHasher;
@@ -16,6 +18,8 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -25,11 +29,18 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
-import java.util.concurrent.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Several cuckoo blobs per pool: placement, growth, restart, resize of one blob (doc 09). */
 class MultiBlobPoolTest {
@@ -385,9 +396,9 @@ class MultiBlobPoolTest {
         byte[] x = bytes(CHUNK, 1), y = bytes(CHUNK, 2);
         // x is written (key 42 now sits in a blob table) but not committed: the index does not know it
         ManifestEntity sx = writer.stageStream(new ByteArrayInputStream(x), pool, "x", null,
-                org.example.sectoriadb.checksum.UploadChecksums.none());
+                UploadChecksums.none());
         ManifestEntity sy = writer.stageStream(new ByteArrayInputStream(y), pool, "y", null,
-                org.example.sectoriadb.checksum.UploadChecksums.none());
+                UploadChecksums.none());
         assertNotEquals(sx.chunkKeyArray()[0], sy.chunkKeyArray()[0]);
         writer.commitObject(sx);
         writer.commitObject(sy);
@@ -401,12 +412,12 @@ class MultiBlobPoolTest {
 
     /** A ChunkRepository that counts the lookups the read path makes. */
     private ChunkRepository counting(AtomicInteger lookups) {
-        return (ChunkRepository) java.lang.reflect.Proxy.newProxyInstance(getClass().getClassLoader(),
+        return (ChunkRepository) Proxy.newProxyInstance(getClass().getClassLoader(),
                 new Class<?>[]{ChunkRepository.class}, (proxy, method, args) -> {
                     if (method.getName().equals("find") || method.getName().equals("findAll")) lookups.incrementAndGet();
                     try {
                         return method.invoke(rig.chunks, args);
-                    } catch (java.lang.reflect.InvocationTargetException e) {
+                    } catch (InvocationTargetException e) {
                         throw e.getCause();
                     }
                 });

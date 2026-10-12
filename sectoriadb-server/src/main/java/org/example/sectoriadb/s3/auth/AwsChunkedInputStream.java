@@ -1,12 +1,15 @@
 package org.example.sectoriadb.s3.auth;
 
+import org.example.sectoriadb.s3.error.PayloadVerificationException;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.Locale;
 import java.util.Map;
-import org.example.sectoriadb.s3.error.PayloadVerificationException;
 
 /**
  * Strips the aws-chunked transfer encoding framing from an InputStream and, when a
@@ -139,7 +142,7 @@ public class AwsChunkedInputStream extends InputStream {
         byte[] data = new byte[Math.min(chunkSize, READ_STEP)];
         int totalRead = 0;
         while (totalRead < chunkSize) {
-            if (totalRead == data.length) data = java.util.Arrays.copyOf(data, Math.min(chunkSize, data.length * 2));
+            if (totalRead == data.length) data = Arrays.copyOf(data, Math.min(chunkSize, data.length * 2));
             int read = delegate.read(data, totalRead, data.length - totalRead);
             if (read < 0) {
                 throw PayloadVerificationException.malformedChunks("unexpected end of stream inside a chunk");
@@ -204,7 +207,7 @@ public class AwsChunkedInputStream extends InputStream {
             }
             int colon = line.indexOf(':');
             if (colon <= 0) continue;
-            String name = line.substring(0, colon).trim().toLowerCase(java.util.Locale.ROOT);
+            String name = line.substring(0, colon).trim().toLowerCase(Locale.ROOT);
             String value = line.substring(colon + 1).trim();
             if (name.equals("x-amz-trailer-signature")) trailerSignature = value;
             else trailers.put(name, value);

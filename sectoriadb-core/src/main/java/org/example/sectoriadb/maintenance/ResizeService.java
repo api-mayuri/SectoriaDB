@@ -1,14 +1,18 @@
 package org.example.sectoriadb.maintenance;
 
-import org.example.sectoriadb.storage.BlobGate;
-import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.engine.format.BlobLayout;
-import org.example.sectoriadb.engine.io.BlobFile;
+import org.example.sectoriadb.audit.OperationLogService;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.PoolRepository;
+import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
+import org.example.sectoriadb.engine.format.BlobLayout;
 import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
+import org.example.sectoriadb.engine.io.BlobFile;
+import org.example.sectoriadb.storage.BlobGate;
+import org.example.sectoriadb.storage.HashTableCache;
+import org.example.sectoriadb.storage.ResidentHandle;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,9 +26,6 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
-import org.example.sectoriadb.audit.OperationLogService;
-import org.example.sectoriadb.storage.HashTableCache;
-import org.example.sectoriadb.storage.ResidentHandle;
 
 /**
  * Expands one cuckoo blob by migrating it into a new, larger blob, while the pool keeps taking writes and reads
@@ -122,7 +123,7 @@ public class ResizeService {
         try {
             BlobFileEntity oldEntity = blobRepo.findById(blobId)
                     .orElseThrow(() -> new IllegalArgumentException("Blob not found: " + blobId));
-            if (oldEntity.getKind() != org.example.sectoriadb.catalog.BlobKind.CUCKOO) {
+            if (oldEntity.getKind() != BlobKind.CUCKOO) {
                 throw new IllegalArgumentException("Blob " + blobId + " is a " + oldEntity.getKind()
                         + " blob; only cuckoo blobs can be resized");
             }

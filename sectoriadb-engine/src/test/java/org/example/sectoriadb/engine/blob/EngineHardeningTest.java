@@ -1,9 +1,13 @@
 package org.example.sectoriadb.engine.blob;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
+import org.example.sectoriadb.engine.error.TableFullException;
+import org.example.sectoriadb.engine.format.BlobLayout;
+import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
+import org.example.sectoriadb.engine.io.BlobFile;
+import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
@@ -11,17 +15,15 @@ import java.nio.ByteBuffer;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
-import org.example.sectoriadb.engine.format.BlobLayout;
-import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
-import org.example.sectoriadb.engine.io.BlobFile;
-import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
-import org.example.sectoriadb.engine.error.TableFullException;
-import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Regression tests for the engine review findings. */
 class EngineHardeningTest {
@@ -41,7 +43,7 @@ class EngineHardeningTest {
     void createFileNeverTruncatesAnExistingFile() throws Exception {
         Path p = tmp.resolve("blob_x.raw");
         BlobLayout.createFile(p, BUCKETS, CHUNK);
-        Files.write(p, new byte[]{1, 2, 3}, java.nio.file.StandardOpenOption.WRITE);
+        Files.write(p, new byte[]{1, 2, 3}, StandardOpenOption.WRITE);
         long size = Files.size(p);
         assertThrows(FileAlreadyExistsException.class, () -> BlobLayout.createFile(p, BUCKETS, CHUNK));
         assertEquals(size, Files.size(p));

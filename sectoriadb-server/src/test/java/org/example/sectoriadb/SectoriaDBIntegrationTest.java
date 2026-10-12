@@ -1,14 +1,16 @@
 package org.example.sectoriadb;
 
+import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.storage.BlobService;
-import org.example.sectoriadb.storage.ObjectWriter;
-import org.example.sectoriadb.storage.ObjectReader;
-import org.example.sectoriadb.storage.ObjectCatalog;
-import org.example.sectoriadb.storage.PoolService;
 import org.example.sectoriadb.maintenance.ResizeService;
+import org.example.sectoriadb.storage.BlobService;
+import org.example.sectoriadb.storage.ObjectCatalog;
+import org.example.sectoriadb.storage.ObjectReader;
+import org.example.sectoriadb.storage.ObjectWriter;
+import org.example.sectoriadb.storage.PoolService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -19,9 +21,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Random;
 
-import org.junit.jupiter.api.io.TempDir;
-
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @SpringBootTest
 class SectoriaDBIntegrationTest {
@@ -47,7 +51,7 @@ class SectoriaDBIntegrationTest {
     @Autowired ObjectReader reader;
     @Autowired ObjectCatalog catalog;
     @Autowired ResizeService resizeService;
-    @Autowired org.example.sectoriadb.catalog.ChunkRepository chunkRepo;
+    @Autowired ChunkRepository chunkRepo;
 
     private PoolEntity newPool(String name) throws IOException {
         Path base = tempRoot.resolve(name);

@@ -1,14 +1,14 @@
 package org.example.sectoriadb.engine.blob;
 
-import org.example.sectoriadb.engine.format.BlobLayout;
-import org.example.sectoriadb.engine.metrics.EngineListener.ChecksumKind;
-import org.example.sectoriadb.engine.metrics.EngineListener.Target;
-import org.example.sectoriadb.engine.io.BlobFile;
-import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
+import org.example.sectoriadb.engine.error.ChunkCorruptedException;
 import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
 import org.example.sectoriadb.engine.error.TableFullException;
-import org.example.sectoriadb.engine.error.ChunkCorruptedException;
+import org.example.sectoriadb.engine.format.BlobLayout;
 import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
+import org.example.sectoriadb.engine.io.BlobFile;
+import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
+import org.example.sectoriadb.engine.metrics.EngineListener.ChecksumKind;
+import org.example.sectoriadb.engine.metrics.EngineListener.Target;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -19,7 +19,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Random;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** The engine reports its events through the EngineListener SPI (recording stub). */
 class EngineMetricsTest {

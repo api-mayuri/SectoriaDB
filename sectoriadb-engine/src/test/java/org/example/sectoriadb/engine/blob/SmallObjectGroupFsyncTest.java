@@ -1,21 +1,36 @@
 package org.example.sectoriadb.engine.blob;
 
-import org.example.sectoriadb.engine.format.SmallBlobLayout;
 import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
+import org.example.sectoriadb.engine.format.SmallBlobLayout;
+import org.example.sectoriadb.engine.hash.Crc32c;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Random;
-import java.util.concurrent.*;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Group fsync of small-object appends: one force covers many records, the tail is published after durability. */
 class SmallObjectGroupFsyncTest {
@@ -27,7 +42,7 @@ class SmallObjectGroupFsyncTest {
 
     private SmallObjectBlob open(RecordingEngineListener m, boolean fsync) throws Exception {
         Path p = dir.resolve("small_g.sob");
-        if (!java.nio.file.Files.exists(p)) SmallObjectBlob.create(p);
+        if (!Files.exists(p)) SmallObjectBlob.create(p);
         return SmallObjectBlob.open("g", p, fsync, BIG, 16L << 20, m);
     }
 
@@ -114,7 +129,7 @@ class SmallObjectGroupFsyncTest {
             // the record is written but not forced: not published, so a reader cannot see it
             assertEquals(first, b.tail());
             assertThrows(SmallObjectCorruptedException.class,
-                    () -> b.read(first, data.length, org.example.sectoriadb.engine.hash.Crc32c.of(data, 0, data.length)));
+                    () -> b.read(first, data.length, Crc32c.of(data, 0, data.length)));
             assertFalse(f.isDone());
             release.countDown();
             SmallObjectBlob.Location l = f.get(10, TimeUnit.SECONDS);
@@ -194,7 +209,7 @@ class SmallObjectGroupFsyncTest {
             for (Future<?> f : fs) f.get(60, TimeUnit.SECONDS);
             pool.shutdown();
         }
-        byte[] full = java.nio.file.Files.readAllBytes(p);
+        byte[] full = Files.readAllBytes(p);
         List<Stored> sorted = new ArrayList<>(stored);
         sorted.sort((x, y) -> Long.compare(x.loc().offset(), y.loc().offset()));
         assertEquals(400, sorted.size());
@@ -204,7 +219,7 @@ class SmallObjectGroupFsyncTest {
             // a "crash" leaves a prefix of the file; the checkpoint slots are wiped like after a dirty shutdown
             long cut = SmallBlobLayout.DATA_START + (long) (cuts.nextDouble() * (full.length - SmallBlobLayout.DATA_START));
             Path crashed = dir.resolve("crash_" + round + ".sob");
-            java.nio.file.Files.write(crashed, java.util.Arrays.copyOf(full, (int) cut));
+            Files.write(crashed, Arrays.copyOf(full, (int) cut));
             try (RandomAccessFile f = new RandomAccessFile(crashed.toFile(), "rw")) {
                 f.seek(SmallBlobLayout.CHECKPOINT_SLOT_A);
                 f.write(new byte[2 * SmallBlobLayout.CHECKPOINT_SLOT_SIZE]);

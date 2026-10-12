@@ -1,27 +1,41 @@
 package org.example.sectoriadb.storage;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.example.sectoriadb.audit.JsonOperationLogRepository;
+import org.example.sectoriadb.audit.OperationLogService;
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.GcRepository;
+import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.MultipartRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.PoolRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreBlobFileRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreGcRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreManifestRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreMultipartRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStorePoolRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.engine.blob.CuckooHashTable;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
+import org.example.sectoriadb.engine.io.StorageIOEngine;
+import org.example.sectoriadb.maintenance.BlobFileReaper;
+import org.example.sectoriadb.maintenance.ResizeService;
+import org.example.sectoriadb.maintenance.gc.GarbageCollector;
+import org.example.sectoriadb.maintenance.gc.SmallBlobCompactor;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
-import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.BlobFileRepository;
-import org.example.sectoriadb.audit.JsonOperationLogRepository;
-import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.catalog.PoolRepository;
-import org.example.sectoriadb.audit.OperationLogService;
-import org.example.sectoriadb.maintenance.ResizeService;
+import org.example.sectoriadb.metrics.RecordingMetrics;
+import org.example.sectoriadb.storage.multipart.MultipartService;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import org.example.sectoriadb.catalog.metastore.MetaStoreBlobFileRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStoreGcRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStoreManifestRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStorePoolRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
+import java.util.function.Supplier;
 
 /** The whole storage object graph (without Spring) over a metastore in {@code root/meta}; {@link #reopen()} simulates a restart. */
 public final class StorageRig implements AutoCloseable {
@@ -30,29 +44,29 @@ public final class StorageRig implements AutoCloseable {
 
     public final Path root;
     public final StorageProperties props = new StorageProperties();
-    public final org.example.sectoriadb.metrics.RecordingMetrics metrics = new org.example.sectoriadb.metrics.RecordingMetrics();
+    public final RecordingMetrics metrics = new RecordingMetrics();
     public ResizeService resizeService;
-    public org.example.sectoriadb.maintenance.BlobFileReaper reaper;
+    public BlobFileReaper reaper;
     public MetaStore store;
-    public org.example.sectoriadb.audit.OperationLogService opLog;
+    public OperationLogService opLog;
     public PoolRepository pools;
     public BlobFileRepository blobs;
     public ManifestRepository manifests;
-    public org.example.sectoriadb.catalog.ChunkRepository chunks;
+    public ChunkRepository chunks;
     public ChunkStore chunkStore;
     public BlobGate blobGate;
     public HashTableCache cache;
     public SmallBlobCache smallCache;
     /** IO engine of the cuckoo tables (null: the file channel engine); applied by every {@link #open()} / {@link #reopen()}. */
-    public java.util.function.Supplier<org.example.sectoriadb.engine.io.StorageIOEngine> engineFactory;
+    public Supplier<StorageIOEngine> engineFactory;
 
     /** The table of a blob, pinned for the rest of the test (tests do not release it: nothing is evicted in a rig). */
-    public org.example.sectoriadb.engine.blob.CuckooHashTable table(org.example.sectoriadb.catalog.BlobFileEntity b) throws java.io.IOException {
+    public CuckooHashTable table(BlobFileEntity b) throws IOException {
         return cache.acquire(b).get();
     }
 
     /** The open small-object blob, pinned for the rest of the test. */
-    public org.example.sectoriadb.engine.blob.SmallObjectBlob small(org.example.sectoriadb.catalog.BlobFileEntity b) throws java.io.IOException {
+    public SmallObjectBlob small(BlobFileEntity b) throws IOException {
         return smallCache.acquire(b).get();
     }
     public BlobService blobService;
@@ -61,11 +75,11 @@ public final class StorageRig implements AutoCloseable {
     public ObjectReader reader;
     public ObjectCatalog catalog;
     public ObjectVerificationService verifier;
-    public org.example.sectoriadb.catalog.MultipartRepository multipartRepo;
-    public org.example.sectoriadb.storage.multipart.MultipartService multipart;
-    public org.example.sectoriadb.catalog.GcRepository gcRepo;
-    public org.example.sectoriadb.maintenance.gc.SmallBlobCompactor compactor;
-    public org.example.sectoriadb.maintenance.gc.GarbageCollector gc;
+    public MultipartRepository multipartRepo;
+    public MultipartService multipart;
+    public GcRepository gcRepo;
+    public SmallBlobCompactor compactor;
+    public GarbageCollector gc;
 
     public StorageRig(Path root) {
         this.root = root;
@@ -101,15 +115,15 @@ public final class StorageRig implements AutoCloseable {
         catalog = new ObjectCatalog(manifests, opLog);
         writer = new ObjectWriter(manifests, blobService, cache, blobGate, smallCache, chunkStore, opLog, props);
         reader = new ObjectReader(chunkStore, smallCache, catalog, opLog, metrics);
-        reaper = new org.example.sectoriadb.maintenance.BlobFileReaper(blobs, pools, cache);
+        reaper = new BlobFileReaper(blobs, pools, cache);
         resizeService = new ResizeService(blobs, pools, cache, blobGate, props, opLog, reaper);
         verifier = new ObjectVerificationService(catalog, reader);
-        multipartRepo = new org.example.sectoriadb.catalog.metastore.MetaStoreMultipartRepository(stores);
-        multipart = new org.example.sectoriadb.storage.multipart.MultipartService(multipartRepo, pools, writer, reader);
+        multipartRepo = new MetaStoreMultipartRepository(stores);
+        multipart = new MultipartService(multipartRepo, pools, writer, reader);
         gcRepo = new MetaStoreGcRepository(stores);
-        compactor = new org.example.sectoriadb.maintenance.gc.SmallBlobCompactor(blobs, manifests, pools, gcRepo, blobService,
+        compactor = new SmallBlobCompactor(blobs, manifests, pools, gcRepo, blobService,
                 smallCache, chunkStore, props, metrics);
-        gc = new org.example.sectoriadb.maintenance.gc.GarbageCollector(gcRepo, chunks, manifests, blobs, pools, blobService,
+        gc = new GarbageCollector(gcRepo, chunks, manifests, blobs, pools, blobService,
                 cache, blobGate, smallCache, chunkStore, compactor, reaper, props, metrics);
     }
 

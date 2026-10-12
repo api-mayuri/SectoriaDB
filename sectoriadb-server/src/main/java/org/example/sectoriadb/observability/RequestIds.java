@@ -1,5 +1,7 @@
 package org.example.sectoriadb.observability;
 
+import org.slf4j.MDC;
+
 import java.util.Base64;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -23,7 +25,7 @@ public final class RequestIds {
 
     /** The id of the request being served (MDC {@code requestId}, set by the observability filter); a fresh id outside a request. */
     public static String current() {
-        String id = org.slf4j.MDC.get(RequestObservabilityFilter.MDC_REQUEST_ID);
+        String id = MDC.get(RequestObservabilityFilter.MDC_REQUEST_ID);
         return id != null ? id : newRequestId();
     }
 

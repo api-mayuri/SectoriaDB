@@ -1,6 +1,7 @@
 package org.example.sectoriadb;
 
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.storage.PoolService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,12 +12,24 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import java.net.URI;
+import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Base64;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.regex.Pattern;
+import java.util.zip.CRC32;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** SigV4 with auth ENABLED: payload hash verification, chunk signatures, presigned URL limits, clock skew. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -84,7 +97,7 @@ class S3SigV4PayloadTest {
     @Test
     void largerThanOneChunkBodyIsVerifiedToo() throws Exception {
         byte[] body = new byte[50_000];
-        new java.util.Random(7).nextBytes(body);
+        new Random(7).nextBytes(body);
         assertEquals(200, client.put("/sigbkt/big.bin", body, SigV4TestClient.sha256(body)).statusCode());
         body[49_999] ^= 1;   // one flipped byte at the very end
         byte[] orig = body.clone();
@@ -99,7 +112,7 @@ class S3SigV4PayloadTest {
         String emptyHash = SigV4TestClient.sha256(new byte[0]);
         var init = client.request("POST", "/sigbkt/mp.bin", "uploads", emptyHash, null);
         assertEquals(200, init.statusCode(), init.body());
-        var m = java.util.regex.Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(init.body());
+        var m = Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(init.body());
         assertTrue(m.find());
         String id = m.group(1);
         String q = "partNumber=1&uploadId=" + id;
@@ -110,8 +123,8 @@ class S3SigV4PayloadTest {
         var listed = client.request("GET", "/sigbkt/mp.bin", "uploadId=" + id, SigV4TestClient.sha256(new byte[0]), null);
         assertEquals(200, listed.statusCode(), listed.body());
         assertFalse(listed.body().contains("<Part>"), "a rejected part must not appear: " + listed.body());
-        try (var files = java.nio.file.Files.list(tempRoot.resolve("data").resolve(".tmp"))) {
-            assertEquals(java.util.List.of(), files.map(f -> f.getFileName().toString()).toList(), "no temp file may remain");
+        try (var files = Files.list(tempRoot.resolve("data").resolve(".tmp"))) {
+            assertEquals(List.of(), files.map(f -> f.getFileName().toString()).toList(), "no temp file may remain");
         }
         var good = client.request("PUT", "/sigbkt/mp.bin", q, SigV4TestClient.sha256(part), part);
         assertEquals(200, good.statusCode(), good.body());
@@ -128,11 +141,11 @@ class S3SigV4PayloadTest {
     void tamperedSignatureIsRejected() throws Exception {
         var s = client.sign("PUT", "/sigbkt/t.txt", null, SigV4TestClient.sha256(bytes("a")), Instant.now());
         String forged = s.authorization().replaceAll("Signature=.*", "Signature=" + "0".repeat(64));
-        var req = java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://localhost:" + port + "/sigbkt/t.txt"))
+        var req = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/sigbkt/t.txt"))
                 .header("Authorization", forged).header("x-amz-date", s.timestamp())
                 .header("x-amz-content-sha256", SigV4TestClient.sha256(bytes("a")))
-                .PUT(java.net.http.HttpRequest.BodyPublishers.ofString("a")).build();
-        assertEquals(403, client.http.send(req, java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
+                .PUT(HttpRequest.BodyPublishers.ofString("a")).build();
+        assertEquals(403, client.http.send(req, HttpResponse.BodyHandlers.ofString()).statusCode());
     }
 
     // ── streaming (aws-chunked) ──────────────────────────────────────────────
@@ -166,10 +179,10 @@ class S3SigV4PayloadTest {
     @Test
     void signedChunkedUploadWithSignedTrailer() throws Exception {
         byte[][] chunks = { bytes("trailer payload") };
-        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+        CRC32 crc = new CRC32();
         crc.update(chunks[0]);
         String trailer = "x-amz-checksum-crc32:"
-                + java.util.Base64.getEncoder().encodeToString(java.nio.ByteBuffer.allocate(4).putInt((int) crc.getValue()).array());
+                + Base64.getEncoder().encodeToString(ByteBuffer.allocate(4).putInt((int) crc.getValue()).array());
         var ok = client.putChunked("/sigbkt/trailer.txt", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER",
                 chunks, -1, false, trailer, true);
         assertEquals(200, ok.statusCode(), ok.body());
@@ -181,13 +194,13 @@ class S3SigV4PayloadTest {
         assertFalse(exists("trailer2.txt"));
     }
 
-    private static String trailerLine(org.example.sectoriadb.checksum.ChecksumAlgorithm alg, byte[] data) {
+    private static String trailerLine(ChecksumAlgorithm alg, byte[] data) {
         return alg.headerName() + ":" + alg.encode(alg.compute(data));
     }
 
     @Test
     void signedTrailerChecksumIsVerified_forEveryAlgorithm() throws Exception {
-        for (var alg : org.example.sectoriadb.checksum.ChecksumAlgorithm.values()) {
+        for (var alg : ChecksumAlgorithm.values()) {
             byte[][] chunks = { bytes("first part of the body,"), bytes(" and the second one") };
             byte[] all = bytes("first part of the body, and the second one");
             String type = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
@@ -207,11 +220,11 @@ class S3SigV4PayloadTest {
     @Test
     void trailerChecksumOfLargerThanOneChunkBodyIsVerified() throws Exception {
         byte[] a = new byte[3000], b = new byte[3000], c = new byte[1500];
-        new java.util.Random(1).nextBytes(a);
-        new java.util.Random(2).nextBytes(b);
-        new java.util.Random(3).nextBytes(c);
-        byte[] all = java.nio.ByteBuffer.allocate(7500).put(a).put(b).put(c).array();
-        var alg = org.example.sectoriadb.checksum.ChecksumAlgorithm.CRC32C;
+        new Random(1).nextBytes(a);
+        new Random(2).nextBytes(b);
+        new Random(3).nextBytes(c);
+        byte[] all = ByteBuffer.allocate(7500).put(a).put(b).put(c).array();
+        var alg = ChecksumAlgorithm.CRC32C;
         String type = "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER";
         assertEquals(200, client.putChunked("/sigbkt/tbig.bin", type, new byte[][]{a, b, c}, -1, false, trailerLine(alg, all), true).statusCode());
         var bad = client.putChunked("/sigbkt/tbig2.bin", type, new byte[][]{a, b, c}, -1, false, trailerLine(alg, a), true);
@@ -226,7 +239,7 @@ class S3SigV4PayloadTest {
         byte[] data = bytes("announce me");
         var r = client.putChunked("/sigbkt/tr-undeclared.txt", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD-TRAILER",
                 new byte[][]{data}, -1, false,
-                trailerLine(org.example.sectoriadb.checksum.ChecksumAlgorithm.CRC32C, data), true, false);
+                trailerLine(ChecksumAlgorithm.CRC32C, data), true, false);
         assertEquals(400, r.statusCode(), r.body());
         assertFalse(exists("tr-undeclared.txt"));
     }
@@ -235,18 +248,18 @@ class S3SigV4PayloadTest {
     void unsignedTrailerStreamingIsAccepted() throws Exception {
         // STREAMING-UNSIGNED-PAYLOAD-TRAILER: chunk framing without signatures, checksum in the trailer
         var s = client.sign("PUT", "/sigbkt/ut.txt", null, "STREAMING-UNSIGNED-PAYLOAD-TRAILER", Instant.now(),
-                java.util.Map.of("x-amz-trailer", "x-amz-checksum-crc32"));
-        java.util.zip.CRC32 crc = new java.util.zip.CRC32();
+                Map.of("x-amz-trailer", "x-amz-checksum-crc32"));
+        CRC32 crc = new CRC32();
         crc.update(bytes("unsigned!"));
-        String crcB64 = java.util.Base64.getEncoder().encodeToString(
-                java.nio.ByteBuffer.allocate(4).putInt((int) crc.getValue()).array());
+        String crcB64 = Base64.getEncoder().encodeToString(
+                ByteBuffer.allocate(4).putInt((int) crc.getValue()).array());
         String body = "7\r\nunsigne\r\n2\r\nd!\r\n0\r\nx-amz-checksum-crc32:" + crcB64 + "\r\n\r\n";
-        var req = java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://localhost:" + port + "/sigbkt/ut.txt"))
+        var req = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/sigbkt/ut.txt"))
                 .header("Authorization", s.authorization()).header("x-amz-date", s.timestamp())
                 .header("x-amz-content-sha256", "STREAMING-UNSIGNED-PAYLOAD-TRAILER")
                 .header("Content-Encoding", "aws-chunked").header("x-amz-trailer", "x-amz-checksum-crc32")
-                .PUT(java.net.http.HttpRequest.BodyPublishers.ofString(body)).build();
-        var r = client.http.send(req, java.net.http.HttpResponse.BodyHandlers.ofString());
+                .PUT(HttpRequest.BodyPublishers.ofString(body)).build();
+        var r = client.http.send(req, HttpResponse.BodyHandlers.ofString());
         assertEquals(200, r.statusCode(), r.body());
         var g = client.request("GET", "/sigbkt/ut.txt", null, SigV4TestClient.sha256(new byte[0]), null);
         assertEquals("unsigned!", g.body());
@@ -292,7 +305,7 @@ class S3SigV4PayloadTest {
         client.put("/sigbkt/a.txt", body, SigV4TestClient.sha256(body));
         client.put("/sigbkt/b.txt", body, SigV4TestClient.sha256(body));
         var uri = client.presign("/sigbkt/a.txt", Instant.now(), 300);
-        var swapped = java.net.URI.create(uri.toString().replace("/sigbkt/a.txt", "/sigbkt/b.txt"));
+        var swapped = URI.create(uri.toString().replace("/sigbkt/a.txt", "/sigbkt/b.txt"));
         assertEquals(403, client.get(swapped).statusCode());
     }
 }

@@ -3,8 +3,12 @@ package org.example.sectoriadb.maintenance;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.storage.ChunkStore;
+import org.example.sectoriadb.catalog.metastore.ChunkInvariants;
+import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.maintenance.gc.GcReports;
+import org.example.sectoriadb.storage.ChunkStore;
+import org.example.sectoriadb.storage.StorageRig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,6 +26,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -29,10 +34,11 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.catalog.metastore.ChunkInvariants;
-import org.example.sectoriadb.catalog.metastore.MetaInvariants;
-import org.example.sectoriadb.storage.StorageRig;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Safe resize under concurrent writes (ROADMAP C6, doc 10 part B): freeze ordered after the inserts in flight, writes
@@ -188,7 +194,7 @@ class ResizeSafetyTest {
         BlobFileEntity victim = cuckoo().get(0);
         byte[] data = bytes(8 * CHUNK, 999);
         ManifestEntity staged = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "straddler", null,
-                org.example.sectoriadb.checksum.UploadChecksums.none());
+                UploadChecksums.none());
         assertTrue(rig.chunks.countByBlob(victim.getId()) < 8 * 2 + 18, "sanity: index knows no chunk of the staged upload yet");
         BlobFileEntity replacement = rig.resizeService.resizeBlobFile(victim.getId(), BUCKETS * 2);
         rig.writer.commitObject(staged);          // placements name the old blob: redirected to the replacement
@@ -373,8 +379,8 @@ class ResizeSafetyTest {
     void twoResizesOfTheSameBlobDoNotOverlap() throws Exception {
         for (int i = 0; i < 5; i++) put("o" + i, bytes(4 * CHUNK, 400 + i));
         BlobFileEntity victim = cuckoo().get(0);
-        var inside = new java.util.concurrent.CountDownLatch(1);
-        var release = new java.util.concurrent.CountDownLatch(1);
+        var inside = new CountDownLatch(1);
+        var release = new CountDownLatch(1);
         rig.resizeService.setStageHook(stage -> {
             if (stage.equals("frozen")) {
                 inside.countDown();

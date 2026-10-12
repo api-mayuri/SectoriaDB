@@ -1,9 +1,9 @@
 package org.example.sectoriadb.engine.blob;
 
-import org.example.sectoriadb.engine.hash.Crc32c;
 import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
-import org.example.sectoriadb.engine.format.SmallBlobLayout;
 import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
+import org.example.sectoriadb.engine.format.SmallBlobLayout;
+import org.example.sectoriadb.engine.hash.Crc32c;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -11,11 +11,22 @@ import java.io.RandomAccessFile;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
-import java.util.concurrent.*;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class SmallObjectBlobTest {
 
@@ -105,7 +116,7 @@ class SmallObjectBlobTest {
             for (Future<List<Object[]>> f : fs) all.addAll(f.get(60, TimeUnit.SECONDS));
             ex.shutdown();
             assertEquals(threads * perThread, all.size());
-            java.util.Set<Long> offsets = new java.util.HashSet<>();
+            Set<Long> offsets = new HashSet<>();
             for (Object[] o : all) {
                 SmallObjectBlob.Location l = (SmallObjectBlob.Location) o[1];
                 assertTrue(offsets.add(l.offset()), "no two records share an offset");

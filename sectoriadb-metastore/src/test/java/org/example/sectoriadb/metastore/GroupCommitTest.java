@@ -1,12 +1,8 @@
 package org.example.sectoriadb.metastore;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
@@ -25,9 +21,15 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
+import java.util.function.Function;
+
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class GroupCommitTest {
     @TempDir
@@ -64,7 +66,7 @@ class GroupCommitTest {
     }
 
     /** Holds the writer slot so that everything submitted meanwhile ends up in one batch. */
-    static List<CompletableFuture<Object>> submitWhileBlocked(MetaStore s, List<java.util.function.Function<WriteTxn, Object>> bodies) throws Exception {
+    static List<CompletableFuture<Object>> submitWhileBlocked(MetaStore s, List<Function<WriteTxn, Object>> bodies) throws Exception {
         List<CompletableFuture<Object>> fs = new ArrayList<>();
         try (WriteTxn hold = s.beginWrite()) {
             for (var b : bodies) fs.add(s.submit(b));
@@ -103,7 +105,7 @@ class GroupCommitTest {
         MetaStore s = open(OPTS);
         s.writeVoid(tx -> tx.tree("t").put(k("pre"), k("p")));
         long before = s.stats().lastTxId();
-        List<java.util.function.Function<WriteTxn, Object>> bodies = new ArrayList<>();
+        List<Function<WriteTxn, Object>> bodies = new ArrayList<>();
         bodies.add(tx -> {
             tx.tree("t").put(k("a"), k("1"));
             return "a";
@@ -149,7 +151,7 @@ class GroupCommitTest {
         MetaStore s = open(OPTS);
         byte[] big = new byte[3000];
         new Random(1).nextBytes(big);
-        List<java.util.function.Function<WriteTxn, Object>> bodies = new ArrayList<>();
+        List<Function<WriteTxn, Object>> bodies = new ArrayList<>();
         bodies.add(tx -> {
             tx.tree("t").put(k("big"), big);
             return null;
@@ -173,7 +175,7 @@ class GroupCommitTest {
         Random rnd = new Random(7);
         TreeMap<Integer, byte[]> model = new TreeMap<>();
         for (int round = 0; round < 60; round++) {
-            List<java.util.function.Function<WriteTxn, Object>> bodies = new ArrayList<>();
+            List<Function<WriteTxn, Object>> bodies = new ArrayList<>();
             List<TreeMap<Integer, byte[]>> effects = new ArrayList<>();
             List<Boolean> fail = new ArrayList<>();
             TreeMap<Integer, byte[]> expect = new TreeMap<>(model);
@@ -260,7 +262,7 @@ class GroupCommitTest {
         reader.start();
         for (int round = 1; round <= 80; round++) {
             final long r = round;
-            List<java.util.function.Function<WriteTxn, Object>> bodies = new ArrayList<>();
+            List<Function<WriteTxn, Object>> bodies = new ArrayList<>();
             for (int i = 0; i < keys; i++) {
                 final int key = i;
                 bodies.add(tx -> {
@@ -305,7 +307,7 @@ class GroupCommitTest {
         s.faults().commitHook = stage -> {
             if (stage == CommitStage.AFTER_DATA) throw new IllegalStateException("simulated crash");
         };
-        List<java.util.function.Function<WriteTxn, Object>> bodies = new ArrayList<>();
+        List<Function<WriteTxn, Object>> bodies = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
             final int n = i;
             bodies.add(tx -> {
@@ -354,7 +356,7 @@ class GroupCommitTest {
         s.faults().commitHook = stage -> {
             if (stage == CommitStage.AFTER_DATA) throw new IllegalStateException("disk gone");
         };
-        List<java.util.function.Function<WriteTxn, Object>> bodies = new ArrayList<>();
+        List<Function<WriteTxn, Object>> bodies = new ArrayList<>();
         for (int i = 0; i < 5; i++) bodies.add(tx -> {
             tx.tree("t").put(k("a"), k("1"));
             return null;
@@ -463,7 +465,7 @@ class GroupCommitTest {
     void batchSizeLimitSplitsTheQueueIntoSeveralCommits() throws Exception {
         MetaStore s = open(OPTS.groupCommit(4, 1024, 0, 64));
         long before = s.stats().lastTxId();
-        List<java.util.function.Function<WriteTxn, Object>> bodies = new ArrayList<>();
+        List<Function<WriteTxn, Object>> bodies = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
             final int n = i;
             bodies.add(tx -> {
@@ -479,7 +481,7 @@ class GroupCommitTest {
     void pageLimitEndsTheBatchAfterTheBodyThatCrossedIt() throws Exception {
         MetaStore s = open(OPTS.groupCommit(100, 3, 0, 64));
         long before = s.stats().lastTxId();
-        List<java.util.function.Function<WriteTxn, Object>> bodies = new ArrayList<>();
+        List<Function<WriteTxn, Object>> bodies = new ArrayList<>();
         for (int i = 0; i < 6; i++) {
             final int n = i;
             bodies.add(tx -> {

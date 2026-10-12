@@ -12,6 +12,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.Socket;
@@ -21,11 +22,20 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Stage 11 server hardening: signature rules, bounded bodies, upload admission, conditional writes, multipart safety. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
@@ -129,8 +139,8 @@ class S3HardeningTest {
         String anon = raw(bytes("GET /hbkt?X-Amz-Signature=a&b=% HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"));
         assertTrue(anon.startsWith("HTTP/1.1 400"), anon);
         // a known access key id with a bogus signature reaches the canonicalization
-        String day = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd").withZone(java.time.ZoneOffset.UTC).format(Instant.now());
-        String ts = java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(java.time.ZoneOffset.UTC).format(Instant.now());
+        String day = DateTimeFormatter.ofPattern("yyyyMMdd").withZone(ZoneOffset.UTC).format(Instant.now());
+        String ts = DateTimeFormatter.ofPattern("yyyyMMdd'T'HHmmss'Z'").withZone(ZoneOffset.UTC).format(Instant.now());
         String signed = raw(bytes("GET /hbkt?x=% HTTP/1.1\r\nHost: localhost:" + port + "\r\nConnection: close\r\nAuthorization: AWS4-HMAC-SHA256 Credential="
                 + AK + "/" + day + "/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=" + "0".repeat(64)
                 + "\r\nx-amz-date: " + ts + "\r\nx-amz-content-sha256: " + EMPTY + "\r\n\r\n"));
@@ -151,7 +161,7 @@ class S3HardeningTest {
         HttpRequest r = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/hbkt/nolength.bin"))
                 .header("Authorization", s.authorization()).header("x-amz-date", s.timestamp())
                 .header("x-amz-content-sha256", "UNSIGNED-PAYLOAD")
-                .PUT(HttpRequest.BodyPublishers.ofInputStream(() -> new java.io.ByteArrayInputStream(bytes("streamed")))).build();   // Transfer-Encoding: chunked
+                .PUT(HttpRequest.BodyPublishers.ofInputStream(() -> new ByteArrayInputStream(bytes("streamed")))).build();   // Transfer-Encoding: chunked
         var resp = client.http.send(r, HttpResponse.BodyHandlers.ofString());
         assertEquals(411, resp.statusCode(), resp.body());
         assertTrue(resp.body().contains("MissingContentLength"), resp.body());
@@ -206,20 +216,20 @@ class S3HardeningTest {
     @Test
     void anOversizedPolicyAclAndXmlBodyAreRefusedWithoutBeingBuffered() throws Exception {
         byte[] policy = new byte[25 * 1024];
-        java.util.Arrays.fill(policy, (byte) ' ');
+        Arrays.fill(policy, (byte) ' ');
         var p = client.request("PUT", "/hbkt", "policy", SigV4TestClient.sha256(policy), policy);
         assertEquals(400, p.statusCode(), p.body());
         assertTrue(p.body().contains("PolicyTooLarge"), p.body());
 
         byte[] acl = new byte[80 * 1024];
-        java.util.Arrays.fill(acl, (byte) ' ');
+        Arrays.fill(acl, (byte) ' ');
         var a = client.request("PUT", "/hbkt", "acl", SigV4TestClient.sha256(acl), acl);
         assertEquals(400, a.statusCode(), a.body());
 
         // just over the 2 MiB limit: the rest of the body stays under Tomcat's swallow size, so the server drains
         // it and the client reliably reads the 400 instead of racing a closed connection
         byte[] xml = new byte[2 * 1024 * 1024 + 64 * 1024];
-        java.util.Arrays.fill(xml, (byte) ' ');
+        Arrays.fill(xml, (byte) ' ');
         var d = client.request("POST", "/hbkt", "delete", SigV4TestClient.sha256(xml), xml);
         assertEquals(400, d.statusCode(), d.body());
         assertTrue(d.body().contains("MalformedXML"), d.body());
@@ -262,9 +272,9 @@ class S3HardeningTest {
     @Test
     void racingCreatesWithIfNoneMatchHaveExactlyOneWinner() throws Exception {
         int n = 8;
-        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(n);
+        ExecutorService pool = Executors.newFixedThreadPool(n);
         try {
-            var futures = new java.util.ArrayList<java.util.concurrent.Future<Integer>>();
+            var futures = new ArrayList<Future<Integer>>();
             for (int i = 0; i < n; i++) {
                 String body = "writer-" + i;
                 futures.add(pool.submit(() -> put("/hbkt/race.txt", body, Map.of("if-none-match", "*")).statusCode()));

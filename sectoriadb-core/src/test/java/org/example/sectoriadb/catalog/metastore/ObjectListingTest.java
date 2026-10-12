@@ -1,12 +1,13 @@
 package org.example.sectoriadb.catalog.metastore;
 
-import org.example.sectoriadb.metastore.MetaStore;
-import org.example.sectoriadb.metastore.MetaStoreOptions;
 import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.ManifestRepository.ObjectListing;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.StorageKind;
+import org.example.sectoriadb.metastore.MetaStore;
+import org.example.sectoriadb.metastore.MetaStoreOptions;
+import org.example.sectoriadb.metastore.WriteTxn;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -17,12 +18,17 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
 import java.util.TreeSet;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * ListObjects against a naive reference computed in the test: thousands of keys with unicode, supplementary
@@ -79,7 +85,7 @@ class ObjectListingTest {
         });
     }
 
-    private static void put(org.example.sectoriadb.metastore.WriteTxn tx, PoolEntity pool, String id, String key) {
+    private static void put(WriteTxn tx, PoolEntity pool, String id, String key) {
         ManifestEntity m = new ManifestEntity();
         m.setId(id);
         m.setPoolId(pool.getId());
@@ -208,7 +214,7 @@ class ObjectListingTest {
                         assertNotNull(after);
                         if (pageSize == 1) assertTrue(pages < 5000, "makes progress");
                     }
-                    assertEquals(seen.size(), new java.util.HashSet<>(seen).size(), "no entry twice: " + delimiter + " " + prefix);
+                    assertEquals(seen.size(), new HashSet<>(seen).size(), "no entry twice: " + delimiter + " " + prefix);
                     Ref whole = reference(prefix, delimiter, null, Integer.MAX_VALUE);
                     assertEquals(whole.keys().size() + whole.prefixes().size(), seen.size(), "all entries: " + delimiter + " " + prefix);
                 }

@@ -30,10 +30,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.regex.Pattern;
 
@@ -388,7 +391,7 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
             }
         }
         String crc32c = null;
-        if (crc32cs.stream().noneMatch(java.util.Objects::isNull)) {
+        if (crc32cs.stream().noneMatch(Objects::isNull)) {
             int acc = ByteBuffer.wrap(crc32cs.get(0)).getInt();
             for (int i = 1; i < crc32cs.size(); i++) {
                 acc = CrcCombine.crc32c(acc, ByteBuffer.wrap(crc32cs.get(i)).getInt(), partLengths.get(i));
@@ -455,7 +458,7 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
         //    WITHOUT releasing anything (a tombstone would let the collector mark the small records DELETED)
         for (ManifestEntity pm : partManifests) Trees.deleteManifestRecord(tx, pm);
         // parts that were uploaded but not listed are discarded
-        java.util.Set<String> listed = new java.util.HashSet<>();
+        Set<String> listed = new HashSet<>();
         for (MultipartPart row : rows) listed.add(row.manifestId());
         for (MultipartPart extra : MultipartTrees.parts(tx, uploadId)) {
             if (!listed.contains(extra.manifestId())) Trees.retire(tx, extra.manifestId());

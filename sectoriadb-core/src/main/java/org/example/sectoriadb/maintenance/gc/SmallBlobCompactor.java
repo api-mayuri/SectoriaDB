@@ -1,25 +1,25 @@
 package org.example.sectoriadb.maintenance.gc;
 
-import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.BlobKind;
-import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PartSegment;
-import org.example.sectoriadb.catalog.StorageKind;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.GcRepository;
 import org.example.sectoriadb.catalog.GcRepository.SmallMove;
+import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PartSegment;
+import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.PoolRepository;
+import org.example.sectoriadb.catalog.StorageKind;
+import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
+import org.example.sectoriadb.maintenance.gc.GcReports.CompactionReport;
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.storage.BlobService;
 import org.example.sectoriadb.storage.ChunkStore;
 import org.example.sectoriadb.storage.ResidentHandle;
 import org.example.sectoriadb.storage.SmallBlobCache;
 import org.example.sectoriadb.storage.UploadGate;
-import org.example.sectoriadb.maintenance.gc.GcReports.CompactionReport;
-import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,7 +34,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -302,7 +304,7 @@ public class SmallBlobCompactor {
             for (int i = 0; i < live.size(); i++) {
                 try {
                     moves.put(live.get(i).moveKey(), futures.get(i).get());
-                } catch (java.util.concurrent.ExecutionException e) {
+                } catch (ExecutionException e) {
                     if (failure == null) {
                         failure = e.getCause() instanceof IOException io ? io : new IOException(e.getCause());
                         for (Future<SmallMove> f : futures) f.cancel(true);
@@ -310,7 +312,7 @@ public class SmallBlobCompactor {
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     throw new IOException("interrupted", e);
-                } catch (java.util.concurrent.CancellationException ignored) {
+                } catch (CancellationException ignored) {
                     // cancelled after the first failure
                 }
             }

@@ -1,7 +1,9 @@
 package org.example.sectoriadb.metastore;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -75,8 +77,8 @@ public final class WriteTxn extends ReadTxn {
     @Override
     public List<String> treeNames() {
         ensureOpen();
-        TreeSet<String> out = new TreeSet<>((a, b) -> java.util.Arrays.compareUnsigned(
-                a.getBytes(java.nio.charset.StandardCharsets.UTF_8), b.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+        TreeSet<String> out = new TreeSet<>((a, b) -> Arrays.compareUnsigned(
+                a.getBytes(StandardCharsets.UTF_8), b.getBytes(StandardCharsets.UTF_8)));
         out.addAll(catalogNames());
         out.removeAll(dropped);
         for (Map.Entry<String, BTree> e : handles.entrySet()) {

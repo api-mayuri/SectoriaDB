@@ -9,6 +9,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.time.Duration;
+
 /**
  * Background garbage collection (doc 10), enabled by {@code sectoriadb.gc.enabled=true}:
  * <ul>
@@ -70,7 +72,7 @@ public class GarbageCollectionScheduler {
             this.gc = props.getGc();
         }
 
-        private static long ms(java.time.Duration d, long min) {
+        private static long ms(Duration d, long min) {
             return Math.max(min, d == null ? min : d.toMillis());
         }
 

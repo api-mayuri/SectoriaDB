@@ -1,17 +1,20 @@
 package org.example.sectoriadb.maintenance.gc;
 
-import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.GcRepository;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import org.example.sectoriadb.checksum.UploadChecksums;
+import org.example.sectoriadb.engine.error.ChunkCorruptedException;
+import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
+import org.example.sectoriadb.engine.error.TableFullException;
 import org.example.sectoriadb.maintenance.gc.GcReports.Options;
 import org.example.sectoriadb.maintenance.gc.GcReports.RunReport;
 import org.example.sectoriadb.maintenance.gc.GcReports.SweepReport;
 import org.example.sectoriadb.storage.ChunkNotFoundException;
-import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
-import org.example.sectoriadb.engine.error.TableFullException;
+import org.example.sectoriadb.storage.StorageRig;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,17 +27,26 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.catalog.metastore.MetaInvariants;
-import org.example.sectoriadb.storage.StorageRig;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Garbage collection end to end (doc 10): the chunk queue, grace period, the per-chunk protocol and its crash cases, orphans,
@@ -167,7 +179,7 @@ class GarbageCollectionTest {
                 put("o" + i, content(8, 100 + i));
                 keys.add("o" + i);
             }
-        } catch (TableFullException | org.example.sectoriadb.engine.error.ChunkCorruptedException e) {
+        } catch (TableFullException | ChunkCorruptedException e) {
             // the pool is full
         } catch (Exception e) {
             assertTrue(e instanceof TableFullException || e.getCause() instanceof TableFullException, "unexpected: " + e);
@@ -606,7 +618,7 @@ class GarbageCollectionTest {
         byte[][] blocks = new byte[10][];
         for (int i = 0; i < blocks.length; i++) blocks[i] = bytes(CHUNK, 5000 + i);
         int threads = 4, rounds = 60;
-        java.util.concurrent.ExecutorService exec = java.util.concurrent.Executors.newFixedThreadPool(threads + 2);
+        ExecutorService exec = Executors.newFixedThreadPool(threads + 2);
         AtomicBoolean stop = new AtomicBoolean();
         var collector = exec.submit(() -> {
             while (!stop.get()) gc0();
@@ -616,13 +628,13 @@ class GarbageCollectionTest {
             while (!stop.get()) rig.gc.sweep(pool);
             return null;
         });
-        var retries = new java.util.concurrent.atomic.AtomicInteger();
-        List<java.util.concurrent.Future<java.util.Map<String, byte[]>>> writers = new ArrayList<>();
+        var retries = new AtomicInteger();
+        List<Future<Map<String, byte[]>>> writers = new ArrayList<>();
         for (int t = 0; t < threads; t++) {
             final int id = t;
             writers.add(exec.submit(() -> {
                 Random rnd = new Random(id);
-                java.util.Map<String, byte[]> mine = new java.util.HashMap<>();
+                Map<String, byte[]> mine = new HashMap<>();
                 for (int i = 0; i < rounds; i++) {
                     String key = "t" + id + "-k" + rnd.nextInt(6);
                     int op = rnd.nextInt(10);
@@ -655,7 +667,7 @@ class GarbageCollectionTest {
                 return mine;
             }));
         }
-        java.util.Map<String, byte[]> expected = new java.util.HashMap<>();
+        Map<String, byte[]> expected = new HashMap<>();
         for (var w : writers) expected.putAll(w.get(120, TimeUnit.SECONDS));
         stop.set(true);
         collector.get(30, TimeUnit.SECONDS);

@@ -8,7 +8,8 @@ import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.Random;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /** C4/C5: full reads and writes, EOF handling, durable engine. */
 class FileChannelStorageIOEngineTest {

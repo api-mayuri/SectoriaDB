@@ -1,24 +1,27 @@
 package org.example.sectoriadb.metastore;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.ConcurrentModificationException;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class IsolationAndConcurrencyTest {
     @TempDir
@@ -43,7 +46,7 @@ class IsolationAndConcurrencyTest {
         return s.getBytes();
     }
 
-    static String str(java.util.Optional<byte[]> o) {
+    static String str(Optional<byte[]> o) {
         return o.map(String::new).orElse(null);
     }
 
@@ -230,7 +233,7 @@ class IsolationAndConcurrencyTest {
         t.put(k(1), v("a"));
         Cursor c = t.scan();
         t.put(k(2), v("b"));
-        assertThrows(java.util.ConcurrentModificationException.class, c::next);
+        assertThrows(ConcurrentModificationException.class, c::next);
         w.commit();
         assertThrows(IllegalStateException.class, () -> t.get(k(1)));
         assertThrows(IllegalStateException.class, w::commit);

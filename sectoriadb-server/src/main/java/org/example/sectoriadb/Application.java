@@ -9,13 +9,22 @@ import org.example.sectoriadb.storage.ObjectWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationRunner;
-import org.springframework.shell.command.CommandExceptionResolver;
-import org.springframework.shell.command.CommandHandlingResult;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.annotation.EnableScheduling;
+import org.springframework.shell.command.CommandExceptionResolver;
+import org.springframework.shell.command.CommandHandlingResult;
+
+import java.io.IOException;
+import java.nio.channels.FileChannel;
+import java.nio.channels.FileLock;
+import java.nio.channels.OverlappingFileLockException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.Set;
 
 @SpringBootApplication
 @EnableScheduling
@@ -55,7 +64,7 @@ public class Application {
     /**
      * Commands that work next to a running server: they only touch credentials.json (and never open the metastore).
      */
-    static final java.util.Set<String> ONLINE_COMMANDS = java.util.Set.of(
+    static final Set<String> ONLINE_COMMANDS = Set.of(
             "mk-key", "keys", "rm-key", "enable-key", "disable-key");
 
     /**
@@ -63,7 +72,7 @@ public class Application {
      * own interactive shell). Started next to a running server they fail at once with a clear message instead of a
      * stack trace deep in the context start-up.
      */
-    static final java.util.Set<String> OFFLINE_ONLY_COMMANDS = java.util.Set.of(
+    static final Set<String> OFFLINE_ONLY_COMMANDS = Set.of(
             "bucket-acl", "object-acl", "public-list", "verify-all", "verify");
 
     static boolean isCliMode(String[] args) {
@@ -90,14 +99,14 @@ public class Application {
         }
         if (metaDir == null) metaDir = System.getenv("SECTORIADB_META_DIR");
         if (metaDir == null) metaDir = "./sectoriadb-meta";
-        java.nio.file.Path file = java.nio.file.Path.of(metaDir).resolve("sectoria.db");
-        if (!java.nio.file.Files.exists(file)) return;
-        try (var ch = java.nio.channels.FileChannel.open(file, java.nio.file.StandardOpenOption.READ,
-                java.nio.file.StandardOpenOption.WRITE)) {
-            java.nio.channels.FileLock lock = null;
+        Path file = Path.of(metaDir).resolve("sectoria.db");
+        if (!Files.exists(file)) return;
+        try (var ch = FileChannel.open(file, StandardOpenOption.READ,
+                StandardOpenOption.WRITE)) {
+            FileLock lock = null;
             try {
                 lock = ch.tryLock();
-            } catch (java.nio.channels.OverlappingFileLockException e) {
+            } catch (OverlappingFileLockException e) {
                 // held inside this JVM: treated as held
             }
             if (lock == null) {
@@ -108,7 +117,7 @@ public class Application {
                 System.exit(2);
             }
             lock.release();
-        } catch (java.io.IOException e) {
+        } catch (IOException e) {
             // let the normal start-up report the problem
         }
     }
@@ -121,13 +130,13 @@ public class Application {
     public ApplicationRunner cleanUploadSpool(ObjectWriter writer) {
         return args -> {
             if (System.getProperty("sectoriadb.metastore.lazy") != null) return;
-            java.nio.file.Path dir = writer.uploadTmpDir();
+            Path dir = writer.uploadTmpDir();
             int removed = 0;
-            try (var files = java.nio.file.Files.newDirectoryStream(dir, "sectoriadb-{upload,copy}-*.tmp")) {
-                for (java.nio.file.Path f : files) {
-                    if (java.nio.file.Files.deleteIfExists(f)) removed++;
+            try (var files = Files.newDirectoryStream(dir, "sectoriadb-{upload,copy}-*.tmp")) {
+                for (Path f : files) {
+                    if (Files.deleteIfExists(f)) removed++;
                 }
-            } catch (java.io.IOException e) {
+            } catch (IOException e) {
                 log.warn("Could not clean the upload spool directory {}: {}", dir, e.toString());
             }
             if (removed > 0) log.info("Removed {} stale upload spool file(s) from {}", removed, dir);

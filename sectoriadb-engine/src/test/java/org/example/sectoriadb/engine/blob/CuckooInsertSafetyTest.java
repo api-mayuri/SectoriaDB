@@ -1,11 +1,11 @@
 package org.example.sectoriadb.engine.blob;
 
-import org.example.sectoriadb.engine.format.BlobLayout;
-import org.example.sectoriadb.engine.io.BlobFile;
-import org.example.sectoriadb.engine.io.StorageIOEngine;
-import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
 import org.example.sectoriadb.engine.error.TableFullException;
+import org.example.sectoriadb.engine.format.BlobLayout;
 import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
+import org.example.sectoriadb.engine.io.BlobFile;
+import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
+import org.example.sectoriadb.engine.io.StorageIOEngine;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -19,13 +19,18 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Tests for atomic insert (C1), locking (C2), hash functions (C3) and IO ordering (C5). */
 class CuckooInsertSafetyTest {
@@ -207,7 +212,7 @@ class CuckooInsertSafetyTest {
         CuckooHashTable t = open(p, buckets, 32, new FileChannelStorageIOEngine(false));
 
         int threads = 8, perThread = 40;
-        Map<Long, byte[]> expected = new java.util.concurrent.ConcurrentHashMap<>();
+        Map<Long, byte[]> expected = new ConcurrentHashMap<>();
         ExecutorService pool = Executors.newFixedThreadPool(threads);
         CountDownLatch start = new CountDownLatch(1);
         List<Future<?>> futures = new ArrayList<>();

@@ -1,5 +1,6 @@
 package org.example.sectoriadb.storage.multipart;
 
+import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.MultipartException;
@@ -11,6 +12,8 @@ import org.example.sectoriadb.catalog.MultipartUpload;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.metastore.MetaInvariants;
+import org.example.sectoriadb.catalog.metastore.MetaStoreMultipartRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.UploadChecksums;
@@ -28,14 +31,20 @@ import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.zip.CRC32C;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Multipart state in the metastore (doc 13): parts as hidden manifests, zero-copy Complete, checksums derived from the
@@ -373,9 +382,9 @@ class MultipartStorageTest {
         int writers = 8;
         List<byte[]> candidates = new ArrayList<>();
         for (int i = 0; i < writers; i++) candidates.add(bytes(i % 2 == 0 ? 2 * CHUNK + i : 100 + i, 70 + i));
-        var exec = java.util.concurrent.Executors.newFixedThreadPool(writers);
+        var exec = Executors.newFixedThreadPool(writers);
         try {
-            List<java.util.concurrent.Future<MultipartPart>> futures = new ArrayList<>();
+            List<Future<MultipartPart>> futures = new ArrayList<>();
             for (int i = 0; i < writers; i++) {
                 final int idx = i;
                 futures.add(exec.submit(() -> upload(u, 1, candidates.get(idx))));
@@ -495,7 +504,7 @@ class MultipartStorageTest {
         MultipartPart p3 = upload(u, 3, bytes(700, 123));
         complete(u, p1, p2, p3);
         var smalls = rig.blobs.findByPoolId(pool.getId()).stream()
-                .filter(b -> b.getKind() == org.example.sectoriadb.catalog.BlobKind.SMALL).toList();
+                .filter(b -> b.getKind() == BlobKind.SMALL).toList();
         assertEquals(1, smalls.size());
         assertEquals(2, rig.small(smalls.get(0)).stats().liveRecords());
 
@@ -546,9 +555,9 @@ class MultipartStorageTest {
         MultipartUpload u = create("twice");
         MultipartPart p1 = upload(u, 1, bytes(3 * CHUNK, 3));
         MultipartPart p2 = upload(u, 2, bytes(70, 4));
-        var exec = java.util.concurrent.Executors.newFixedThreadPool(4);
+        var exec = Executors.newFixedThreadPool(4);
         try {
-            List<java.util.concurrent.Future<MultipartRepository.CompleteResult>> fs = new ArrayList<>();
+            List<Future<MultipartRepository.CompleteResult>> fs = new ArrayList<>();
             for (int i = 0; i < 4; i++) fs.add(exec.submit(() -> complete(u, p1, p2)));
             List<MultipartRepository.CompleteResult> rs = new ArrayList<>();
             for (var f : fs) rs.add(f.get());
@@ -583,9 +592,9 @@ class MultipartStorageTest {
 
     @Test
     void theMinimumPartSizeAppliesToEveryPartButTheLast() throws Exception {
-        var strict = new org.example.sectoriadb.storage.multipart.MultipartService(
-                new org.example.sectoriadb.catalog.metastore.MetaStoreMultipartRepository(
-                        org.example.sectoriadb.catalog.metastore.MetaStoreProvider.of(rig.store), 1000),
+        var strict = new MultipartService(
+                new MetaStoreMultipartRepository(
+                        MetaStoreProvider.of(rig.store), 1000),
                 rig.pools, rig.writer, rig.reader);
         MultipartUpload u = create("strict");
         MultipartPart small = upload(u, 1, bytes(999, 1));
@@ -602,7 +611,7 @@ class MultipartStorageTest {
         assertEquals(1005, object("strict").getTotalBytes());
     }
 
-    private void strictComplete(org.example.sectoriadb.storage.multipart.MultipartService svc, MultipartUpload u, MultipartPart... parts) {
+    private void strictComplete(MultipartService svc, MultipartUpload u, MultipartPart... parts) {
         List<RequestedPart> req = new ArrayList<>();
         for (MultipartPart p : parts) req.add(new RequestedPart(p.partNumber(), p.etag(), Map.of()));
         svc.complete(new CompleteCommand(u.getUploadId(), u.getBucket(), u.getKey(), req,

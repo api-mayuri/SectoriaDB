@@ -1,16 +1,19 @@
 package org.example.sectoriadb.catalog.metastore;
 
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.BlobKind;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PlacedChunk;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.PoolRepository;
+import org.example.sectoriadb.catalog.StorageKind;
+import org.example.sectoriadb.checksum.ChecksumAlgorithm;
+import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
-import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.BlobKind;
-import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
-import org.example.sectoriadb.catalog.StorageKind;
-import org.example.sectoriadb.catalog.BlobFileRepository;
-import org.example.sectoriadb.catalog.ChunkRepository;
-import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.catalog.PoolRepository;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -18,11 +21,18 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /** put / get / update / delete and index consistency of every tree behind the three repositories. */
 class MetaStoreRepositoriesTest {
@@ -86,8 +96,8 @@ class MetaStoreRepositoriesTest {
                 target = "auto-" + pool.getId();
                 if (!blobs.existsById(target)) blob(target, pool.getId(), BlobKind.CUCKOO);
             }
-            List<org.example.sectoriadb.catalog.PlacedChunk> placed = new java.util.ArrayList<>();
-            for (long k : chunkKeys) placed.add(new org.example.sectoriadb.catalog.PlacedChunk(k, target, 4096, (int) (k * 31), false));
+            List<PlacedChunk> placed = new ArrayList<>();
+            for (long k : chunkKeys) placed.add(new PlacedChunk(k, target, 4096, (int) (k * 31), false));
             m.setStagedChunks(placed);
         }
         m.setChunkSize(4096);
@@ -214,9 +224,9 @@ class MetaStoreRepositoriesTest {
         m.setContentEncoding("gzip");
         m.setContentLanguage("de");
         m.setCrc32c("AAAAAA==");
-        m.setChecksumAlgorithm(org.example.sectoriadb.checksum.ChecksumAlgorithm.SHA256);
+        m.setChecksumAlgorithm(ChecksumAlgorithm.SHA256);
         m.setChecksumValue("abc");
-        m.setChecksumType(org.example.sectoriadb.checksum.ChecksumType.FULL_OBJECT);
+        m.setChecksumType(ChecksumType.FULL_OBJECT);
         manifests.commitObject(m);
 
         ManifestEntity r = manifests.findCurrent("bkt", "dir/k").orElseThrow();
@@ -229,7 +239,7 @@ class MetaStoreRepositoriesTest {
         assertEquals("gzip", r.getContentEncoding());
         assertEquals("de", r.getContentLanguage());
         assertEquals("AAAAAA==", r.getCrc32c());
-        assertEquals(org.example.sectoriadb.checksum.ChecksumAlgorithm.SHA256, r.getChecksumAlgorithm());
+        assertEquals(ChecksumAlgorithm.SHA256, r.getChecksumAlgorithm());
         assertEquals("abc", r.getChecksumValue());
         assertEquals(m.getEtag(), r.getEtag());
         assertEquals(Instant.parse("2026-02-03T04:05:06Z"), r.getCreatedAt());
@@ -252,7 +262,7 @@ class MetaStoreRepositoriesTest {
         assertTrue(value.length < 8 * keys.length + 1000, "encoded size " + value.length);
         assertArrayEquals(keys, ManifestCodec.decode(value).chunkKeyArray());
         assertEquals(0, ManifestCodec.decode(value, false).chunkKeyArray().length, "listings skip the key array");
-        assertThrows(IllegalStateException.class, () -> ManifestCodec.decode(java.util.Arrays.copyOf(value, value.length - 3)));
+        assertThrows(IllegalStateException.class, () -> ManifestCodec.decode(Arrays.copyOf(value, value.length - 3)));
     }
 
     @Test

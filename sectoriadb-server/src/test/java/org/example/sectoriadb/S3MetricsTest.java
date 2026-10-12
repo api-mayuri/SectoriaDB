@@ -3,6 +3,8 @@ package org.example.sectoriadb;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import org.example.sectoriadb.maintenance.gc.GarbageCollector;
+import org.example.sectoriadb.maintenance.gc.GcReports;
 import org.example.sectoriadb.security.CredentialService;
 import org.example.sectoriadb.storage.PoolService;
 import org.junit.jupiter.api.AfterAll;
@@ -30,10 +32,13 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * End to end: real S3 traffic (SigV4 enabled, random ports for the S3 and the management server), then the
@@ -71,7 +76,7 @@ class S3MetricsTest {
     @LocalServerPort int port;
     @LocalManagementPort int mgmtPort;
     @Autowired PoolService poolService;
-    @Autowired org.example.sectoriadb.maintenance.gc.GarbageCollector gc;
+    @Autowired GarbageCollector gc;
     @Autowired CredentialService credentials;
 
     final HttpClient http = HttpClient.newHttpClient();
@@ -214,7 +219,7 @@ class S3MetricsTest {
         }
         // every label NAME used by sectoriadb_* series is on the allow-list
         Matcher labelNames = Pattern.compile("^sectoriadb_[a-z0-9_]+\\{([^}]*)}", Pattern.MULTILINE).matcher(after);
-        java.util.Set<String> allowed = java.util.Set.of("application", "operation", "status_class", "code", "reason", "target",
+        Set<String> allowed = Set.of("application", "operation", "status_class", "code", "reason", "target",
                 "kind", "result", "dir", "le");
         while (labelNames.find()) {
             for (String pair : labelNames.group(1).split(",(?=[a-z_]+=\")")) {
@@ -288,7 +293,7 @@ class S3MetricsTest {
     void storageEngineAndStateMetricsAreExposed() throws Exception {
         System.gc();   // a GC pause histogram only exists after the first collection
         // a deleted small object stays ACTIVE in its file until the collector marks it, after the grace period: ignore it here
-        gc.run(org.example.sectoriadb.maintenance.gc.GcReports.Options.defaults().withGrace(0));
+        gc.run(GcReports.Options.defaults().withGrace(0));
         String text = scrape();
         for (int i = 0; i < 50 && !text.contains("jvm_gc_pause_seconds_bucket"); i++) {
             Thread.sleep(100);

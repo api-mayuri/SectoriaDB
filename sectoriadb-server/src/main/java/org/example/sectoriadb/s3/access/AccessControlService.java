@@ -3,21 +3,26 @@ package org.example.sectoriadb.s3.access;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.s3.http.UrlCodec;
+import org.example.sectoriadb.s3.xml.XmlSupport;
 import org.example.sectoriadb.storage.PoolService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.w3c.dom.Document;
+import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-import javax.xml.parsers.DocumentBuilder;
-import org.example.sectoriadb.s3.xml.XmlSupport;
 import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Enumeration;
+import java.util.Locale;
 import java.util.Set;
-import org.example.sectoriadb.s3.http.UrlCodec;
+import javax.xml.parsers.DocumentBuilder;
 
 /**
  * ACL and access control service for S3 buckets and objects.
@@ -78,7 +83,7 @@ public class AccessControlService {
             return null;
         }
         if (body != null && body.length > 0) {
-            return parseAclFromXml(new String(body, java.nio.charset.StandardCharsets.UTF_8));
+            return parseAclFromXml(new String(body, StandardCharsets.UTF_8));
         }
         return null;
     }
@@ -221,7 +226,7 @@ public class AccessControlService {
      * and authenticated-read (conservatively) are stored as "private"; an unknown name is rejected.
      */
     private String normalizeCannedAcl(String acl) {
-        String normalized = acl.trim().toLowerCase(java.util.Locale.ROOT);
+        String normalized = acl.trim().toLowerCase(Locale.ROOT);
         switch (normalized) {
             case "private", "public-read", "public-read-write":
                 return normalized;
@@ -246,25 +251,25 @@ public class AccessControlService {
     private String parseAclFromXml(String xmlBody) {
         try {
             DocumentBuilder db = XmlSupport.newSecureDocumentBuilder(false);
-            Document doc = db.parse(new ByteArrayInputStream(xmlBody.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            Document doc = db.parse(new ByteArrayInputStream(xmlBody.getBytes(StandardCharsets.UTF_8)));
 
             NodeList grants = doc.getElementsByTagName("Grant");
             boolean hasPublicRead = false;
             boolean hasPublicWrite = false;
 
             for (int i = 0; i < grants.getLength(); i++) {
-                org.w3c.dom.Node grantNode = grants.item(i);
+                Node grantNode = grants.item(i);
                 boolean isAllUsers = false;
                 String permission = null;
 
                 // Check if grant is for AllUsers
                 NodeList children = grantNode.getChildNodes();
                 for (int j = 0; j < children.getLength(); j++) {
-                    org.w3c.dom.Node child = children.item(j);
+                    Node child = children.item(j);
                     if ("Grantee".equals(child.getNodeName())) {
                         NodeList granteeChildren = child.getChildNodes();
                         for (int k = 0; k < granteeChildren.getLength(); k++) {
-                            org.w3c.dom.Node gc = granteeChildren.item(k);
+                            Node gc = granteeChildren.item(k);
                             if ("URI".equals(gc.getNodeName())) {
                                 String uri = gc.getTextContent();
                                 if (uri != null && "http://acs.amazonaws.com/groups/global/AllUsers".equals(uri.trim())) {
@@ -294,7 +299,7 @@ public class AccessControlService {
             return "private";   // a valid document without public grants removes public access
         } catch (Exception e) {
             log.debug("Failed to parse ACL from XML: {}", e.getMessage());
-            throw new S3Exception(org.springframework.http.HttpStatus.BAD_REQUEST, "MalformedACLError",
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedACLError",
                     "The XML you provided was not well-formed or did not validate against our published schema");
         }
     }
@@ -308,7 +313,7 @@ public class AccessControlService {
         if (request.getHeader("x-amz-copy-source") != null) return true;
         String acl = request.getHeader("x-amz-acl");
         if (acl != null && !acl.isBlank() && !"private".equalsIgnoreCase(acl.trim())) return true;
-        for (java.util.Enumeration<String> names = request.getHeaderNames(); names != null && names.hasMoreElements(); ) {
+        for (Enumeration<String> names = request.getHeaderNames(); names != null && names.hasMoreElements(); ) {
             if (names.nextElement().regionMatches(true, 0, "x-amz-grant-", 0, "x-amz-grant-".length())) return true;
         }
         return false;

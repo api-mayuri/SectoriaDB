@@ -1,11 +1,12 @@
 package org.example.sectoriadb;
 
 import org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition;
-import org.example.sectoriadb.s3.http.LimitedInputStream;
-import org.example.sectoriadb.s3.http.MinRateInputStream;
-import org.example.sectoriadb.s3.error.S3Exception;
 import org.example.sectoriadb.s3.auth.AwsChunkedInputStream;
 import org.example.sectoriadb.s3.error.PayloadVerificationException;
+import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.s3.http.LimitedInputStream;
+import org.example.sectoriadb.s3.http.MinRateInputStream;
+import org.example.sectoriadb.s3.http.UrlCodec;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;
@@ -14,8 +15,10 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicLong;
 
-import static org.junit.jupiter.api.Assertions.*;
-import org.example.sectoriadb.s3.http.UrlCodec;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Unit tests of the request-body guards (no Spring context). */
 class StreamGuardsTest {

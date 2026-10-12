@@ -1,30 +1,40 @@
 package org.example.sectoriadb.s3.api;
 
 import jakarta.servlet.http.HttpServletRequest;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.s3.access.AccessControlService;
+import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.s3.http.HttpDates;
+import org.example.sectoriadb.s3.http.S3Request;
+import org.example.sectoriadb.s3.http.UrlCodec;
 import org.example.sectoriadb.s3.xml.ListBucketResult;
+import org.example.sectoriadb.s3.xml.Owner;
 import org.example.sectoriadb.s3.xml.S3ObjectEntry;
+import org.example.sectoriadb.s3.xml.XmlSupport;
 import org.example.sectoriadb.storage.ObjectCatalog;
 import org.example.sectoriadb.storage.PoolService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.w3c.dom.Document;
 import org.w3c.dom.NodeList;
 
-import javax.xml.parsers.DocumentBuilder;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
-import org.example.sectoriadb.s3.error.S3Exception;
-import org.example.sectoriadb.s3.xml.XmlSupport;
-import org.example.sectoriadb.s3.http.HttpDates;
-import org.example.sectoriadb.s3.http.S3Request;
-import org.example.sectoriadb.s3.http.UrlCodec;
+import java.util.function.UnaryOperator;
+import javax.xml.parsers.DocumentBuilder;
 
 /**
  * S3 bucket-level operations:
@@ -86,7 +96,7 @@ public class S3BucketController {
     // ── DeleteBucket ──────────────────────────────────────────────────────────
 
     @DeleteMapping({"/{bucket}", "/{bucket}/"})
-    public ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) throws java.io.IOException {
+    public ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) throws IOException {
         // DELETE /bucket?tagging|lifecycle|cors|... that no sub-resource handler claimed must NOT delete the bucket
         S3Request.requireOnlyQueryParams(request, "x-id");
         lookup.requireBucket(bucket);
@@ -280,7 +290,7 @@ public class S3BucketController {
         // Build response
         ListBucketResult result = new ListBucketResult();
         final boolean enc = urlEncode;
-        java.util.function.UnaryOperator<String> e = v -> enc ? UrlCodec.urlEncodeKey(v) : v;
+        UnaryOperator<String> e = v -> enc ? UrlCodec.urlEncodeKey(v) : v;
         result.setName(bucket);
         result.setPrefix(e.apply(prefix));
         if (enc) result.setEncodingType("url");
@@ -298,7 +308,7 @@ public class S3BucketController {
                             o.etag() != null ? o.etag() : "\"\"",
                             o.size());
                     // V1 always lists the owner, V2 only with fetch-owner=true
-                    if (listType == 1 || fetchOwner) entry.setOwner(new org.example.sectoriadb.s3.xml.Owner("sectoriadb", "sectoriadb"));
+                    if (listType == 1 || fetchOwner) entry.setOwner(new Owner("sectoriadb", "sectoriadb"));
                     return entry;
                 })
                 .toList();

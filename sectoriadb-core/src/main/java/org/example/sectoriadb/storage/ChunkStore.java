@@ -1,22 +1,22 @@
 package org.example.sectoriadb.storage;
 
-import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ChunkEntry;
+import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.PlacedChunk;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.UploadHold;
-import org.example.sectoriadb.engine.placement.RendezvousPlacement;
-import org.example.sectoriadb.engine.placement.RendezvousPlacement.Candidate;
-import org.example.sectoriadb.catalog.ChunkRepository;
-import org.example.sectoriadb.engine.error.ChunkCorruptedException;
+import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
-import org.example.sectoriadb.engine.io.PositionalIo;
+import org.example.sectoriadb.engine.error.ChunkCorruptedException;
 import org.example.sectoriadb.engine.error.KeyCollisionException;
 import org.example.sectoriadb.engine.error.TableFullException;
 import org.example.sectoriadb.engine.hash.BytesHasher;
 import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
+import org.example.sectoriadb.engine.io.PositionalIo;
+import org.example.sectoriadb.engine.placement.RendezvousPlacement;
+import org.example.sectoriadb.engine.placement.RendezvousPlacement.Candidate;
+import org.example.sectoriadb.metrics.StorageMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -31,9 +31,11 @@ import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.CRC32C;
 
 /**
@@ -105,11 +107,11 @@ public class ChunkStore {
         }
 
         private final int capacity;
-        private final java.util.LinkedHashMap<Loc, String> map;
+        private final LinkedHashMap<Loc, String> map;
 
         LocationCache(int capacity) {
             this.capacity = Math.max(0, capacity);
-            this.map = new java.util.LinkedHashMap<>(16, 0.75f, true) {
+            this.map = new LinkedHashMap<>(16, 0.75f, true) {
                 @Override
                 protected boolean removeEldestEntry(Map.Entry<Loc, String> eldest) {
                     return size() > LocationCache.this.capacity;
@@ -301,7 +303,7 @@ public class ChunkStore {
      * writes, so this waits for the resize (which then moves the whole blob, or gives up) and heals the replacement.
      */
     private Verdict heal(String blobId, long key, byte[] data) throws IOException {
-        long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
         String target = blobId;
         while (true) {
             target = blobGate.resolveRedirect(target);
@@ -410,7 +412,7 @@ public class ChunkStore {
      * resident has no pending writes (a table with unforced writes is never evicted).
      */
     public void barrier(List<PlacedChunk> placed) throws IOException {
-        Set<String> blobIds = new java.util.LinkedHashSet<>();
+        Set<String> blobIds = new LinkedHashSet<>();
         for (PlacedChunk p : placed) blobIds.add(blobGate.resolveRedirect(p.blobId()));
         for (String id : blobIds) {
             try (ResidentHandle<CuckooHashTable> h = cache.acquireResident(id)) {

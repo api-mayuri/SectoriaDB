@@ -5,12 +5,16 @@ import org.example.sectoriadb.engine.placement.RendezvousPlacement.Candidate;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.SplittableRandom;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RendezvousPlacementTest {
 
@@ -108,7 +112,7 @@ class RendezvousPlacementTest {
             assertNotEquals("blob-1", RendezvousPlacement.best(key, cs).id());
             // the order is a pure function of the key and the candidates, in whatever order they are given
             List<Candidate> shuffled = new ArrayList<>(cs);
-            java.util.Collections.reverse(shuffled);
+            Collections.reverse(shuffled);
             assertEquals(ranked, RendezvousPlacement.rank(key, shuffled));
             // dropping the top choice (it refused the chunk) leaves the rest in the same relative order
             List<Candidate> rest = new ArrayList<>(cs);

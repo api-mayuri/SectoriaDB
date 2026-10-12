@@ -1,7 +1,10 @@
 package org.example.sectoriadb.s3.http;
 
 import jakarta.servlet.http.HttpServletRequest;
+import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.s3.error.S3Exception;
+
+import java.util.Set;
 
 /** Parsing and validation of the parts of an S3 request that every handler needs: the key, query parameters, preconditions. */
 public final class S3Request {
@@ -16,17 +19,17 @@ public final class S3Request {
      * not fall through to ListObjects / GetObject (the client would get a listing or the object's bytes as the answer
      * to, say, {@code ?object-lock} or {@code ?retention}).
      */
-    private static final java.util.Set<String> UNSUPPORTED_BUCKET_SUBRESOURCES = java.util.Set.of(
+    private static final Set<String> UNSUPPORTED_BUCKET_SUBRESOURCES = Set.of(
             "object-lock", "ownershipControls", "website", "logging", "notification", "policyStatus", "accelerate",
             "analytics", "inventory", "metrics", "requestPayment", "replication", "intelligent-tiering", "metadataConfiguration");
-    private static final java.util.Set<String> UNSUPPORTED_OBJECT_SUBRESOURCES = java.util.Set.of(
+    private static final Set<String> UNSUPPORTED_OBJECT_SUBRESOURCES = Set.of(
             "attributes", "retention", "legal-hold", "torrent", "select", "restore");
 
-    public static void rejectUnsupportedBucketSubresource(jakarta.servlet.http.HttpServletRequest request) {
+    public static void rejectUnsupportedBucketSubresource(HttpServletRequest request) {
         rejectIfPresent(request, UNSUPPORTED_BUCKET_SUBRESOURCES);
     }
 
-    public static void rejectUnsupportedObjectSubresource(jakarta.servlet.http.HttpServletRequest request) {
+    public static void rejectUnsupportedObjectSubresource(HttpServletRequest request) {
         rejectIfPresent(request, UNSUPPORTED_OBJECT_SUBRESOURCES);
     }
 
@@ -37,7 +40,7 @@ public final class S3Request {
      * {@code allowed} (for example {@code x-id}, which the AWS SDKs for JavaScript and Go add to every request) pass, and so do the SigV4 query
      * parameters of presigned URLs ({@code X-Amz-*}).
      */
-    public static void requireOnlyQueryParams(jakarta.servlet.http.HttpServletRequest request, String... allowed) {
+    public static void requireOnlyQueryParams(HttpServletRequest request, String... allowed) {
         String q = request.getQueryString();
         if (q == null || q.isBlank()) return;
         for (String pair : q.split("&")) {
@@ -58,7 +61,7 @@ public final class S3Request {
         }
     }
 
-    private static void rejectIfPresent(jakarta.servlet.http.HttpServletRequest request, java.util.Set<String> names) {
+    private static void rejectIfPresent(HttpServletRequest request, Set<String> names) {
         String q = request.getQueryString();
         if (q == null || q.isEmpty()) return;
         for (String name : request.getParameterMap().keySet()) {
@@ -73,12 +76,12 @@ public final class S3Request {
      * transaction: {@code If-None-Match: *} (create only) and {@code If-Match: <etag>} (replace that version only).
      * Other forms (lists of ETags, If-None-Match with an ETag) are not supported by S3 for writes either: 501.
      */
-    public static org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition writePrecondition(
+    public static ManifestRepository.CommitPrecondition writePrecondition(
             HttpServletRequest request) {
         String none = request.getHeader("If-None-Match");
         String match = request.getHeader("If-Match");
         if (none == null && match == null) {
-            return org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition.NONE;
+            return ManifestRepository.CommitPrecondition.NONE;
         }
         if (none != null && !"*".equals(none.trim())) {
             throw S3Exception.notImplemented("If-None-Match on a write supports only the value '*'");
@@ -86,7 +89,7 @@ public final class S3Request {
         if (match != null && (match.contains(",") || match.isBlank())) {
             throw S3Exception.notImplemented("If-Match on a write supports a single ETag");
         }
-        return new org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition(none != null, match);
+        return new ManifestRepository.CommitPrecondition(none != null, match);
     }
 
     /** CopyObject's {@code x-amz-copy-source-if-*} conditions are not evaluated; refusing beats silently ignoring them. */

@@ -1,13 +1,14 @@
 package org.example.sectoriadb.storage;
 
 import jakarta.annotation.PreDestroy;
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.example.sectoriadb.engine.metrics.EngineListener;
 import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.metrics.StorageMetricsEngineListener;
-import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.BlobKind;
-import org.example.sectoriadb.engine.blob.SmallObjectBlob;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -45,7 +46,7 @@ public class SmallBlobCache {
                     + " blob, not a small-object blob");
         }
         return cache.acquire(entity.getId(), id -> {
-            org.slf4j.LoggerFactory.getLogger(SmallBlobCache.class).info("Opening small-object blob: blobId={} path={}",
+            LoggerFactory.getLogger(SmallBlobCache.class).info("Opening small-object blob: blobId={} path={}",
                     id, entity.getFilePath());
             return SmallObjectBlob.open(id, Path.of(entity.getFilePath()), props.isFsync(),
                     props.getSmallObject().getMaxFileBytes(),

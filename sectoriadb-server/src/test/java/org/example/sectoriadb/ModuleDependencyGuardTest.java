@@ -6,8 +6,16 @@ import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
-import static org.example.sectoriadb.engine.SourceGuard.*;
+import static org.example.sectoriadb.engine.SourceGuard.BASE;
+import static org.example.sectoriadb.engine.SourceGuard.Import;
+import static org.example.sectoriadb.engine.SourceGuard.cycles;
+import static org.example.sectoriadb.engine.SourceGuard.describe;
+import static org.example.sectoriadb.engine.SourceGuard.importing;
+import static org.example.sectoriadb.engine.SourceGuard.inPackage;
+import static org.example.sectoriadb.engine.SourceGuard.mainImports;
+import static org.example.sectoriadb.engine.SourceGuard.packageGraph;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -48,7 +56,7 @@ class ModuleDependencyGuardTest {
 
     private Set<String> s3Packages() {
         return imports.stream().map(Import::pkg).filter(p -> p.startsWith(S3 + "."))
-                .map(p -> p.substring(S3.length() + 1)).collect(java.util.stream.Collectors.toSet());
+                .map(p -> p.substring(S3.length() + 1)).collect(Collectors.toSet());
     }
 
     @Test

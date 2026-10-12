@@ -1,9 +1,5 @@
 package org.example.sectoriadb.catalog.metastore;
 
-import org.example.sectoriadb.metastore.Cursor;
-import org.example.sectoriadb.metastore.Keys;
-import org.example.sectoriadb.metastore.MetaStore;
-import org.example.sectoriadb.metastore.ReadTxn;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.MultipartPart;
@@ -11,11 +7,16 @@ import org.example.sectoriadb.catalog.MultipartUpload;
 import org.example.sectoriadb.catalog.PartSegment;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.StorageKind;
+import org.example.sectoriadb.metastore.Cursor;
+import org.example.sectoriadb.metastore.Keys;
+import org.example.sectoriadb.metastore.MetaStore;
+import org.example.sectoriadb.metastore.ReadTxn;
 
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -181,7 +182,7 @@ public final class MetaInvariants {
                 assertTrue(rowManifests.add(p.manifestId()), "one row per hidden manifest");
             }
         }
-        assertEquals(hiddenParts.keySet().stream().filter(id -> !hiddenParts.get(id).isDeleted()).collect(java.util.stream.Collectors.toSet()),
+        assertEquals(hiddenParts.keySet().stream().filter(id -> !hiddenParts.get(id).isDeleted()).collect(Collectors.toSet()),
                 rowManifests, "every live hidden part manifest has its row");
     }
 }

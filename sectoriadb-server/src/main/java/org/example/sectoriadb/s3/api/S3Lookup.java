@@ -1,11 +1,14 @@
 package org.example.sectoriadb.s3.api;
 
 import org.example.sectoriadb.catalog.ManifestEntity;
-import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.storage.PoolService;
-import org.springframework.stereotype.Component;
+import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.storage.PoolService;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+
+import java.nio.charset.StandardCharsets;
 
 /**
  * Helper for S3 entity lookups with proper error handling.
@@ -81,7 +84,7 @@ public class S3Lookup {
     }
 
     private static S3Exception invalidBucketName(String message) {
-        return new S3Exception(org.springframework.http.HttpStatus.BAD_REQUEST, "InvalidBucketName", message);
+        return new S3Exception(HttpStatus.BAD_REQUEST, "InvalidBucketName", message);
     }
 
     /**
@@ -109,8 +112,8 @@ public class S3Lookup {
         if (key == null || key.isEmpty()) {
             throw S3Exception.invalidArgument("Object key cannot be empty");
         }
-        if (key.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 1024) {
-            throw new S3Exception(org.springframework.http.HttpStatus.BAD_REQUEST, "KeyTooLongError",
+        if (key.getBytes(StandardCharsets.UTF_8).length > 1024) {
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "KeyTooLongError",
                     "Your key is too long");
         }
     }
