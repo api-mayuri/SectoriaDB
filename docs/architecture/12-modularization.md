@@ -111,11 +111,11 @@ sectoriadb-server ──> sectoriadb-core ──> sectoriadb-engine
 
 | Класс до | Что стало | Строк было / стало |
 |---|---|---|
-| `FileStorageService` (5 задач) | `ObjectWriter` (шелл-`store`, `stageStream`, `commitObject`, `abortStaged`, повторная привязка чанков после расширения), `ObjectReader` (потоковое чтение и диапазоны с проверкой CRC, `restore`), `ObjectCatalog` (поиск, листинг, удаление); общего фасада нет, вызывающие получают нужные классы | 690 → 3 класса (~330, ~270, ~100) |
-| `HashTableCache` | остался кэш (владение, вытеснение, статистика заполнения); состояние «заморожен / заменён / затвор записи» вынесено в `BlobGate` | 257 → ~190 + ~70 |
-| `CuckooHashTable` | поиск пути вытеснений — `EvictionPlanner`, групповой `fsync` — `ForceBarrier` | 956 → ~730 + 144 + 78 |
-| `MetaStore` | выбор и кодирование мета-страниц — `MetaPage` | 750 → ~650 + 100 |
-| `S3MultipartController` | `S3MultipartController` (только HTTP), `MultipartUploadStore` (каталог `.multipart`, блокировки загрузок, состояние, части, листинг), `CompleteMultipartService` (автомат OPEN → COMPLETING → COMPLETED, сборка объекта), `CompleteRequestParser` и `ParsedParts`, `UploadMeta`, `MultipartCleanup`, `MultipartXml`, `LazySequenceInputStream` | 1210 → контроллер ~370 + 8 классов |
+| `FileStorageService` (5 задач) | `ObjectWriter` (шелл-`store`, `stageStream`, `commitObject`, `abortStaged`, повторная привязка чанков после расширения), `ObjectReader` (потоковое чтение и диапазоны с проверкой CRC, `restore`), `ObjectCatalog` (поиск, листинг, удаление); общего фасада нет, вызывающие получают нужные классы | 690 → 3 класса (359, 313, 70) |
+| `HashTableCache` | остался кэш (владение, вытеснение, статистика заполнения); состояние «заморожен / заменён / затвор записи» вынесено в `BlobGate` | 257 → 202 + 83 |
+| `CuckooHashTable` | поиск пути вытеснений — `EvictionPlanner`, групповой `fsync` — `ForceBarrier` | 956 → 732 + 142 + 78 |
+| `MetaStore` | выбор и кодирование мета-страниц — `MetaPage` | 750 → 649 + 100 |
+| `S3MultipartController` | `S3MultipartController` (только HTTP), `MultipartUploadStore` (каталог `.multipart`, блокировки загрузок, состояние, части, листинг), `CompleteMultipartService` (автомат OPEN → COMPLETING → COMPLETED, сборка объекта), `CompleteRequestParser` и `ParsedParts`, `UploadMeta`, `MultipartCleanup`, `MultipartXml`, `LazySequenceInputStream` | 1210 → контроллер 399 + 8 классов (по 38–359 строк) |
 | `S3Support` | `S3Request`, `UrlCodec`, `HttpDates`, `XmlSupport.escape`, `RequestIds.current` | — |
 
 Формат файлов `.multipart` остался прежним (`meta.properties`, `state.properties`, `etags.properties`,
@@ -128,12 +128,12 @@ sectoriadb-server ──> sectoriadb-core ──> sectoriadb-engine
 `StorageProperties`, поэтому имена свойств остались прежними.
 
 Общий код вместо дублей: один `Mix64` (splitmix64) вместо двух копий в `BlobLayout` и `RendezvousPlacement`; один
-`Crc32c` вместо шести ручных `new CRC32C()`; `CopySource` (разбор `x-amz-copy-source` был в двух контроллерах),
+`Crc32c` вместо ручных `new CRC32C()` в `BlobLayout`, `SmallBlobLayout` и `CuckooHashTable`; `CopySource` (разбор `x-amz-copy-source` был в двух контроллерах),
 `ByteRange` (диапазон GET и диапазон UploadPartCopy), `ObjectHeaders` (`Cache-Control`, `Content-Disposition`,
 `Content-Encoding`, `Content-Language` и `x-amz-meta-*` читались, записывались и копировались в пяти местах),
 `S3Exception.notImplemented`.
 
-Заголовки `x-amz-request-id` и `Server: SectoriaDB` больше не ставятся вручную в 40 местах: `x-amz-request-id` ставит
+Заголовки `x-amz-request-id` и `Server: SectoriaDB` больше не ставятся вручную в десятках мест контроллеров: `x-amz-request-id` ставит
 фильтр наблюдаемости (как и раньше), `Server` — новый `s3.http.S3CommonHeadersFilter`.
 
 ## 5. Что удалено
