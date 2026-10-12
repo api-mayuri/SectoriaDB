@@ -215,7 +215,9 @@ class S3HardeningTest {
         var a = client.request("PUT", "/hbkt", "acl", SigV4TestClient.sha256(acl), acl);
         assertEquals(400, a.statusCode(), a.body());
 
-        byte[] xml = new byte[3 * 1024 * 1024];
+        // just over the 2 MiB limit: the rest of the body stays under Tomcat's swallow size, so the server drains
+        // it and the client reliably reads the 400 instead of racing a closed connection
+        byte[] xml = new byte[2 * 1024 * 1024 + 64 * 1024];
         java.util.Arrays.fill(xml, (byte) ' ');
         var d = client.request("POST", "/hbkt", "delete", SigV4TestClient.sha256(xml), xml);
         assertEquals(400, d.statusCode(), d.body());
