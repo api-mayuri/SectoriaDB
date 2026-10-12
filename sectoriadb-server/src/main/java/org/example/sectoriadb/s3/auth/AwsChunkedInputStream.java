@@ -39,8 +39,14 @@ import java.util.Map;
  */
 public class AwsChunkedInputStream extends InputStream {
 
-    private static final int MAX_CHUNK_SIZE = 16 * 1024 * 1024;  // 16 MiB limit
-    private static final int MAX_LINE = 8192;
+    /** Largest chunk accepted (AWS SDKs use 64 KiB to 8 MiB); the buffer grows as bytes arrive, never up front. */
+    private static final int MAX_CHUNK_SIZE = 8 * 1024 * 1024;
+    /** A chunk header line ("hex;chunk-signature=64hex") is about 100 bytes. */
+    private static final int MAX_HEADER_LINE = 1024;
+    private static final int MAX_TRAILER_LINE = 8192;
+    private static final int MAX_TRAILERS = 16;
+    private static final int MAX_TRAILER_BYTES = 16 * 1024;
+    private static final int READ_STEP = 64 * 1024;
     private static final String EMPTY_SHA256 = SigV4Utils.sha256HexEmpty();
 
     /** Receives the parsed trailer headers (lower-case names, signature excluded) after the final chunk. */
@@ -56,16 +62,16 @@ public class AwsChunkedInputStream extends InputStream {
     private byte[] currentChunk;
     private int pos;
     private boolean done;
-
-    public AwsChunkedInputStream(InputStream delegate) {
-        this(delegate, null);
-    }
-
-    public AwsChunkedInputStream(InputStream delegate, ChunkSigningContext signing) {
-        this(delegate, signing, null);
-    }
+    private final long declaredDecodedLength;   // x-amz-decoded-content-length, -1 when not sent
+    private long decodedTotal;
 
     public AwsChunkedInputStream(InputStream delegate, ChunkSigningContext signing, TrailerListener trailerListener) {
+        this(delegate, signing, trailerListener, -1);
+    }
+
+    public AwsChunkedInputStream(InputStream delegate, ChunkSigningContext signing, TrailerListener trailerListener,
+                                 long declaredDecodedLength) {
+        this.declaredDecodedLength = declaredDecodedLength;
         this.delegate = delegate;
         this.signing = signing;
         this.trailerListener = trailerListener;
@@ -95,7 +101,7 @@ public class AwsChunkedInputStream extends InputStream {
     }
 
     private boolean readNextChunk() throws IOException {
-        String header = readLine();
+        String header = readLine(MAX_HEADER_LINE);
         if (header == null) {
             throw PayloadVerificationException.malformedChunks("unexpected end of stream before the final chunk");
         }
@@ -121,18 +127,25 @@ public class AwsChunkedInputStream extends InputStream {
             throw PayloadVerificationException.malformedChunks("negative chunk size");
         }
         if (chunkSize > MAX_CHUNK_SIZE) {
-            throw new IOException("Chunk size exceeds maximum: " + chunkSize);
+            throw PayloadVerificationException.malformedChunks("chunk size exceeds the maximum of " + MAX_CHUNK_SIZE);
+        }
+        if (declaredDecodedLength >= 0 && decodedTotal + chunkSize > declaredDecodedLength) {
+            throw PayloadVerificationException.malformedChunks(
+                    "the body is longer than x-amz-decoded-content-length");
         }
 
-        byte[] data = new byte[chunkSize];
+        // The size comes from the (still unverified) header: never allocate it before the bytes have arrived
+        byte[] data = new byte[Math.min(chunkSize, READ_STEP)];
         int totalRead = 0;
         while (totalRead < chunkSize) {
-            int read = delegate.read(data, totalRead, chunkSize - totalRead);
+            if (totalRead == data.length) data = java.util.Arrays.copyOf(data, Math.min(chunkSize, data.length * 2));
+            int read = delegate.read(data, totalRead, data.length - totalRead);
             if (read < 0) {
                 throw PayloadVerificationException.malformedChunks("unexpected end of stream inside a chunk");
             }
             totalRead += read;
         }
+        decodedTotal += chunkSize;
 
         if (signing != null) {
             verifyChunkSignature(chunkSignature, data);
@@ -140,6 +153,10 @@ public class AwsChunkedInputStream extends InputStream {
 
         if (chunkSize == 0) {
             // Final chunk: trailing headers up to an empty line
+            if (declaredDecodedLength >= 0 && decodedTotal != declaredDecodedLength) {
+                throw PayloadVerificationException.malformedChunks(
+                        "the body is shorter than x-amz-decoded-content-length");
+            }
             readTrailers();
             done = true;
             currentChunk = null;
@@ -147,7 +164,7 @@ public class AwsChunkedInputStream extends InputStream {
         }
 
         // Consume the CRLF that follows the data
-        String after = readLine();
+        String after = readLine(MAX_HEADER_LINE);
         if (after == null || !after.isEmpty()) {
             throw PayloadVerificationException.malformedChunks("missing CRLF after chunk data");
         }
@@ -175,9 +192,15 @@ public class AwsChunkedInputStream extends InputStream {
     private void readTrailers() throws IOException {
         Map<String, String> trailers = new LinkedHashMap<>();
         String trailerSignature = null;
+        int count = 0;
+        int bytes = 0;
         while (true) {
-            String line = readLine();
+            String line = readLine(MAX_TRAILER_LINE);
             if (line == null || line.isEmpty()) break;
+            bytes += line.length();
+            if (++count > MAX_TRAILERS || bytes > MAX_TRAILER_BYTES) {
+                throw PayloadVerificationException.malformedChunks("too many or too large trailers");
+            }
             int colon = line.indexOf(':');
             if (colon <= 0) continue;
             String name = line.substring(0, colon).trim().toLowerCase(java.util.Locale.ROOT);
@@ -205,13 +228,13 @@ public class AwsChunkedInputStream extends InputStream {
     }
 
     /** Reads up to CRLF/LF; returns null at end of stream with nothing read. */
-    private String readLine() throws IOException {
+    private String readLine(int maxLine) throws IOException {
         StringBuilder sb = new StringBuilder();
         int c;
         while ((c = delegate.read()) != -1) {
             if (c == '\n') break;
             if (c != '\r') sb.append((char) c);
-            if (sb.length() > MAX_LINE) {
+            if (sb.length() > maxLine) {
                 throw PayloadVerificationException.malformedChunks("header line too long");
             }
         }

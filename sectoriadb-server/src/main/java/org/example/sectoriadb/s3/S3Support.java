@@ -1,18 +1,13 @@
 package org.example.sectoriadb.s3;
 
 import jakarta.servlet.http.HttpServletRequest;
-import org.example.sectoriadb.s3.auth.AwsChunkedInputStream;
-import org.example.sectoriadb.s3.auth.ChunkSigningContext;
 
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
-import java.util.UUID;
 
 /** Small static helpers shared by all S3 controllers. */
 public final class S3Support {
@@ -22,6 +17,9 @@ public final class S3Support {
                     .withZone(ZoneOffset.UTC);
     private static final DateTimeFormatter ISO_MILLIS =
             DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'").withZone(ZoneOffset.UTC);
+
+    /** Request attribute set by SigV4Filter when the request carries a verified identity (or auth is off / open setup). */
+    public static final String AUTHENTICATED_ATTRIBUTE = "sectoriadb.s3.authenticated";
 
     private S3Support() {}
 
@@ -56,26 +54,6 @@ public final class S3Support {
         rejectIfPresent(request, UNSUPPORTED_OBJECT_SUBRESOURCES);
     }
 
-    /** S3 limit for one PutObject / UploadPart request: 5 GiB. */
-    public static final long MAX_SINGLE_UPLOAD_BYTES = 5L * 1024 * 1024 * 1024;
-
-    /**
-     * Refuses an upload whose declared size is over the S3 limit before a single body byte is read (the body is
-     * spooled to a temp file first, so an absurd Content-Length would otherwise fill the temp volume and hold a
-     * worker thread until the connection times out).
-     */
-    public static void requireDeclaredSizeWithinLimit(jakarta.servlet.http.HttpServletRequest request) {
-        long declared = request.getContentLengthLong();
-        String decoded = request.getHeader("x-amz-decoded-content-length");   // aws-chunked: payload without framing
-        if (decoded != null) {
-            try { declared = Long.parseLong(decoded.trim()); } catch (NumberFormatException ignored) { /* checked later */ }
-        }
-        if (declared > MAX_SINGLE_UPLOAD_BYTES) {
-            throw new S3Exception(org.springframework.http.HttpStatus.BAD_REQUEST, "EntityTooLarge",
-                    "Your proposed upload exceeds the maximum allowed size (5 GiB for one request; use multipart upload)");
-        }
-    }
-
     /**
      * Writes and deletes must not carry query parameters that nobody handles. A request such as
      * {@code DELETE /bucket?tagging} or {@code PUT /bucket/key?retention} that no sub-resource handler claims would
@@ -89,7 +67,12 @@ public final class S3Support {
         for (String pair : q.split("&")) {
             if (pair.isEmpty()) continue;
             int eq = pair.indexOf('=');
-            String name = java.net.URLDecoder.decode(eq < 0 ? pair : pair.substring(0, eq), java.nio.charset.StandardCharsets.UTF_8);
+            String name;
+            try {
+                name = decodeQueryComponent(eq < 0 ? pair : pair.substring(0, eq));
+            } catch (IllegalArgumentException e) {
+                throw S3Exception.invalidArgument("The query string is malformed");
+            }
             // presigned URLs carry the SigV4 parameters (X-Amz-Algorithm, X-Amz-Credential, X-Amz-Signature, ...) in the query
             boolean ok = name.regionMatches(true, 0, "X-Amz-", 0, 6);
             for (String a : allowed) if (a.equals(name)) { ok = true; break; }
@@ -107,6 +90,40 @@ public final class S3Support {
             if (names.contains(name)) {
                 throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
                         "A header or query parameter you provided implies functionality that is not implemented");
+            }
+        }
+    }
+
+    /**
+     * Conditional write headers of PutObject / CompleteMultipartUpload as a precondition checked inside the commit
+     * transaction: {@code If-None-Match: *} (create only) and {@code If-Match: <etag>} (replace that version only).
+     * Other forms (lists of ETags, If-None-Match with an ETag) are not supported by S3 for writes either: 501.
+     */
+    public static org.example.sectoriadb.repository.ManifestRepository.CommitPrecondition writePrecondition(
+            HttpServletRequest request) {
+        String none = request.getHeader("If-None-Match");
+        String match = request.getHeader("If-Match");
+        if (none == null && match == null) {
+            return org.example.sectoriadb.repository.ManifestRepository.CommitPrecondition.NONE;
+        }
+        if (none != null && !"*".equals(none.trim())) {
+            throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
+                    "If-None-Match on a write supports only the value '*'");
+        }
+        if (match != null && (match.contains(",") || match.isBlank())) {
+            throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
+                    "If-Match on a write supports a single ETag");
+        }
+        return new org.example.sectoriadb.repository.ManifestRepository.CommitPrecondition(none != null, match);
+    }
+
+    /** CopyObject's {@code x-amz-copy-source-if-*} conditions are not evaluated; refusing beats silently ignoring them. */
+    public static void rejectCopySourceConditions(HttpServletRequest request) {
+        for (String h : new String[]{"x-amz-copy-source-if-match", "x-amz-copy-source-if-none-match",
+                "x-amz-copy-source-if-modified-since", "x-amz-copy-source-if-unmodified-since"}) {
+            if (request.getHeader(h) != null) {
+                throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
+                        "A header you provided implies functionality that is not implemented: " + h);
             }
         }
     }
@@ -157,38 +174,53 @@ public final class S3Support {
                 out.write(Integer.parseInt(s.substring(i + 1, i + 3), 16));
                 i += 2;
             } else {
-                byte[] b = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
-                out.write(b, 0, b.length);
+                if (c <= 0xFF) {
+                    out.write(c);   // the container hands raw request-line bytes over as ISO-8859-1 chars: keep the byte
+                } else {
+                    byte[] b = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
+                    out.write(b, 0, b.length);
+                }
             }
         }
         return out.toString(StandardCharsets.UTF_8);
     }
 
+    /**
+     * Decodes one query-string name or value: '+' is a space, %XX is a byte, the bytes must be valid UTF-8.
+     * A lone '%', bad hex or invalid UTF-8 is an {@link IllegalArgumentException} (unlike URLDecoder this is meant to be caught
+     * and answered 400: it must never surface as a 500).
+     */
+    public static String decodeQueryComponent(String s) {
+        if (s.indexOf('%') < 0 && s.indexOf('+') < 0) return s;
+        ByteArrayOutputStream out = new ByteArrayOutputStream(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c == '%') {
+                if (i + 2 >= s.length() || !isHex(s.charAt(i + 1)) || !isHex(s.charAt(i + 2))) {
+                    throw new IllegalArgumentException("malformed percent-encoding");
+                }
+                out.write(Integer.parseInt(s.substring(i + 1, i + 3), 16));
+                i += 2;
+            } else if (c == '+') {
+                out.write(' ');
+            } else if (c <= 0xFF) {
+                out.write(c);
+            } else {
+                byte[] b = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
+                out.write(b, 0, b.length);
+            }
+        }
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(out.toByteArray())).toString();
+        } catch (java.nio.charset.CharacterCodingException e) {
+            throw new IllegalArgumentException("invalid UTF-8 in query string", e);
+        }
+    }
+
     private static boolean isHex(char c) {
         return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
-    }
-
-    /**
-     * Returns the request body, transparently stripping aws-chunked framing
-     * (Content-Encoding: aws-chunked, or x-amz-content-sha256: STREAMING-*).
-     */
-    public static InputStream openBody(HttpServletRequest request) throws IOException {
-        return openBody(request, null);
-    }
-
-    /**
-     * As {@link #openBody(HttpServletRequest)}; when the body is aws-chunked, a trailing checksum is handed to
-     * {@code declared} (and checked there) at the end of the stream.
-     */
-    public static InputStream openBody(HttpServletRequest request, S3Checksums.Declared declared) throws IOException {
-        InputStream raw = request.getInputStream();
-        String encoding = request.getHeader("Content-Encoding");
-        String sha = request.getHeader("x-amz-content-sha256");
-        boolean chunked = (encoding != null && encoding.toLowerCase(Locale.ROOT).contains("aws-chunked"))
-                || (sha != null && sha.startsWith("STREAMING-"));
-        if (!chunked) return raw;
-        Object ctx = request.getAttribute(ChunkSigningContext.REQUEST_ATTRIBUTE);
-        return new AwsChunkedInputStream(raw, ctx instanceof ChunkSigningContext c ? c : null,
-                declared != null ? declared::acceptTrailers : null);
     }
 }
