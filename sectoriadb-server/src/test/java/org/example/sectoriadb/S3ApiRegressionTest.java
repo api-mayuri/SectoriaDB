@@ -423,9 +423,9 @@ class S3ApiRegressionTest {
         assertEquals("InvalidBucketName", code(bad));
     }
 
-    /** warp "multipart" reads parts with GET ?partNumber=N; the whole object came back and was mistaken for the part. */
+    /** warp "multipart" reads parts with GET ?partNumber=N; the whole object came back and was mistaken for the part (stage 13: served for real). */
     @Test
-    void getWithPartNumberDoesNotReturnTheWholeMultipartObject() throws Exception {
+    void getWithPartNumberReturnsThatPartOfAMultipartObject() throws Exception {
         mkBucket("partnum");
         put("partnum", "plain", "hello".getBytes());
         assertEquals(200, send(HttpRequest.newBuilder(uri("/partnum/plain?partNumber=1")).GET()).statusCode());
@@ -442,8 +442,31 @@ class S3ApiRegressionTest {
         String body = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>" + r1.headers().firstValue("ETag").get()
                 + "</ETag></Part><Part><PartNumber>2</PartNumber><ETag>" + r2.headers().firstValue("ETag").get() + "</ETag></Part></CompleteMultipartUpload>";
         assertEquals(200, send(HttpRequest.newBuilder(uri("/partnum/mp?uploadId=" + uid)).POST(BodyPublishers.ofString(body))).statusCode());
-        assertEquals(501, send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=1")).GET()).statusCode());
+        var part1 = send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=1")).GET());
+        assertEquals(206, part1.statusCode());
+        assertArrayEquals(p1, part1.body());
+        assertEquals("bytes 0-" + (p1.length - 1) + "/" + (p1.length + p2.length), part1.headers().firstValue("Content-Range").get());
+        assertEquals("2", part1.headers().firstValue("x-amz-mp-parts-count").get());
+        var part2 = send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=2")).GET());
+        assertEquals(206, part2.statusCode());
+        assertArrayEquals(p2, part2.body());
+        assertEquals("bytes " + p1.length + "-" + (p1.length + p2.length - 1) + "/" + (p1.length + p2.length),
+                part2.headers().firstValue("Content-Range").get());
+        var head2 = send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=2")).method("HEAD", BodyPublishers.noBody()));
+        assertEquals(206, head2.statusCode());
+        assertEquals("1000", head2.headers().firstValue("Content-Length").get());
+        assertEquals("2", head2.headers().firstValue("x-amz-mp-parts-count").get());
         assertEquals(416, send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=3")).GET()).statusCode());
+        assertEquals(400, send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=1")).header("Range", "bytes=0-9").GET()).statusCode(),
+                "partNumber and Range cannot be combined");
+        // a part of a multipart object is not the whole object, and the whole object is still the concatenation
+        var whole = get("partnum", "mp");
+        assertEquals(200, whole.statusCode());
+        assertArrayEquals(java.util.stream.Stream.of(p1, p2).reduce(new byte[0], (a, b) -> {
+            byte[] c = java.util.Arrays.copyOf(a, a.length + b.length);
+            System.arraycopy(b, 0, c, a.length, b.length);
+            return c;
+        }), whole.body());
         assertEquals(5 * 1024 * 1024 + 1000, get("partnum", "mp").body().length);
     }
 

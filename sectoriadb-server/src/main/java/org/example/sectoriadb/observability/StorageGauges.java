@@ -3,13 +3,12 @@ package org.example.sectoriadb.observability;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.metastore.MetaStore;
+import org.example.sectoriadb.catalog.CatalogInfo;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.BlobFileRepository;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
 import org.example.sectoriadb.storage.ChunkStore;
 import org.example.sectoriadb.storage.HashTableCache;
 import org.example.sectoriadb.maintenance.gc.SmallBlobCompactor;
@@ -52,7 +51,7 @@ public class StorageGauges {
     private final MeterRegistry registry;
     private final HashTableCache tables;
     private final SmallBlobCache smallBlobs;
-    private final MetaStoreProvider stores;
+    private final CatalogInfo catalog;
     private final ManifestRepository manifests;
     private final ChunkRepository chunks;
     private final BlobFileRepository blobs;
@@ -66,13 +65,13 @@ public class StorageGauges {
     private volatile boolean everComputed;
 
     public StorageGauges(MeterRegistry registry, HashTableCache tables, SmallBlobCache smallBlobs,
-                         MetaStoreProvider stores, ManifestRepository manifests, ChunkRepository chunks, BlobFileRepository blobs,
+                         CatalogInfo catalog, ManifestRepository manifests, ChunkRepository chunks, BlobFileRepository blobs,
                          ChunkStore chunkStore, SmallBlobCompactor compactor,
                          StorageProperties props, ObservabilityProperties obs) {
         this.registry = registry;
         this.tables = tables;
         this.smallBlobs = smallBlobs;
-        this.stores = stores;
+        this.catalog = catalog;
         this.manifests = manifests;
         this.chunks = chunks;
         this.blobs = blobs;
@@ -184,7 +183,7 @@ public class StorageGauges {
                 smallBlobCount++;
             }
         }
-        MetaStore.Stats ms = stores.get().stats();
+        CatalogInfo.FileStats ms = catalog.fileStats();
         ManifestRepository.BucketStats totals = manifests.totals();
         long gc = manifests.gcQueueSize();
         ChunkRepository.Stats cs = chunks.stats();

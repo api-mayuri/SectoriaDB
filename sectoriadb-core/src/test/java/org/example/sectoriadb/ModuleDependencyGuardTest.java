@@ -52,6 +52,11 @@ class ModuleDependencyGuardTest {
         assertNoImports(BASE + ".security", false, ".storage", ".maintenance", ".audit", ".catalog.metastore");
         // storage does not know the maintenance jobs that use it
         assertNoImports(BASE + ".storage", false, ".maintenance", ".catalog.metastore");
+        // the multipart use cases sit above the storage layer; the storage layer does not know them
+        List<Import> upward = importing(imports.stream().filter(i -> i.pkg().equals(BASE + ".storage")).toList(),
+                BASE + ".storage.multipart");
+        assertTrue(upward.isEmpty(), "storage must not depend on storage.multipart: " + describe(upward));
+        assertNoImports(BASE + ".storage.multipart", true, ".maintenance", ".catalog.metastore", ".config");
         // nothing of the application (server module) is visible from the core
         for (String pkg : List.of(CATALOG, BASE + ".storage", BASE + ".maintenance", BASE + ".audit", BASE + ".security")) {
             assertNoImports(pkg, false, ".s3", ".observability", ".shell", ".scheduler");

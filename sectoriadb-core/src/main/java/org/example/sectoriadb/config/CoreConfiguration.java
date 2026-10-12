@@ -5,12 +5,15 @@ import org.example.sectoriadb.audit.JsonOperationLogRepository;
 import org.example.sectoriadb.audit.OperationLogRepository;
 import org.example.sectoriadb.audit.OperationLogService;
 import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.CatalogInfo;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.GcRepository;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.MultipartRepository;
 import org.example.sectoriadb.catalog.PoolRepository;
+import org.example.sectoriadb.catalog.metastore.CatalogGuard;
 import org.example.sectoriadb.catalog.metastore.MetaStoreBlobFileRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreCatalogInfo;
 import org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreGcRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreHolder;
@@ -47,6 +50,9 @@ import org.springframework.context.annotation.Configuration;
  * The composition root of the core module: every core component is a plain Java class and is wired here, in one place.
  * Nothing below this class knows Spring; the only annotations the core uses are this one and
  * {@code @ConfigurationProperties} on {@link StorageProperties}.
+ *
+ * The repositories are wrapped by {@link CatalogGuard}, which turns the metastore's "unavailable" exception into the
+ * catalog's own {@code CatalogUnavailableException}.
  *
  * <p>Layers, from the bottom: the metadata store and the catalog repositories on top of it; the storage layer (caches,
  * blob registry, chunk store, object reader / writer / catalog); the maintenance jobs (garbage collector, small-blob
@@ -88,32 +94,37 @@ public class CoreConfiguration {
 
     @Bean
     public ManifestRepository manifestRepository(MetaStoreProvider stores) {
-        return new MetaStoreManifestRepository(stores);
+        return CatalogGuard.guard(ManifestRepository.class, new MetaStoreManifestRepository(stores));
     }
 
     @Bean
     public ChunkRepository chunkRepository(MetaStoreProvider stores) {
-        return new MetaStoreChunkRepository(stores);
+        return CatalogGuard.guard(ChunkRepository.class, new MetaStoreChunkRepository(stores));
     }
 
     @Bean
     public BlobFileRepository blobFileRepository(MetaStoreProvider stores) {
-        return new MetaStoreBlobFileRepository(stores);
+        return CatalogGuard.guard(BlobFileRepository.class, new MetaStoreBlobFileRepository(stores));
     }
 
     @Bean
     public PoolRepository poolRepository(MetaStoreProvider stores) {
-        return new MetaStorePoolRepository(stores);
+        return CatalogGuard.guard(PoolRepository.class, new MetaStorePoolRepository(stores));
+    }
+
+    @Bean
+    public CatalogInfo catalogInfo(MetaStoreProvider stores) {
+        return CatalogGuard.guard(CatalogInfo.class, new MetaStoreCatalogInfo(stores));
     }
 
     @Bean
     public MultipartRepository multipartRepository(MetaStoreProvider stores) {
-        return new MetaStoreMultipartRepository(stores);
+        return CatalogGuard.guard(MultipartRepository.class, new MetaStoreMultipartRepository(stores));
     }
 
     @Bean
     public GcRepository gcRepository(MetaStoreProvider stores) {
-        return new MetaStoreGcRepository(stores);
+        return CatalogGuard.guard(GcRepository.class, new MetaStoreGcRepository(stores));
     }
 
     // ── security and audit (JSON files next to the metastore) ──────────────────

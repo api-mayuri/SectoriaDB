@@ -95,7 +95,7 @@ class S3SigV4PayloadTest {
     }
 
     @Test
-    void multipartPartWithWrongPayloadHashIsRejectedAndLeavesNoFile() throws Exception {
+    void multipartPartWithWrongPayloadHashIsRejectedAndLeavesNoPart() throws Exception {
         String emptyHash = SigV4TestClient.sha256(new byte[0]);
         var init = client.request("POST", "/sigbkt/mp.bin", "uploads", emptyHash, null);
         assertEquals(200, init.statusCode(), init.body());
@@ -107,9 +107,11 @@ class S3SigV4PayloadTest {
         byte[] part = bytes("part body");
         var bad = client.request("PUT", "/sigbkt/mp.bin", q, SigV4TestClient.sha256(bytes("other")), part);
         assertEquals(400, bad.statusCode());
-        try (var files = java.nio.file.Files.list(tempRoot.resolve("data").resolve(".multipart").resolve(id))) {
-            assertEquals(java.util.List.of("meta.properties"),
-                    files.map(f -> f.getFileName().toString()).sorted().toList(), "no part or temp file may remain");
+        var listed = client.request("GET", "/sigbkt/mp.bin", "uploadId=" + id, SigV4TestClient.sha256(new byte[0]), null);
+        assertEquals(200, listed.statusCode(), listed.body());
+        assertFalse(listed.body().contains("<Part>"), "a rejected part must not appear: " + listed.body());
+        try (var files = java.nio.file.Files.list(tempRoot.resolve("data").resolve(".tmp"))) {
+            assertEquals(java.util.List.of(), files.map(f -> f.getFileName().toString()).toList(), "no temp file may remain");
         }
         var good = client.request("PUT", "/sigbkt/mp.bin", q, SigV4TestClient.sha256(part), part);
         assertEquals(200, good.statusCode(), good.body());

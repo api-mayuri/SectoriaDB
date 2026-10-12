@@ -8,13 +8,12 @@ import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Properties;
 import java.util.function.BiConsumer;
 
 /**
  * The four descriptive headers of an object (Cache-Control, Content-Disposition, Content-Encoding, Content-Language),
  * in one place: read from a request, stored in a manifest, written to a response, overridden by {@code response-*}
- * parameters, kept in the properties of a multipart upload. Also reads the user metadata ({@code x-amz-meta-*}).
+ * parameters. Also reads the user metadata ({@code x-amz-meta-*}).
  */
 public record ObjectHeaders(String cacheControl, String contentDisposition, String contentEncoding,
                             String contentLanguage) {
@@ -51,19 +50,6 @@ public record ObjectHeaders(String cacheControl, String contentDisposition, Stri
         if (contentDisposition != null) out.accept(S3Headers.CONTENT_DISPOSITION, contentDisposition);
         if (contentEncoding != null) out.accept(S3Headers.CONTENT_ENCODING, contentEncoding);
         if (contentLanguage != null) out.accept(S3Headers.CONTENT_LANGUAGE, contentLanguage);
-    }
-
-    /** Stores the headers that have a value in the properties of a multipart upload. */
-    public void storeIn(Properties props) {
-        if (cacheControl != null) props.setProperty("cacheControl", cacheControl);
-        if (contentDisposition != null) props.setProperty("contentDisposition", contentDisposition);
-        if (contentEncoding != null) props.setProperty("contentEncoding", contentEncoding);
-        if (contentLanguage != null) props.setProperty("contentLanguage", contentLanguage);
-    }
-
-    public static ObjectHeaders loadFrom(Properties props) {
-        return new ObjectHeaders(props.getProperty("cacheControl"), props.getProperty("contentDisposition"),
-                props.getProperty("contentEncoding"), props.getProperty("contentLanguage"));
     }
 
     /** The {@code x-amz-meta-*} request headers (names lower-cased), or null when there are none. */

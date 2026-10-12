@@ -73,14 +73,14 @@ class S3ExceptionHandlerTest {
     /** Doc 10, part B: the metadata store refuses writes after a failed commit (reads still work): 507 for a full disk, else 503 SlowDown. */
     @Test
     void aStoreThatIsRecoveringIsSlowDownAndAFullMetadataDiskIsInsufficientStorage() {
-        var full = new org.example.sectoriadb.metastore.MetaStoreUnavailableException("read-only",
+        var full = new org.example.sectoriadb.catalog.CatalogUnavailableException("read-only",
                 new java.io.UncheckedIOException(new IOException("No space left on device")));
-        var r507 = handler.handleMetaStoreUnavailable(full);
+        var r507 = handler.handleCatalogUnavailable(full);
         assertEquals(507, r507.getStatusCode().value());
         assertEquals("InsufficientStorage", r507.getBody().getCode());
-        var other = new org.example.sectoriadb.metastore.MetaStoreUnavailableException("read-only",
+        var other = new org.example.sectoriadb.catalog.CatalogUnavailableException("read-only",
                 new java.io.UncheckedIOException(new IOException("Input/output error")));
-        var r503 = handler.handleMetaStoreUnavailable(other);
+        var r503 = handler.handleCatalogUnavailable(other);
         assertEquals(503, r503.getStatusCode().value());
         assertEquals("SlowDown", r503.getBody().getCode());
         assertEquals("1", r503.getHeaders().getFirst("Retry-After"));

@@ -130,6 +130,33 @@ public class S3ExceptionHandler {
                         : "At least one of the pre-conditions you specified did not hold.", null, requestId));
     }
 
+    /** A multipart request the state of the upload does not allow; each kind is an S3 error code of its own. */
+    @ExceptionHandler(org.example.sectoriadb.catalog.MultipartException.class)
+    public ResponseEntity<S3Error> handleMultipart(org.example.sectoriadb.catalog.MultipartException ex) {
+        String requestId = RequestIds.current();
+        HttpStatus status = HttpStatus.BAD_REQUEST;
+        String code;
+        String message = ex.getMessage();
+        switch (ex.kind()) {
+            case NO_SUCH_UPLOAD -> {
+                status = HttpStatus.NOT_FOUND;
+                code = "NoSuchUpload";
+                message = "The specified upload does not exist. The upload ID may be invalid, or the upload may have been"
+                        + " aborted or completed.";
+            }
+            case INVALID_PART -> code = "InvalidPart";
+            case INVALID_PART_ORDER -> code = "InvalidPartOrder";
+            case ENTITY_TOO_SMALL -> code = "EntityTooSmall";
+            case BAD_DIGEST -> code = "BadDigest";
+            default -> code = "InvalidRequest";
+        }
+        log.debug("Multipart request refused [{}]: {} ({})", requestId, code, ex.getMessage());
+        ObservabilityAttributes.noteErrorCode(code);
+        return ResponseEntity.status(status)
+                .contentType(MediaType.APPLICATION_XML)
+                .body(new S3Error(code, message, null, requestId));
+    }
+
     /** The bucket was deleted between the start of a PUT and its commit; nothing was committed. */
     @ExceptionHandler(ManifestRepository.PoolNotFoundException.class)
     public ResponseEntity<S3Error> handlePoolGone(ManifestRepository.PoolNotFoundException ex) {
@@ -163,8 +190,8 @@ public class S3ExceptionHandler {
      * affected and keep working). A full disk is {@code 507 InsufficientStorage}; any other fault is
      * {@code 503 SlowDown} with {@code Retry-After}: the store recovers by itself once the disk works, a retry is meaningful.
      */
-    @ExceptionHandler(org.example.sectoriadb.metastore.MetaStoreUnavailableException.class)
-    public ResponseEntity<S3Error> handleMetaStoreUnavailable(org.example.sectoriadb.metastore.MetaStoreUnavailableException ex) {
+    @ExceptionHandler(org.example.sectoriadb.catalog.CatalogUnavailableException.class)
+    public ResponseEntity<S3Error> handleCatalogUnavailable(org.example.sectoriadb.catalog.CatalogUnavailableException ex) {
         String requestId = RequestIds.current();
         if (isNoSpaceLeft(ex)) {
             log.warn("Write refused, the metadata disk is full [{}]: {}", requestId, ex.getMessage());

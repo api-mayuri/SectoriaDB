@@ -8,6 +8,7 @@ import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.s3.access.AccessControlService;
 import org.example.sectoriadb.storage.ObjectWriter;
@@ -153,7 +154,7 @@ public class S3ObjectController {
         ManifestEntity entity = lookup.requireObject(bucket, objectKey);
 
         String etag = entity.getEtag() != null ? entity.getEtag() : "\"\"";
-        checkPartNumber(partNumber, etag);
+        ManifestEntity.Extent partExtent = partExtent(entity, partNumber, rangeHeader);
 
         if ((ifNoneMatch != null && ifNoneMatch.equals(etag)) || notModifiedSince(ifModifiedSince, entity)) {
             response.setHeader("ETag", etag);
@@ -175,7 +176,14 @@ public class S3ObjectController {
             length = range.length();
             partial = true;
             response.setHeader("Content-Range", "bytes " + range.first() + "-" + range.last() + "/" + total);
+        } else if (partExtent != null && partExtent.length() > 0) {
+            // GET ?partNumber=N of a multipart object: that part's bytes, answered like a range
+            start = partExtent.start();
+            length = partExtent.length();
+            partial = true;
+            response.setHeader("Content-Range", "bytes " + start + "-" + (start + length - 1) + "/" + total);
         }
+        if (partExtent != null) response.setHeader(PARTS_COUNT_HEADER, String.valueOf(entity.getSegments().size()));
 
         String ct = respContentType != null ? respContentType
                 : (entity.getContentType() != null ? entity.getContentType() : "application/octet-stream");
@@ -229,30 +237,32 @@ public class S3ObjectController {
         throw new ResponseAbortedException("Aborting response: stored object failed verification", cause);
     }
 
+    static final String PARTS_COUNT_HEADER = "x-amz-mp-parts-count";
+
     /**
-     * {@code ?partNumber=N} reads one part of a multipart object. The manifest does not keep part boundaries, so a
-     * multi-part object cannot serve a single part: answer 501 instead of silently returning the whole object (which
-     * is what clients such as warp's "multipart" mode would then mistake for the part).
+     * {@code ?partNumber=N}: the extent of that part of a multipart object (its boundaries are in the manifest), null when
+     * the request names no part. An object that was not uploaded in parts has one part, number 1, which is the whole
+     * object (served as a normal 200 response). A part number the object does not have is 416 InvalidPartNumber; the
+     * parameter together with a {@code Range} header is 400, as in S3.
      */
-    private static void checkPartNumber(Integer partNumber, String etag) {
-        if (partNumber == null) return;
+    private static ManifestEntity.Extent partExtent(ManifestEntity entity, Integer partNumber, String rangeHeader) {
+        if (partNumber == null) return null;
         if (partNumber < 1 || partNumber > 10000) {
             throw S3Exception.invalidArgument("Part number must be an integer between 1 and 10000, inclusive");
         }
-        int parts = 0;                                   // 0: not a multipart object
-        int dash = etag.lastIndexOf('-');
-        if (dash > 0) {
-            try {
-                parts = Integer.parseInt(etag.substring(dash + 1).replace("\"", ""));
-            } catch (NumberFormatException ignored) { /* a plain ETag */ }
+        if (rangeHeader != null) {
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidRequest",
+                    "Cannot specify both Range header and partNumber query parameter");
         }
-        if (partNumber > Math.max(parts, 1)) {
-            throw new S3Exception(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "InvalidPartNumber",
-                    "The requested partnumber is not satisfiable");
+        if (entity.getStorageKind() != StorageKind.MULTIPART) {
+            if (partNumber > 1) {
+                throw new S3Exception(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "InvalidPartNumber",
+                        "The requested partnumber is not satisfiable");
+            }
+            return null;
         }
-        if (parts > 1) {
-            throw S3Exception.notImplemented("Reading a single part of a multipart object (partNumber) is not implemented");
-        }
+        return entity.partExtent(partNumber).orElseThrow(() -> new S3Exception(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE,
+                "InvalidPartNumber", "The requested partnumber is not satisfiable"));
     }
 
     // ── HeadObject ────────────────────────────────────────────────────────────
@@ -269,7 +279,7 @@ public class S3ObjectController {
         ManifestEntity entity = lookup.requireObject(bucket, objectKey);
 
         String etag = entity.getEtag() != null ? entity.getEtag() : "\"\"";
-        checkPartNumber(partNumber, etag);
+        ManifestEntity.Extent partExtent = partExtent(entity, partNumber, request.getHeader("Range"));
 
         // Handle conditional requests
         if (ifNoneMatch != null && ifNoneMatch.equals(etag)) {
@@ -282,16 +292,23 @@ public class S3ObjectController {
         }
 
         String ct = entity.getContentType() != null ? entity.getContentType() : "application/octet-stream";
-        var resp = ResponseEntity.ok()
+        boolean partial = partExtent != null && partExtent.length() > 0;
+        var resp = ResponseEntity.status(partial ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
                 .contentType(safeParseMediaType(ct))
-                .contentLength(entity.getTotalBytes())
+                .contentLength(partial ? partExtent.length() : entity.getTotalBytes())
                 .header("Accept-Ranges", "bytes")
                 .header("ETag", etag)
                 .header("Last-Modified", HttpDates.httpDate(entity.getCreatedAt()));
 
+        if (partial) {
+            resp.header("Content-Range", "bytes " + partExtent.start() + "-" + (partExtent.start() + partExtent.length() - 1)
+                    + "/" + entity.getTotalBytes());
+        }
+        if (partExtent != null) resp.header(PARTS_COUNT_HEADER, String.valueOf(entity.getSegments().size()));
+
         ObjectHeaders.of(entity).writeTo(resp::header);
         if (entity.getUserMetadata() != null) entity.getUserMetadata().forEach(resp::header);
-        if (S3Checksums.modeEnabled(request)) S3Checksums.addObjectHeaders(entity, resp::header);
+        if (!partial && S3Checksums.modeEnabled(request)) S3Checksums.addObjectHeaders(entity, resp::header);
 
         return resp.build();
     }

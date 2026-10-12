@@ -27,7 +27,7 @@ class ModuleDependencyGuardTest {
             "access", Set.of("error", "http", "xml"),
             "auth", Set.of("access", "error", "http", "xml"),
             "api", Set.of("access", "auth", "error", "http", "xml"),
-            "multipart", Set.of("api", "error", "http", "xml"));
+            "multipart", Set.of("api", "access", "error", "http", "xml"));
 
     private final List<Import> imports = mainImports(Path.of("."));
 
@@ -61,11 +61,11 @@ class ModuleDependencyGuardTest {
 
     @Test
     void theMetastoreModuleIsReachedOnlyThroughTheCore() {
-        // two read-only touch points are left: the metastore gauges and the mapping of its unavailable exception to 503 / 507
-        Set<String> allowedFiles = Set.of("org/example/sectoriadb/observability/StorageGauges.java",
-                "org/example/sectoriadb/s3/error/S3ExceptionHandler.java");
-        List<Import> bad = importing(imports, BASE + ".metastore").stream()
-                .filter(i -> !allowedFiles.contains(i.file())).toList();
+        // the server sees the catalog (CatalogInfo, CatalogUnavailableException), never the metastore module itself
+        List<Import> bad = importing(imports, BASE + ".metastore");
+        assertTrue(bad.isEmpty(), describe(bad));
+        // and the metastore-backed repositories are wired by the core's composition root, not named by the server
+        bad = importing(imports, BASE + ".catalog.metastore");
         assertTrue(bad.isEmpty(), describe(bad));
     }
 

@@ -75,6 +75,16 @@ public class MultipartService {
                 .orElseThrow(() -> new MultipartException(Kind.NO_SUCH_UPLOAD, "The specified upload does not exist: " + uploadId));
     }
 
+    /**
+     * The upload for this bucket and key if it is OPEN or COMPLETED (a retried Complete is answered from the stored result);
+     * anything else is NoSuchUpload.
+     */
+    public MultipartUpload requireKnown(String uploadId, String bucket, String key) {
+        return repo.find(uploadId)
+                .filter(u -> u.getState() != MultipartUpload.State.ABORTED && u.getBucket().equals(bucket) && u.getKey().equals(key))
+                .orElseThrow(() -> new MultipartException(Kind.NO_SUCH_UPLOAD, "The specified upload does not exist: " + uploadId));
+    }
+
     // ── parts ─────────────────────────────────────────────────────────────────
 
     /**

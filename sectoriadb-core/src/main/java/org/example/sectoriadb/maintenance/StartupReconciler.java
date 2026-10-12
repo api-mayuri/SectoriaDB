@@ -15,21 +15,53 @@ public class StartupReconciler {
     private static final Logger log = LoggerFactory.getLogger(StartupReconciler.class);
 
     private final BlobFileReaper reaper;
+    private final StorageProperties props;
     private final boolean enabled;
 
     public StartupReconciler(BlobFileReaper reaper, StorageProperties props) {
         this.reaper = reaper;
+        this.props = props;
         this.enabled = props.isReconcileOnStart() && !props.getMetastore().isLazy();
     }
 
     /** Runs the reconciliation (when enabled); called once by the composition root after all beans exist. */
     public void run() {
+        if (!props.getMetastore().isLazy()) removeLegacyMultipartDirectory();
         if (!enabled) return;
         try {
             int n = reaper.reconcileAtStartup();
             if (n > 0) log.warn("Startup reconciliation removed {} unregistered blob file(s)", n);
         } catch (RuntimeException e) {
             log.warn("Startup reconciliation of blob files failed (will be retried by the collector): {}", e.toString());
+        }
+    }
+
+    /**
+     * Before stage 13 multipart uploads lived in files under {@code <data-dir>/.multipart}. They are not read any more
+     * (the owner decided against a migration): uploads that were in flight at the upgrade are dropped, their directory is
+     * deleted once, with a log line saying how many.
+     */
+    void removeLegacyMultipartDirectory() {
+        java.nio.file.Path dir = java.nio.file.Path.of(props.getDataDir()).resolve(".multipart");
+        if (!java.nio.file.Files.isDirectory(dir)) return;
+        int uploads = 0;
+        try (var entries = java.nio.file.Files.list(dir)) {
+            uploads = (int) entries.filter(java.nio.file.Files::isDirectory).count();
+        } catch (java.io.IOException ignored) {
+            // only used for the log line
+        }
+        try (var walk = java.nio.file.Files.walk(dir)) {
+            walk.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
+                try {
+                    java.nio.file.Files.deleteIfExists(p);
+                } catch (java.io.IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            });
+            log.warn("Removed the legacy multipart directory {} ({} upload(s) that were in flight before the upgrade are dropped;"
+                    + " multipart state now lives in the metadata store)", dir, uploads);
+        } catch (java.io.IOException | java.io.UncheckedIOException e) {
+            log.warn("Could not remove the legacy multipart directory {}: {}", dir, e.toString());
         }
     }
 }
