@@ -337,8 +337,7 @@ public class S3AclController {
         }
 
         // Tags are not stored: accepting them would silently lose the data
-        throw new S3Exception(HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
-                "Object tagging is not implemented; the tag set was not stored");
+        throw S3Exception.notImplemented("Object tagging is not implemented; the tag set was not stored");
     }
 
     @DeleteMapping(value = "/{bucket}/**", params = "tagging")

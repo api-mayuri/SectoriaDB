@@ -53,8 +53,7 @@ public final class S3Request {
             boolean ok = name.regionMatches(true, 0, "X-Amz-", 0, 6);
             for (String a : allowed) if (a.equals(name)) { ok = true; break; }
             if (!ok) {
-                throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
-                        "A header or query parameter you provided implies functionality that is not implemented");
+                throw S3Exception.notImplemented("A header or query parameter you provided implies functionality that is not implemented");
             }
         }
     }
@@ -64,8 +63,7 @@ public final class S3Request {
         if (q == null || q.isEmpty()) return;
         for (String name : request.getParameterMap().keySet()) {
             if (names.contains(name)) {
-                throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
-                        "A header or query parameter you provided implies functionality that is not implemented");
+                throw S3Exception.notImplemented("A header or query parameter you provided implies functionality that is not implemented");
             }
         }
     }
@@ -83,12 +81,10 @@ public final class S3Request {
             return org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition.NONE;
         }
         if (none != null && !"*".equals(none.trim())) {
-            throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
-                    "If-None-Match on a write supports only the value '*'");
+            throw S3Exception.notImplemented("If-None-Match on a write supports only the value '*'");
         }
         if (match != null && (match.contains(",") || match.isBlank())) {
-            throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
-                    "If-Match on a write supports a single ETag");
+            throw S3Exception.notImplemented("If-Match on a write supports a single ETag");
         }
         return new org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition(none != null, match);
     }
@@ -98,8 +94,7 @@ public final class S3Request {
         for (String h : new String[]{"x-amz-copy-source-if-match", "x-amz-copy-source-if-none-match",
                 "x-amz-copy-source-if-modified-since", "x-amz-copy-source-if-unmodified-since"}) {
             if (request.getHeader(h) != null) {
-                throw new S3Exception(org.springframework.http.HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
-                        "A header you provided implies functionality that is not implemented: " + h);
+                throw S3Exception.notImplemented("A header you provided implies functionality that is not implemented: " + h);
             }
         }
     }

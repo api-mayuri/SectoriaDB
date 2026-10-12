@@ -17,7 +17,6 @@ import org.example.sectoriadb.engine.error.ChunkCorruptedException;
 import org.example.sectoriadb.storage.ChunkNotFoundException;
 import org.example.sectoriadb.storage.ObjectCorruptedException;
 import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
-import org.example.sectoriadb.storage.PoolService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
@@ -31,21 +30,15 @@ import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
-import java.time.ZoneOffset;
-import java.time.ZonedDateTime;
-import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
-import java.util.Collections;
-import java.util.LinkedHashMap;
-import java.util.Locale;
-import java.util.Map;
 import org.example.sectoriadb.s3.error.S3Exception;
 import org.example.sectoriadb.s3.http.ResponseAbortedException;
 import org.example.sectoriadb.s3.http.S3Checksums;
 import org.example.sectoriadb.s3.http.HttpDates;
 import org.example.sectoriadb.s3.http.S3Request;
-import org.example.sectoriadb.s3.http.UrlCodec;
 import org.example.sectoriadb.s3.xml.XmlSupport;
+import org.example.sectoriadb.s3.http.ByteRange;
+import org.example.sectoriadb.s3.http.CopySource;
 
 /**
  * S3 object-level operations:
@@ -60,11 +53,6 @@ public class S3ObjectController {
 
     private static final Logger log = LoggerFactory.getLogger(S3ObjectController.class);
 
-    private static final DateTimeFormatter HTTP_DATE =
-            DateTimeFormatter.ofPattern("EEE, dd MMM yyyy HH:mm:ss 'GMT'", Locale.ENGLISH)
-                    .withZone(ZoneOffset.UTC);
-
-    private final PoolService poolService;
     private final ObjectWriter writer;
     private final ObjectReader reader;
     private final ObjectCatalog catalog;
@@ -72,14 +60,11 @@ public class S3ObjectController {
     private final AccessControlService accessControl;
     private final RequestBodies bodies;
 
-    public S3ObjectController(PoolService poolService, ObjectWriter writer, ObjectReader reader, ObjectCatalog catalog, S3Lookup lookup,
-                               AccessControlService accessControl, RequestBodies bodies) {
-        this.poolService   = poolService;
-        this.writer = writer;
-
-        this.reader = reader;
-
-        this.catalog = catalog;
+    public S3ObjectController(ObjectWriter writer, ObjectReader reader, ObjectCatalog catalog, S3Lookup lookup,
+                              AccessControlService accessControl, RequestBodies bodies) {
+        this.writer        = writer;
+        this.reader        = reader;
+        this.catalog       = catalog;
         this.lookup        = lookup;
         this.accessControl = accessControl;
         this.bodies        = bodies;
@@ -91,11 +76,6 @@ public class S3ObjectController {
     public ResponseEntity<Void> putObject(
             @PathVariable String bucket,
             @RequestHeader(value = "Content-Type", defaultValue = "application/octet-stream") String contentType,
-            @RequestHeader(value = "Cache-Control", required = false) String cacheControl,
-            @RequestHeader(value = "Content-Disposition", required = false) String contentDisposition,
-            @RequestHeader(value = "Content-Encoding", required = false) String contentEncoding,
-            @RequestHeader(value = "Content-Language", required = false) String contentLanguage,
-            @RequestHeader(value = "x-amz-acl", required = false) String acl,
             HttpServletRequest request) throws IOException {
 
         String objectKey = S3Request.extractKey(request, bucket);
@@ -118,13 +98,8 @@ public class S3ObjectController {
         try (InputStream rawIn = bodies.openBody(request, declared)) {
             ManifestEntity entity = writer.stageStream(rawIn, pool, objectKey, contentType, declared.checksums());
 
-            // Set additional metadata
-            if (cacheControl != null) entity.setCacheControl(cacheControl);
-            if (contentDisposition != null) entity.setContentDisposition(contentDisposition);
-            if (contentEncoding != null) entity.setContentEncoding(contentEncoding);
-            if (contentLanguage != null) entity.setContentLanguage(contentLanguage);
-
-            entity.setUserMetadata(extractUserMetadata(request));
+            ObjectHeaders.of(request).applyTo(entity);
+            entity.setUserMetadata(ObjectHeaders.userMetadata(request));
 
             try {
                 accessControl.applyObjectAcl(request, new byte[0], entity);
@@ -194,12 +169,12 @@ public class S3ObjectController {
         long start = 0;
         long length = total;
         boolean partial = false;
-        long[] range = parseRange(rangeHeader, total);
+        ByteRange range = ByteRange.parseRequestRange(rangeHeader, total);
         if (range != null) {
-            start = range[0];
-            length = range[1] - range[0] + 1;
+            start = range.first();
+            length = range.length();
             partial = true;
-            response.setHeader("Content-Range", "bytes " + range[0] + "-" + range[1] + "/" + total);
+            response.setHeader("Content-Range", "bytes " + range.first() + "-" + range.last() + "/" + total);
         }
 
         String ct = respContentType != null ? respContentType
@@ -209,11 +184,10 @@ public class S3ObjectController {
         response.setContentLengthLong(length);
         response.setHeader("Accept-Ranges", "bytes");
         response.setHeader("ETag", etag);
-        response.setHeader("Last-Modified", HTTP_DATE.format(entity.getCreatedAt()));
-        setIfPresent(response, "Cache-Control", respCacheControl, entity.getCacheControl());
-        setIfPresent(response, "Content-Disposition", respContentDisposition, entity.getContentDisposition());
-        setIfPresent(response, "Content-Encoding", respContentEncoding, entity.getContentEncoding());
-        setIfPresent(response, "Content-Language", respContentLanguage, entity.getContentLanguage());
+        response.setHeader("Last-Modified", HttpDates.httpDate(entity.getCreatedAt()));
+        ObjectHeaders.of(entity)
+                .overriddenBy(new ObjectHeaders(respCacheControl, respContentDisposition, respContentEncoding, respContentLanguage))
+                .writeTo(response::setHeader);
         if (respExpires != null) response.setHeader("Expires", respExpires);
         if (entity.getUserMetadata() != null) entity.getUserMetadata().forEach(response::setHeader);
         // Like S3, checksums are returned for full-object reads only; a range cannot be checked against them.
@@ -255,45 +229,6 @@ public class S3ObjectController {
         throw new ResponseAbortedException("Aborting response: stored object failed verification", cause);
     }
 
-    private static void setIfPresent(HttpServletResponse response, String name, String override, String stored) {
-        String value = override != null ? override : stored;
-        if (value != null) response.setHeader(name, value);
-    }
-
-    /**
-     * Parses a single "bytes=a-b" / "bytes=a-" / "bytes=-n" range. Returns null when the header is absent
-     * or not a single range (S3 then serves the whole object); throws 416 when it cannot be satisfied.
-     * An end beyond the object size is clamped, as S3 does.
-     */
-    private static long[] parseRange(String header, long total) {
-        if (header == null || !header.startsWith("bytes=") || header.contains(",")) return null;
-        String[] parts = header.substring("bytes=".length()).split("-", 2);
-        long start;
-        long end;
-        try {
-            if (parts[0].isBlank()) {
-                long suffix = Long.parseLong(parts[1].trim());
-                if (suffix <= 0) throw invalidRange();
-                start = Math.max(0, total - suffix);
-                end = total - 1;
-            } else {
-                start = Long.parseLong(parts[0].trim());
-                end = parts.length < 2 || parts[1].isBlank() ? total - 1 : Long.parseLong(parts[1].trim());
-            }
-        } catch (NumberFormatException e) {
-            return null;   // malformed → ignore the header, like S3
-        }
-        if (start >= total || start < 0) throw invalidRange();
-        end = Math.min(end, total - 1);
-        if (end < start) return null;
-        return new long[]{start, end};
-    }
-
-    private static S3Exception invalidRange() {
-        return new S3Exception(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "InvalidRange",
-                "The requested range is not satisfiable");
-    }
-
     /**
      * {@code ?partNumber=N} reads one part of a multipart object. The manifest does not keep part boundaries, so a
      * multi-part object cannot serve a single part: answer 501 instead of silently returning the whole object (which
@@ -316,8 +251,7 @@ public class S3ObjectController {
                     "The requested partnumber is not satisfiable");
         }
         if (parts > 1) {
-            throw new S3Exception(HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
-                    "Reading a single part of a multipart object (partNumber) is not implemented");
+            throw S3Exception.notImplemented("Reading a single part of a multipart object (partNumber) is not implemented");
         }
     }
 
@@ -353,22 +287,10 @@ public class S3ObjectController {
                 .contentLength(entity.getTotalBytes())
                 .header("Accept-Ranges", "bytes")
                 .header("ETag", etag)
-                .header("Last-Modified", HTTP_DATE.format(entity.getCreatedAt()));
+                .header("Last-Modified", HttpDates.httpDate(entity.getCreatedAt()));
 
-        // Add metadata headers (similar to GetObject)
-        if (entity.getCacheControl() != null) {
-            resp.header("Cache-Control", entity.getCacheControl());
-        }
-        if (entity.getContentDisposition() != null) {
-            resp.header("Content-Disposition", entity.getContentDisposition());
-        }
-        if (entity.getContentEncoding() != null) {
-            resp.header("Content-Encoding", entity.getContentEncoding());
-        }
-        if (entity.getContentLanguage() != null) {
-            resp.header("Content-Language", entity.getContentLanguage());
-        }
-        addUserMetadata(resp, entity);
+        ObjectHeaders.of(entity).writeTo(resp::header);
+        if (entity.getUserMetadata() != null) entity.getUserMetadata().forEach(resp::header);
         if (S3Checksums.modeEnabled(request)) S3Checksums.addObjectHeaders(entity, resp::header);
 
         return resp.build();
@@ -397,10 +319,6 @@ public class S3ObjectController {
             @RequestHeader(value = "x-amz-copy-source") String copySource,
             @RequestHeader(value = "x-amz-metadata-directive", defaultValue = "COPY") String metadataDirective,
             @RequestHeader(value = "Content-Type", required = false) String contentType,
-            @RequestHeader(value = "Cache-Control", required = false) String cacheControl,
-            @RequestHeader(value = "Content-Disposition", required = false) String contentDisposition,
-            @RequestHeader(value = "Content-Encoding", required = false) String contentEncoding,
-            @RequestHeader(value = "Content-Language", required = false) String contentLanguage,
             HttpServletRequest request) throws IOException {
 
         S3Request.rejectCopySourceConditions(request);
@@ -415,23 +333,9 @@ public class S3ObjectController {
         // Verify destination bucket exists
         PoolEntity destPool = lookup.requireBucket(bucket);
 
-        // Parse copy source: /source-bucket/source-key or source-bucket/source-key
-        String sourceSpec = copySource.startsWith("/") ? copySource.substring(1) : copySource;
-        // Remove ?versionId=... suffix if present
-        int qIdx = sourceSpec.indexOf('?');
-        if (qIdx >= 0) {
-            sourceSpec = sourceSpec.substring(0, qIdx);
-        }
-
-        // Split into bucket and key
-        int slashIdx = sourceSpec.indexOf('/');
-        if (slashIdx < 0) {
-            throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidArgument",
-                    "x-amz-copy-source must be in format /bucket/key");
-        }
-
-        String sourceBucket = sourceSpec.substring(0, slashIdx);
-        String sourceKey = UrlCodec.percentDecode(sourceSpec.substring(slashIdx + 1));
+        CopySource source = CopySource.parse(copySource);
+        String sourceBucket = source.bucket();
+        String sourceKey = source.key();
 
         // Validate: can't copy to self without REPLACE
         if (sourceBucket.equals(bucket) && sourceKey.equals(destKey) && !"REPLACE".equalsIgnoreCase(metadataDirective)) {
@@ -461,16 +365,10 @@ public class S3ObjectController {
             }
 
             if (replace) {
-                entity.setCacheControl(cacheControl);
-                entity.setContentDisposition(contentDisposition);
-                entity.setContentEncoding(contentEncoding);
-                entity.setContentLanguage(contentLanguage);
-                entity.setUserMetadata(extractUserMetadata(request));
+                ObjectHeaders.of(request).applyTo(entity);
+                entity.setUserMetadata(ObjectHeaders.userMetadata(request));
             } else {
-                entity.setCacheControl(srcEntity.getCacheControl());
-                entity.setContentDisposition(srcEntity.getContentDisposition());
-                entity.setContentEncoding(srcEntity.getContentEncoding());
-                entity.setContentLanguage(srcEntity.getContentLanguage());
+                ObjectHeaders.of(srcEntity).applyTo(entity);
                 entity.setUserMetadata(srcEntity.getUserMetadata());
             }
             try {
@@ -495,41 +393,15 @@ public class S3ObjectController {
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private static final String META_PREFIX = "x-amz-meta-";
-
-    private Map<String, String> extractUserMetadata(HttpServletRequest request) {
-        Map<String, String> meta = new LinkedHashMap<>();
-        for (String name : Collections.list(request.getHeaderNames())) {
-            if (name.toLowerCase(Locale.ROOT).startsWith(META_PREFIX)) {
-                meta.put(name.toLowerCase(Locale.ROOT), request.getHeader(name));
-            }
-        }
-        return meta.isEmpty() ? null : meta;
-    }
-
-    private void addUserMetadata(ResponseEntity.HeadersBuilder<?> resp, ManifestEntity entity) {
-        if (entity.getUserMetadata() != null) {
-            entity.getUserMetadata().forEach(resp::header);
-        }
-    }
-
-    private static Instant parseHttpDate(String value) {
-        try {
-            return ZonedDateTime.parse(value, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant();
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
     /** If-Modified-Since: true when the object has not changed since the given date. */
     private static boolean notModifiedSince(String header, ManifestEntity entity) {
-        Instant since = header == null ? null : parseHttpDate(header);
+        Instant since = header == null ? null : HttpDates.parseHttpDate(header);
         return since != null && !entity.getCreatedAt().truncatedTo(ChronoUnit.SECONDS).isAfter(since);
     }
 
     /** If-Unmodified-Since: true when the object HAS changed since the given date. */
     private static boolean modifiedSince(String header, ManifestEntity entity) {
-        Instant since = header == null ? null : parseHttpDate(header);
+        Instant since = header == null ? null : HttpDates.parseHttpDate(header);
         return since != null && entity.getCreatedAt().truncatedTo(ChronoUnit.SECONDS).isAfter(since);
     }
 

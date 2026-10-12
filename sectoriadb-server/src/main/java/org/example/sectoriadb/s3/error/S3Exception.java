@@ -43,6 +43,10 @@ public class S3Exception extends RuntimeException {
         return new S3Exception(HttpStatus.BAD_REQUEST, "InvalidArgument", message);
     }
 
+    public static S3Exception notImplemented(String message) {
+        return new S3Exception(HttpStatus.NOT_IMPLEMENTED, "NotImplemented", message);
+    }
+
     public static S3Exception accessDenied(String message) {
         return new S3Exception(HttpStatus.FORBIDDEN, "AccessDenied", message);
     }
