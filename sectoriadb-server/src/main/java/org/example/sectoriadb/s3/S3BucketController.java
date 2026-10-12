@@ -59,8 +59,9 @@ public class S3BucketController {
         // Validate bucket name before attempting to create
         lookup.validateBucketName(bucket);
 
+        // x-amz-acl / x-amz-grant-* headers (e.g. `s3api create-bucket --acl public-read`): a bad ACL must not leave a bucket behind
+        accessControl.resolveAcl(request, new byte[0]);
         PoolEntity pool = poolService.createBucket(bucket);
-        // x-amz-acl / x-amz-grant-* headers (e.g. `s3api create-bucket --acl public-read`)
         accessControl.applyBucketAcl(request, new byte[0], pool);
         return ResponseEntity.ok()
                 .header("x-amz-request-id", S3Support.requestId())
@@ -88,16 +89,16 @@ public class S3BucketController {
     public ResponseEntity<Void> deleteBucket(@PathVariable String bucket, HttpServletRequest request) throws java.io.IOException {
         // DELETE /bucket?tagging|lifecycle|cors|... that no sub-resource handler claimed must NOT delete the bucket
         S3Support.requireOnlyQueryParams(request, "x-id");
+        lookup.requireBucket(bucket);
         try {
             poolService.deleteBucket(bucket);
         } catch (IllegalStateException e) {
-            // Only a real "bucket is not empty" conflict is BucketNotEmpty; any other illegal state (for example the
-            // metadata store refusing work after a failed commit) goes to the exception handler (503)
-            String msg = e.getMessage() != null ? e.getMessage() : "";
-            if (!(msg.contains("BucketNotEmpty") || msg.contains("still has") || msg.contains("not empty"))) {
-                throw e;
+            // BucketNotEmpty is decided by the object index, not by the text of the exception
+            if (manifestRepo.hasObjects(bucket)) {
+                throw new S3Exception(HttpStatus.CONFLICT, "BucketNotEmpty",
+                        "The bucket you tried to delete is not empty", "/" + bucket);
             }
-            throw new S3Exception(HttpStatus.CONFLICT, "BucketNotEmpty", msg, "/" + bucket);
+            throw e;
         }
 
         return ResponseEntity.noContent()
@@ -117,7 +118,7 @@ public class S3BucketController {
         // Verify bucket exists
         lookup.requireBucket(bucket);
 
-        DeleteRequest del = parseDeleteXml(request.getInputStream());
+        DeleteRequest del = parseDeleteXml(RequestBodies.xmlBody(request));
         List<String> keys = del.keys();
         if (keys.size() > 1000) {
             throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedXML",

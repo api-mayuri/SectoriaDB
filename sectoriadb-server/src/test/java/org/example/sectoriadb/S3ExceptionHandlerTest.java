@@ -31,15 +31,33 @@ class S3ExceptionHandlerTest {
         assertEquals(500, r.getStatusCode().value());
     }
 
-    /** After a failed metastore commit every request got 409 BucketNotEmpty (even GET): wrong code, wrong family. */
+    /** Classification is by type: every IllegalStateException is a 503 and its message is never echoed. */
     @Test
-    void illegalStateIsBucketNotEmptyOnlyForBucketConflicts() {
-        var conflict = handler.handleIllegalState(new IllegalStateException("BucketNotEmpty: bucket 'b' still has 1 object(s)."));
-        assertEquals(409, conflict.getStatusCode().value());
-        assertEquals("BucketNotEmpty", conflict.getBody().getCode());
-        var broken = handler.handleIllegalState(new IllegalStateException("store failed during a commit and must be reopened"));
-        assertEquals(503, broken.getStatusCode().value());
-        assertEquals("ServiceUnavailable", broken.getBody().getCode());
+    void illegalStateIsAlwaysAGenericServiceUnavailable() {
+        var r = handler.handleIllegalState(new IllegalStateException("BucketNotEmpty: bucket 'b' still has 1 object(s) /var/data/x"));
+        assertEquals(503, r.getStatusCode().value());
+        assertEquals("ServiceUnavailable", r.getBody().getCode());
+        assertFalse(r.getBody().getMessage().contains("/var/data"));
+    }
+
+    /** No substring guessing: "Bucket"/"not found"/"already exists" in a message must not turn into 404/409. */
+    @Test
+    void illegalArgumentIsInvalidArgumentWithAFixedMessage() {
+        for (String msg : new String[]{"Bucket x not found", "Pool already exists: p", "For input string: \"abc\"", "File not found: /srv/secret/path"}) {
+            var r = handler.handleIllegalArgument(new IllegalArgumentException(msg));
+            assertEquals(400, r.getStatusCode().value(), msg);
+            assertEquals("InvalidArgument", r.getBody().getCode());
+            assertFalse(r.getBody().getMessage().contains("/srv"), "internal text must not be echoed");
+        }
+        var nfe = handler.handleIllegalArgument(new NumberFormatException("For input string: \"abc\""));
+        assertEquals(400, nfe.getStatusCode().value());
+    }
+
+    @Test
+    void aSlowBodyIsRequestTimeoutNotAnInternalError() {
+        var r = handler.handleSocketTimeout(new java.net.SocketTimeoutException("Read timed out"));
+        assertEquals(400, r.getStatusCode().value());
+        assertEquals("RequestTimeout", r.getBody().getCode());
     }
 
     /** Doc 10: a chunk the upload deduplicated against was collected before its commit; the client simply retries. */

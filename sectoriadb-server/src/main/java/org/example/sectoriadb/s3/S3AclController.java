@@ -56,7 +56,8 @@ public class S3AclController {
         }
 
         PoolEntity pool = poolService.getByName(bucket);
-        byte[] body = request.getInputStream().readAllBytes();
+        byte[] body = RequestBodies.readLimited(request, RequestBodies.MAX_ACL_BYTES, HttpStatus.BAD_REQUEST,
+                "MalformedACLError", "The ACL document is too large");
         aclService.applyBucketAcl(request, body, pool);
 
         return ResponseEntity.ok()
@@ -92,7 +93,8 @@ public class S3AclController {
         }
 
         String key = S3Support.extractKey(request, bucket);
-        byte[] body = request.getInputStream().readAllBytes();
+        byte[] body = RequestBodies.readLimited(request, RequestBodies.MAX_ACL_BYTES, HttpStatus.BAD_REQUEST,
+                "MalformedACLError", "The ACL document is too large");
         // one transaction reads the current version, applies the ACL and writes it back: a concurrent PUT of the key
         // cannot be overwritten with the old version's manifest
         manifestRepo.updateCurrent(bucket, key, manifest -> aclService.applyObjectAcl(request, body, manifest))
@@ -155,8 +157,9 @@ public class S3AclController {
             throw S3Exception.noSuchBucket(bucket);
         }
 
-        byte[] body = request.getInputStream().readAllBytes();
-        String policyJson = new String(body);
+        byte[] body = RequestBodies.readLimited(request, RequestBodies.MAX_POLICY_BYTES, HttpStatus.BAD_REQUEST,
+                "PolicyTooLarge", "Policies must be 20 KiB or smaller");
+        String policyJson = new String(body, java.nio.charset.StandardCharsets.UTF_8);
 
         // Validate JSON (simple check)
         try {
@@ -342,10 +345,9 @@ public class S3AclController {
             throw S3Exception.noSuchKey(bucket, key);
         }
 
-        // Tagging not stored, but accept the request
-        return ResponseEntity.ok()
-                .header("x-amz-request-id", UUID.randomUUID().toString())
-                .build();
+        // Tags are not stored: accepting them would silently lose the data
+        throw new S3Exception(HttpStatus.NOT_IMPLEMENTED, "NotImplemented",
+                "Object tagging is not implemented; the tag set was not stored");
     }
 
     @DeleteMapping(value = "/{bucket}/**", params = "tagging")

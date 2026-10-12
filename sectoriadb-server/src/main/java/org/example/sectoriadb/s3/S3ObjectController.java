@@ -8,6 +8,7 @@ import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
+import org.example.sectoriadb.repository.ManifestRepository;
 import org.example.sectoriadb.s3.access.AccessControlService;
 import org.example.sectoriadb.service.FileStorageService;
 import org.example.sectoriadb.service.impl.ChunkCorruptedException;
@@ -58,13 +59,15 @@ public class S3ObjectController {
     private final FileStorageService fileService;
     private final S3Lookup lookup;
     private final AccessControlService accessControl;
+    private final RequestBodies bodies;
 
     public S3ObjectController(PoolService poolService, FileStorageService fileService, S3Lookup lookup,
-                               AccessControlService accessControl) {
+                               AccessControlService accessControl, RequestBodies bodies) {
         this.poolService   = poolService;
         this.fileService   = fileService;
         this.lookup        = lookup;
         this.accessControl = accessControl;
+        this.bodies        = bodies;
     }
 
     // ── PutObject ─────────────────────────────────────────────────────────────
@@ -85,7 +88,9 @@ public class S3ObjectController {
         // UploadPart (partNumber + uploadId) and the sub-resource writes (?retention, ?legal-hold, ...) have their own
         // handlers; a request that reaches PutObject with any of those parameters must not overwrite the object
         S3Support.requireOnlyQueryParams(request, "x-id");
-        S3Support.requireDeclaredSizeWithinLimit(request);
+        bodies.requireAcceptableUpload(request);
+        ManifestRepository.CommitPrecondition precondition = S3Support.writePrecondition(request);
+        accessControl.resolveAcl(request, new byte[0]);   // reject a bad ACL before the body is read
 
         // Verify bucket exists; throws NoSuchBucket if not
         PoolEntity pool = lookup.requireBucket(bucket);
@@ -95,7 +100,7 @@ public class S3ObjectController {
 
         // Step 1: blob data (not visible yet). Step 2: ONE transaction that saves the complete manifest, points the
         // (bucket, key) index at it and retires the previous version, so concurrent PUTs of a key cannot both win.
-        try (InputStream rawIn = S3Support.openBody(request, declared)) {
+        try (InputStream rawIn = bodies.openBody(request, declared)) {
             ManifestEntity entity = fileService.stageStream(rawIn, pool, objectKey, contentType, declared.checksums());
 
             // Set additional metadata
@@ -108,7 +113,7 @@ public class S3ObjectController {
 
             try {
                 accessControl.applyObjectAcl(request, new byte[0], entity);
-                entity = fileService.commitObject(entity);
+                entity = fileService.commitObject(entity, precondition);
             } finally {
                 fileService.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
             }
@@ -148,6 +153,14 @@ public class S3ObjectController {
             HttpServletResponse response) throws IOException {
 
         S3Support.rejectUnsupportedObjectSubresource(request);
+        // Overriding response headers (content-type, disposition, ...) would let an anonymous caller turn a public object
+        // into text/html on the API origin: AWS refuses them for unsigned requests
+        if ((respContentType != null || respContentDisposition != null || respCacheControl != null
+                || respContentEncoding != null || respContentLanguage != null || respExpires != null)
+                && !Boolean.TRUE.equals(request.getAttribute(S3Support.AUTHENTICATED_ATTRIBUTE))) {
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidRequest",
+                    "Request specific response headers cannot be used for anonymous GET requests.");
+        }
         String objectKey = S3Support.extractKey(request, bucket);
         ManifestEntity entity = lookup.requireObject(bucket, objectKey);
 
@@ -386,6 +399,10 @@ public class S3ObjectController {
             @RequestHeader(value = "Content-Language", required = false) String contentLanguage,
             HttpServletRequest request) throws IOException {
 
+        S3Support.rejectCopySourceConditions(request);
+        if (!"COPY".equalsIgnoreCase(metadataDirective) && !"REPLACE".equalsIgnoreCase(metadataDirective)) {
+            throw S3Exception.invalidArgument("Unknown metadata directive.");
+        }
         // x-amz-checksum-algorithm on a copy picks the destination's algorithm; otherwise the source's is kept
         ChecksumAlgorithm requestedAlg = S3Checksums.declaredAlgorithm(request);
         String destKey = S3Support.extractKey(request, bucket);
@@ -413,7 +430,7 @@ public class S3ObjectController {
         String sourceKey = S3Support.percentDecode(sourceSpec.substring(slashIdx + 1));
 
         // Validate: can't copy to self without REPLACE
-        if (sourceBucket.equals(bucket) && sourceKey.equals(destKey) && !"REPLACE".equals(metadataDirective)) {
+        if (sourceBucket.equals(bucket) && sourceKey.equals(destKey) && !"REPLACE".equalsIgnoreCase(metadataDirective)) {
             throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidRequest",
                     "This copy request is illegal because it is trying to copy an object to itself without changing the object's metadata.");
         }

@@ -16,6 +16,7 @@ import org.example.sectoriadb.service.FileStorageService;
 import org.example.sectoriadb.service.PoolService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -34,6 +35,8 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
 /**
@@ -57,10 +60,13 @@ public class S3MultipartController {
     private final ManifestRepository manifestRepo;
     private final S3Lookup lookup;
     private final StorageProperties storageProps;
+    private final RequestBodies bodies;
     private Path mpuDir;
 
     public S3MultipartController(PoolService poolService, FileStorageService fileService,
-                                  ManifestRepository manifestRepo, S3Lookup lookup, StorageProperties storageProps) {
+                                  ManifestRepository manifestRepo, S3Lookup lookup, StorageProperties storageProps,
+                                  RequestBodies bodies) {
+        this.bodies = bodies;
         this.lookup = lookup;
         this.poolService = poolService;
         this.fileService = fileService;
@@ -79,6 +85,84 @@ public class S3MultipartController {
 
     /** Key prefix of user metadata ("x-amz-meta-*") inside the upload's meta.properties. */
     private static final String USER_META_PREFIX = "usermeta.";
+
+    // ── Per-upload state (interim filesystem design, see docs/architecture/08-observability-bench.md) ────────────────
+    //
+    // state.properties: state=OPEN|COMPLETING|COMPLETED. A per-upload lock guards every transition and every change of the
+    // part records, so a part file and its ETag/checksum are always updated together, a second Complete cannot run next to
+    // the first, and Abort / UploadPart cannot delete or replace files under a running Complete. The lock is held only
+    // for those short critical sections, never while a body is transferred or while Complete copies the data.
+
+    private static final ConcurrentHashMap<String, ReentrantLock> UPLOAD_LOCKS = new ConcurrentHashMap<>();
+    private static final String STATE_FILE = "state.properties";
+    private static final String OPEN = "OPEN";
+    private static final String COMPLETING = "COMPLETING";
+    private static final String COMPLETED = "COMPLETED";
+
+    private static ReentrantLock lockOf(String uploadId) {
+        return UPLOAD_LOCKS.computeIfAbsent(uploadId, k -> new ReentrantLock());
+    }
+
+    private static Properties readProps(Path file) throws IOException {
+        Properties p = new Properties();
+        try (InputStream is = Files.newInputStream(file)) {
+            p.load(is);
+        } catch (NoSuchFileException e) {
+            // absent = empty
+        }
+        return p;
+    }
+
+    private static String stateOf(Path uploadDir) throws IOException {
+        return readProps(uploadDir.resolve(STATE_FILE)).getProperty("state", OPEN);
+    }
+
+    /** Writes a properties file atomically (temp file, fsync, rename, fsync of the directory). */
+    private static void writeProps(Path file, Properties props, boolean fsync) throws IOException {
+        Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+        try (OutputStream os = Files.newOutputStream(tmp)) {
+            props.store(os, null);
+        }
+        if (fsync) force(tmp);
+        Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        if (fsync) forceDir(file.getParent());
+    }
+
+    private static void force(Path file) throws IOException {
+        try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(file, StandardOpenOption.WRITE)) {
+            ch.force(true);
+        }
+    }
+
+    private static void forceDir(Path dir) {
+        try (java.nio.channels.FileChannel ch = java.nio.channels.FileChannel.open(dir, StandardOpenOption.READ)) {
+            ch.force(true);
+        } catch (IOException | UnsupportedOperationException ignored) {
+            // directories cannot be fsynced on every platform; the rename is still atomic
+        }
+    }
+
+    /** Must be called with the upload lock held: only an OPEN upload accepts parts. */
+    private void requireOpen(Path uploadDir, String uploadId) throws IOException {
+        String st = stateOf(uploadDir);
+        if (COMPLETING.equals(st)) {
+            throw new S3Exception(HttpStatus.CONFLICT, "OperationAborted",
+                    "A conflicting operation is currently in progress against this resource. Please try again.");
+        }
+        if (COMPLETED.equals(st)) throw S3Exception.noSuchUpload(uploadId);
+    }
+
+    /** Records the ETag (and checksum) of a part together, under the upload lock the caller holds. */
+    private void recordPart(Path uploadDir, int partNumber, String etag, String checksum) throws IOException {
+        Properties etags = readProps(uploadDir.resolve("etags.properties"));
+        etags.setProperty(String.valueOf(partNumber), etag);
+        Properties sums = readProps(uploadDir.resolve(CHECKSUMS_FILE));
+        if (checksum != null) sums.setProperty(String.valueOf(partNumber), checksum);
+        else sums.remove(String.valueOf(partNumber));
+        boolean fsync = storageProps.isFsync();
+        writeProps(uploadDir.resolve(CHECKSUMS_FILE), sums, fsync);
+        writeProps(uploadDir.resolve("etags.properties"), etags, fsync);   // the ETag last: a part is visible only with both
+    }
 
     // ── CreateMultipartUpload ─────────────────────────────────────────────────
 
@@ -155,10 +239,10 @@ public class S3MultipartController {
         if (partNumber < 1 || partNumber > 10000) {
             throw S3Exception.invalidArgument("Invalid part number: " + partNumber);
         }
-        S3Support.requireDeclaredSizeWithinLimit(request);
+        bodies.requireAcceptableUpload(request);
 
         // Validate and load upload directory
-        Path uploadDir = validateUploadId(uploadId, bucket);
+        Path uploadDir = validateUploadId(uploadId, bucket, request);
 
         // Use atomic write with temporary file to handle concurrent uploads
         Path partFile = uploadDir.resolve(String.format("part-%05d", partNumber));
@@ -181,7 +265,7 @@ public class S3MultipartController {
         EnumSet<ChecksumAlgorithm> algs = EnumSet.noneOf(ChecksumAlgorithm.class);
         if (wanted.algorithm() != null) algs.add(wanted.algorithm());
         MultiDigest digest = new MultiDigest(true, algs);
-        try (InputStream body = S3Support.openBody(request, declared);
+        try (InputStream body = bodies.openBody(request, declared);
              InputStream dis = new MultiDigestInputStream(body, digest)) {
             Files.copy(dis, tmpFile, StandardCopyOption.REPLACE_EXISTING);
             digest.finish();
@@ -192,55 +276,39 @@ public class S3MultipartController {
             throw e;
         }
 
-        // Atomic move to final location
-        Files.move(tmpFile, partFile, StandardCopyOption.REPLACE_EXISTING,
-                   StandardCopyOption.ATOMIC_MOVE);
+        if (storageProps.isFsync()) force(tmpFile);
 
-        // Store ETag (and checksum) for later validation
         String etagValue = HexFormat.of().formatHex(digest.md5());
-        recordPartEtag(uploadDir, partNumber, etagValue);
+        String checksumEntry = wanted.algorithm() == null ? null
+                : wanted.algorithm().name() + ":" + digest.encoded(wanted.algorithm());
+        installPart(uploadDir, uploadId, partNumber, tmpFile, partFile, etagValue, checksumEntry);
         var ok = ResponseEntity.ok()
                 .header("ETag", "\"" + etagValue + "\"")
                 .header("x-amz-request-id", S3Support.requestId());
         if (wanted.algorithm() != null) {
-            String value = digest.encoded(wanted.algorithm());
-            recordPartProperty(uploadDir, CHECKSUMS_FILE, partNumber, wanted.algorithm().name() + ":" + value);
-            ok.header(wanted.algorithm().headerName(), value);
+            ok.header(wanted.algorithm().headerName(), digest.encoded(wanted.algorithm()));
         }
         return ok.build();
     }
 
-    /**
-     * Records a part's ETag. Parts are uploaded concurrently (aws cli uses 10 threads), so the
-     * read-modify-write must be serialized; the file is replaced atomically for readers.
-     */
-    private static final Object ETAG_LOCK = new Object();
-
-    private static final String CHECKSUMS_FILE = "checksums.properties";
-
-    private static void recordPartEtag(Path uploadDir, int partNumber, String etag) throws IOException {
-        recordPartProperty(uploadDir, "etags.properties", partNumber, etag);
-    }
-
-    /** Per-part "ALG:base64" checksums, kept beside etags.properties and replaced atomically in the same way. */
-    private static void recordPartProperty(Path uploadDir, String fileName, int partNumber, String value)
-            throws IOException {
-        synchronized (ETAG_LOCK) {
-            Path file = uploadDir.resolve(fileName);
-            Properties props = new Properties();
-            if (Files.exists(file)) {
-                try (InputStream is = Files.newInputStream(file)) {
-                    props.load(is);
-                }
-            }
-            props.setProperty(String.valueOf(partNumber), value);
-            Path tmp = uploadDir.resolve(fileName + ".tmp");
-            try (OutputStream os = Files.newOutputStream(tmp)) {
-                props.store(os, null);
-            }
-            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+    /** Moves a finished temp file into place and records its ETag, atomically with respect to other operations on the upload. */
+    private void installPart(Path uploadDir, String uploadId, int partNumber, Path tmpFile, Path partFile,
+                             String etag, String checksumEntry) throws IOException {
+        ReentrantLock lock = lockOf(uploadId);
+        lock.lock();
+        try {
+            requireOpen(uploadDir, uploadId);
+            Files.move(tmpFile, partFile, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+            recordPart(uploadDir, partNumber, etag, checksumEntry);
+        } catch (IOException | RuntimeException e) {
+            Files.deleteIfExists(tmpFile);
+            throw e;
+        } finally {
+            lock.unlock();
         }
     }
+
+    private static final String CHECKSUMS_FILE = "checksums.properties";
 
     // ── UploadPartCopy ────────────────────────────────────────────────────────
 
@@ -260,7 +328,7 @@ public class S3MultipartController {
         }
 
         // Validate and load upload directory
-        Path uploadDir = validateUploadId(uploadId, bucket);
+        Path uploadDir = validateUploadId(uploadId, bucket, request);
 
         // Parse copy source: "/bucket/key" or "bucket/key"
         String sourcePath = copySource.startsWith("/") ? copySource.substring(1) : copySource;
@@ -269,8 +337,10 @@ public class S3MultipartController {
             throw S3Exception.invalidArgument("Invalid x-amz-copy-source format");
         }
         String srcBucket = sourcePath.substring(0, slashIdx);
-        String srcKey = S3Support.percentDecode(sourcePath.substring(slashIdx + 1)
-                .split("\\?")[0]); // Remove ?versionId if present
+        String rawSrcKey = sourcePath.substring(slashIdx + 1);
+        int versionIdx = rawSrcKey.indexOf('?');   // strip ?versionId=... BEFORE decoding (a decoded %3F is part of the key)
+        if (versionIdx >= 0) rawSrcKey = rawSrcKey.substring(0, versionIdx);
+        String srcKey = S3Support.percentDecode(rawSrcKey);
 
         // Load source object
         ManifestEntity srcManifest = manifestRepo.findCurrent(srcBucket, srcKey)
@@ -281,15 +351,12 @@ public class S3MultipartController {
         Path tmpFile = uploadDir.resolve(String.format("part-%05d.tmp.%s", partNumber,
                 UUID.randomUUID().toString().substring(0, 8)));
 
+        long[] range = copyRange == null ? null : parseCopyRange(copyRange, srcManifest.getTotalBytes());
         ChecksumAlgorithm uploadAlg = uploadChecksumAlgorithm(uploadDir);
         MultiDigest digest = new MultiDigest(true, uploadAlg != null ? EnumSet.of(uploadAlg) : EnumSet.noneOf(ChecksumAlgorithm.class));
         try (OutputStream out = new MultiDigestOutputStream(Files.newOutputStream(tmpFile), digest)) {
-            if (copyRange != null) {
-                // Parse "bytes=a-b"
-                String[] parts = copyRange.replaceAll("bytes=", "").split("-");
-                long start = Long.parseLong(parts[0]);
-                long end = Long.parseLong(parts[1]);
-                fileService.streamRange(srcManifest, out, start, end - start + 1);
+            if (range != null) {
+                fileService.streamRange(srcManifest, out, range[0], range[1] - range[0] + 1);
             } else {
                 // a corrupt source (whole-object CRC32C mismatch) fails the copy with 500 and no part is stored
                 fileService.streamToOutput(srcManifest, out);
@@ -300,18 +367,17 @@ public class S3MultipartController {
         }
         digest.finish();
 
-        // Atomic move to final location
-        Files.move(tmpFile, partFile, StandardCopyOption.REPLACE_EXISTING,
-                   StandardCopyOption.ATOMIC_MOVE);
+        if (storageProps.isFsync()) force(tmpFile);
 
         String etagValue = HexFormat.of().formatHex(digest.md5());
-        recordPartEtag(uploadDir, partNumber, etagValue);
         String checksumXml = "";
+        String checksumEntry = null;
         if (uploadAlg != null) {
             String value = digest.encoded(uploadAlg);
-            recordPartProperty(uploadDir, CHECKSUMS_FILE, partNumber, uploadAlg.name() + ":" + value);
+            checksumEntry = uploadAlg.name() + ":" + value;
             checksumXml = "<" + S3Checksums.xmlElement(uploadAlg) + ">" + value + "</" + S3Checksums.xmlElement(uploadAlg) + ">";
         }
+        installPart(uploadDir, uploadId, partNumber, tmpFile, partFile, etagValue, checksumEntry);
 
         String lastModified = S3Support.isoDate(Instant.now());
         String responseBody = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
@@ -333,51 +399,98 @@ public class S3MultipartController {
             @RequestParam String uploadId,
             HttpServletRequest request) throws IOException {
 
-        Path uploadDir = validateUploadId(uploadId, bucket);
+        Path uploadDir = validateUploadId(uploadId, bucket, request, true);
+        ManifestRepository.CommitPrecondition precondition = S3Support.writePrecondition(request);
 
-        Properties meta = new Properties();
-        try (InputStream is = Files.newInputStream(uploadDir.resolve("meta.properties"))) {
-            meta.load(is);
+        // Parse and validate the part list (bounded body); the order must be ascending, nothing is sorted silently
+        ParsedParts parsedParts = parseCompleteXml(RequestBodies.xmlBody(request));
+        List<Integer> partNums = parsedParts.partNumbers;
+        if (partNums.isEmpty()) {
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedXML",
+                    "Request body is not valid XML or contains no parts");
         }
+        if (partNums.size() > 10000) {
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedXML", "A multipart upload has at most 10000 parts");
+        }
+        for (int i = 1; i < partNums.size(); i++) {
+            if (partNums.get(i) <= partNums.get(i - 1)) {
+                throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidPartOrder",
+                        "The list of parts was not in ascending order. The parts list must be specified in order by part number.");
+            }
+        }
+        String partsFingerprint = fingerprint(partNums, parsedParts.etags);
+
+        // State transition under the lock: OPEN -> COMPLETING. A retry of a finished Complete gets the stored result.
+        ReentrantLock lock = lockOf(uploadId);
+        lock.lock();
+        try {
+            Properties state = readProps(uploadDir.resolve(STATE_FILE));
+            String st = state.getProperty("state", OPEN);
+            if (COMPLETED.equals(st)) {
+                if (partsFingerprint.equals(state.getProperty("partsFingerprint"))) {
+                    return completeResponse(request, bucket, state.getProperty("key"), state.getProperty("etag"),
+                            state.getProperty("checksumXml", ""));
+                }
+                throw S3Exception.noSuchUpload(uploadId);
+            }
+            if (COMPLETING.equals(st)) {
+                throw new S3Exception(HttpStatus.CONFLICT, "OperationAborted",
+                        "A conflicting operation is currently in progress against this resource. Please try again.");
+            }
+            Properties next = new Properties();
+            next.setProperty("state", COMPLETING);
+            writeProps(uploadDir.resolve(STATE_FILE), next, storageProps.isFsync());
+        } finally {
+            lock.unlock();
+        }
+
+        boolean done = false;
+        try {
+            ResponseEntity<String> response = doComplete(request, bucket, uploadId, uploadDir, parsedParts, precondition, partsFingerprint);
+            done = true;
+            return response;
+        } finally {
+            if (!done) {
+                // the upload stays usable: back to OPEN so the client can fix the part list or retry
+                lock.lock();
+                try {
+                    Properties reopened = new Properties();
+                    reopened.setProperty("state", OPEN);
+                    writeProps(uploadDir.resolve(STATE_FILE), reopened, storageProps.isFsync());
+                } catch (IOException e) {
+                    log.warn("Could not reopen upload {} after a failed Complete: {}", uploadId, e.toString());
+                } finally {
+                    lock.unlock();
+                }
+            }
+        }
+    }
+
+    private static String fingerprint(List<Integer> partNums, Map<Integer, String> etags) {
+        StringBuilder sb = new StringBuilder();
+        for (int pn : partNums) {
+            String etag = etags.get(pn);
+            sb.append(pn).append(':').append(etag == null ? "" : etag.replace("\"", "")).append(';');
+        }
+        return HexFormat.of().formatHex(md5Digest().digest(sb.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+    }
+
+    private ResponseEntity<String> doComplete(HttpServletRequest request, String bucket, String uploadId, Path uploadDir,
+                                              ParsedParts parsedParts, ManifestRepository.CommitPrecondition precondition,
+                                              String partsFingerprint) throws IOException {
+        List<Integer> partNums = parsedParts.partNumbers;
+        Map<Integer, String> providedEtags = parsedParts.etags;
+        Properties meta = readProps(uploadDir.resolve("meta.properties"));
         String objectKey = meta.getProperty("key");
         String contentType = meta.getProperty("contentType", "application/octet-stream");
         ChecksumAlgorithm uploadAlg = ChecksumAlgorithm.fromAwsName(meta.getProperty("checksumAlgorithm")).orElse(null);
         ChecksumType uploadType = uploadAlg == null ? null
                 : ChecksumType.valueOf(meta.getProperty("checksumType", uploadAlg.defaultMultipartType().name()));
 
-        // Parse and validate parts
-        ParsedParts parsedParts = parseCompleteXml(S3Support.openBody(request));
-        List<Integer> partNums = parsedParts.partNumbers;
-        Map<Integer, String> providedEtags = parsedParts.etags;
+        Properties etagProps = readProps(uploadDir.resolve("etags.properties"));
+        Properties partChecksums = readProps(uploadDir.resolve(CHECKSUMS_FILE));
 
-        if (partNums.isEmpty()) {
-            throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedXML",
-                    "Request body is not valid XML or contains no parts");
-        }
-
-        // Check part order (must be ascending)
-        for (int i = 1; i < partNums.size(); i++) {
-            if (partNums.get(i) <= partNums.get(i - 1)) {
-                throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidPartOrder",
-                        "The list of parts was not in ascending order");
-            }
-        }
-
-        // Load ETags and validate parts
-        Properties etagProps = new Properties();
-        try (InputStream is = Files.newInputStream(uploadDir.resolve("etags.properties"))) {
-            etagProps.load(is);
-        }
-
-        Properties partChecksums = new Properties();
-        Path checksumFile = uploadDir.resolve(CHECKSUMS_FILE);
-        if (Files.exists(checksumFile)) {
-            try (InputStream is = Files.newInputStream(checksumFile)) {
-                partChecksums.load(is);
-            }
-        }
-
-        List<InputStream> streams = new ArrayList<>();
+        List<Path> partFiles = new ArrayList<>();
         List<byte[]> partDigests = new ArrayList<>();
         byte[] etagConcat = new byte[16 * partNums.size()];
         int concatIdx = 0;
@@ -422,11 +535,15 @@ public class S3MultipartController {
             }
 
             // Add binary MD5 to concatenation
-            byte[] md5Bytes = hexToBytes(storedEtag);
+            byte[] md5Bytes = HexFormat.of().parseHex(storedEtag);
             System.arraycopy(md5Bytes, 0, etagConcat, concatIdx, 16);
             concatIdx += 16;
 
-            streams.add(Files.newInputStream(uploadDir.resolve(String.format("part-%05d", pn))));
+            Path partFile = uploadDir.resolve(String.format("part-%05d", pn));
+            if (!Files.isRegularFile(partFile)) {
+                throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidPart", "Part " + pn + " has not been uploaded");
+            }
+            partFiles.add(partFile);   // opened lazily, one at a time, while the data is streamed
         }
 
         // The composite checksum (algorithm over the concatenated binary part checksums, suffixed "-N"), and the
@@ -455,10 +572,9 @@ public class S3MultipartController {
             wholeObject = UploadChecksums.compute(uploadAlg);
         }
 
-        // Combine streams with lazy opening
-        PoolEntity pool = poolService.getByName(bucket);
+        PoolEntity pool = lookupBucket(bucket);
         ManifestEntity entity;
-        try (InputStream combined = new LazySequenceInputStream(streams)) {
+        try (InputStream combined = new LazySequenceInputStream(partFiles)) {
             entity = fileService.stageStream(combined, pool, objectKey, contentType, wholeObject);
         }
 
@@ -483,29 +599,64 @@ public class S3MultipartController {
             }
             // One transaction: the manifest with its final multipart ETag / checksum, the (bucket, key) index entry, and
             // retirement of the version it replaces.
-            entity = fileService.commitObject(entity);
+            entity = fileService.commitObject(entity, precondition);
         } finally {
             fileService.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
         }
 
-        // Delete upload directory
+        // Keep a tombstone (meta + result) so that a client retry of this Complete gets the same answer; the parts go
+        String checksumXml = checksumResultXml(entity);
+        ReentrantLock lock = lockOf(uploadId);
+        lock.lock();
         try {
-            deleteDir(uploadDir);
+            Properties done = new Properties();
+            done.setProperty("state", COMPLETED);
+            done.setProperty("completedAt", String.valueOf(System.currentTimeMillis()));
+            done.setProperty("key", objectKey);
+            done.setProperty("etag", s3Etag);
+            done.setProperty("checksumXml", checksumXml);
+            done.setProperty("partsFingerprint", partsFingerprint);
+            writeProps(uploadDir.resolve(STATE_FILE), done, storageProps.isFsync());
         } finally {
-            // Don't fail if cleanup fails
+            lock.unlock();
         }
+        deleteParts(uploadDir);
 
-        String escapedEtag = S3Support.xmlEscape(s3Etag);
+        return completeResponse(request, bucket, objectKey, s3Etag, checksumXml);
+    }
+
+    private PoolEntity lookupBucket(String bucket) {
+        return lookup.requireBucket(bucket);
+    }
+
+    private ResponseEntity<String> completeResponse(HttpServletRequest request, String bucket, String objectKey,
+                                                    String etag, String checksumXml) {
+        String host = request.getHeader("Host");
+        String location = request.getScheme() + "://" + (host != null ? host : request.getServerName())
+                + "/" + bucket + "/" + objectKey;
         return ResponseEntity.ok()
                 .header("x-amz-request-id", S3Support.requestId())
                 .body("<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                       "<CompleteMultipartUploadResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">" +
-                      "<Location>http://s3.amazonaws.com/" + S3Support.xmlEscape(bucket) + "/" +
-                      S3Support.xmlEscape(objectKey) + "</Location>" +
+                      "<Location>" + S3Support.xmlEscape(location) + "</Location>" +
                       "<Bucket>" + S3Support.xmlEscape(bucket) + "</Bucket>" +
                       "<Key>" + S3Support.xmlEscape(objectKey) + "</Key>" +
-                      "<ETag>" + escapedEtag + "</ETag>" + checksumResultXml(entity) +
+                      "<ETag>" + S3Support.xmlEscape(etag) + "</ETag>" + checksumXml +
                       "</CompleteMultipartUploadResult>");
+    }
+
+    /** Removes the part files and part records of a finished upload, keeping meta.properties and the state tombstone. */
+    private void deleteParts(Path uploadDir) {
+        try (var files = Files.list(uploadDir)) {
+            files.filter(f -> {
+                String n = f.getFileName().toString();
+                return n.startsWith("part-") || n.equals("etags.properties") || n.equals(CHECKSUMS_FILE);
+            }).forEach(f -> {
+                try { Files.deleteIfExists(f); } catch (IOException e) { log.warn("Could not delete {}: {}", f, e.toString()); }
+            });
+        } catch (IOException e) {
+            log.warn("Could not clean up the parts of {}: {}", uploadDir.getFileName(), e.toString());
+        }
     }
 
     // ── ListParts ─────────────────────────────────────────────────────────────
@@ -516,10 +667,15 @@ public class S3MultipartController {
             @PathVariable String bucket,
             @RequestParam String uploadId,
             @RequestParam(value = "part-number-marker", required = false, defaultValue = "0") int partNumberMarker,
-            @RequestParam(value = "max-parts", required = false, defaultValue = "1000") int maxParts)
+            @RequestParam(value = "max-parts", required = false, defaultValue = "1000") int maxParts,
+            HttpServletRequest request)
             throws IOException {
 
-        Path uploadDir = validateUploadId(uploadId, bucket);
+        if (partNumberMarker < 0 || maxParts < 0) {
+            throw S3Exception.invalidArgument("part-number-marker and max-parts must not be negative");
+        }
+        maxParts = Math.min(maxParts, 1000);
+        Path uploadDir = validateUploadId(uploadId, bucket, request);
 
         Properties meta = new Properties();
         try (InputStream is = Files.newInputStream(uploadDir.resolve("meta.properties"))) {
@@ -572,7 +728,8 @@ public class S3MultipartController {
             long size = Files.size(uploadDir.resolve(String.format("part-%05d", pn)));
             xml.append("<Part>")
                .append("<PartNumber>").append(pn).append("</PartNumber>")
-               .append("<LastModified>").append(S3Support.isoDate(Instant.now())).append("</LastModified>")
+               .append("<LastModified>").append(S3Support.isoDate(
+                       Files.getLastModifiedTime(uploadDir.resolve(String.format("part-%05d", pn))).toInstant())).append("</LastModified>")
                .append("<ETag>\"").append(etag).append("\"</ETag>")
                .append("<Size>").append(size).append("</Size>");
             String pc = partChecksums.getProperty(String.valueOf(pn));
@@ -606,6 +763,9 @@ public class S3MultipartController {
             @RequestParam(value = "max-uploads", required = false, defaultValue = "1000") int maxUploads)
             throws IOException {
 
+        lookup.requireBucket(bucket);
+        if (maxUploads < 0) throw S3Exception.invalidArgument("max-uploads must not be negative");
+        maxUploads = Math.min(maxUploads, 1000);
         Path mpuDirPath = getMpuDir();
         if (!Files.exists(mpuDirPath)) {
             return ResponseEntity.ok()
@@ -625,23 +785,18 @@ public class S3MultipartController {
         // Load metadata for each upload and filter by bucket, prefix, and key-marker
         List<UploadInfo> uploads = new ArrayList<>();
         for (String uploadId : uploadIds) {
-            Properties meta = new Properties();
-            try (InputStream is = Files.newInputStream(mpuDirPath.resolve(uploadId).resolve("meta.properties"))) {
-                meta.load(is);
-            } catch (IOException ignored) {
-                continue;
+            try {
+                Properties meta = readProps(mpuDirPath.resolve(uploadId).resolve("meta.properties"));
+                if (!bucket.equals(meta.getProperty("bucket"))) continue;
+                String key = meta.getProperty("key");
+                if (key == null || !key.startsWith(prefix)) continue;
+                if (!keyMarker.isEmpty() && key.compareTo(keyMarker) <= 0) continue;
+                if (COMPLETED.equals(stateOf(mpuDirPath.resolve(uploadId)))) continue;   // a tombstone, not an open upload
+                long initiatedMs = Long.parseLong(meta.getProperty("initiatedAt", "0"));
+                uploads.add(new UploadInfo(key, uploadId, Instant.ofEpochMilli(initiatedMs)));
+            } catch (IOException | RuntimeException e) {
+                log.warn("Skipping unreadable multipart upload {}: {}", uploadId, e.toString());   // one corrupt entry must not break the listing
             }
-
-            String uploadBucket = meta.getProperty("bucket");
-            if (!uploadBucket.equals(bucket)) continue;
-
-            String key = meta.getProperty("key");
-            if (!key.startsWith(prefix)) continue;
-
-            if (!keyMarker.isEmpty() && key.compareTo(keyMarker) <= 0) continue;
-
-            long initiatedMs = Long.parseLong(meta.getProperty("initiatedAt", "0"));
-            uploads.add(new UploadInfo(key, uploadId, Instant.ofEpochMilli(initiatedMs)));
         }
 
         // Sort by key
@@ -686,10 +841,19 @@ public class S3MultipartController {
     @DeleteMapping(value = "/{bucket}/**", params = "uploadId")
     public ResponseEntity<Void> abortMultipartUpload(
             @PathVariable String bucket,
-            @RequestParam String uploadId) throws IOException {
+            @RequestParam String uploadId,
+            HttpServletRequest request) throws IOException {
 
-        Path uploadDir = validateUploadId(uploadId, bucket);
-        deleteDir(uploadDir);
+        Path uploadDir = validateUploadId(uploadId, bucket, request);
+        ReentrantLock lock = lockOf(uploadId);
+        lock.lock();
+        try {
+            requireOpen(uploadDir, uploadId);   // not while a Complete is running, not after it finished
+            deleteDir(uploadDir);
+        } finally {
+            lock.unlock();
+        }
+        UPLOAD_LOCKS.remove(uploadId);
 
         return ResponseEntity.noContent()
                 .header("x-amz-request-id", S3Support.requestId())
@@ -701,13 +865,20 @@ public class S3MultipartController {
     @Component
     public static class MultipartCleanup {
         private final StorageProperties storageProps;
-        private static final long STALE_UPLOAD_AGE_MS = 7 * 24 * 60 * 60 * 1000L; // 7 days
+        private final long staleAfterMs;
+        private final long completedRetentionMs;
 
-        public MultipartCleanup(StorageProperties storageProps) {
+        public MultipartCleanup(StorageProperties storageProps,
+                                @Value("${sectoriadb.multipart.stale-after:7d}") java.time.Duration staleAfter,
+                                @Value("${sectoriadb.multipart.completed-retention:24h}") java.time.Duration completedRetention) {
             this.storageProps = storageProps;
+            this.staleAfterMs = staleAfter.toMillis();
+            this.completedRetentionMs = completedRetention.toMillis();
         }
 
-        @Scheduled(fixedDelay = 3600000) // 1 hour
+        /** Removes abandoned uploads (no activity for stale-after) and expired COMPLETED tombstones; one bad entry never stops the sweep. */
+        @Scheduled(fixedDelayString = "${sectoriadb.multipart.cleanup-interval-ms:3600000}",
+                   initialDelayString = "${sectoriadb.multipart.cleanup-interval-ms:3600000}")
         public void cleanupStaledUploads() throws IOException {
             Path mpuDir = Path.of(storageProps.getDataDir()).resolve(".multipart");
             if (!Files.exists(mpuDir)) return;
@@ -716,29 +887,81 @@ public class S3MultipartController {
             try (DirectoryStream<Path> stream = Files.newDirectoryStream(mpuDir)) {
                 for (Path uploadPath : stream) {
                     if (!Files.isDirectory(uploadPath)) continue;
-
-                    Properties meta = new Properties();
-                    try (InputStream is = Files.newInputStream(uploadPath.resolve("meta.properties"))) {
-                        meta.load(is);
-                    } catch (IOException ignored) {
-                        continue;
-                    }
-
-                    long initiated = Long.parseLong(meta.getProperty("initiatedAt", "0"));
-                    if (now - initiated > STALE_UPLOAD_AGE_MS) {
-                        log.info("Cleaning up stale upload: {} (age: {} ms)", uploadPath.getFileName(), now - initiated);
-                        deleteDir(uploadPath);
+                    String uploadId = uploadPath.getFileName().toString();
+                    ReentrantLock lock = lockOf(uploadId);
+                    if (!lock.tryLock()) continue;   // busy: next time
+                    try {
+                        sweep(uploadPath, uploadId, now);
+                    } catch (Exception e) {
+                        log.warn("Skipping multipart upload {} during cleanup: {}", uploadId, e.toString());
+                    } finally {
+                        lock.unlock();
                     }
                 }
             }
         }
 
-        private void deleteDir(Path dir) {
-            if (!Files.exists(dir)) return;
+        private void sweep(Path uploadPath, String uploadId, long now) throws IOException {
+            Properties state = readProps(uploadPath.resolve(STATE_FILE));
+            String st = state.getProperty("state", OPEN);
+            long lastActivity = lastActivity(uploadPath);
+            if (COMPLETED.equals(st)) {
+                long completedAt = parseLong(state.getProperty("completedAt"), lastActivity);
+                if (now - completedAt > completedRetentionMs) {
+                    log.info("Removing the record of completed upload {}", uploadId);
+                    deleteTree(uploadPath);
+                    UPLOAD_LOCKS.remove(uploadId);
+                }
+                return;
+            }
+            if (COMPLETING.equals(st) && now - lastActivity > 3_600_000L) {
+                // the server died during Complete: the upload is usable again
+                Properties reopened = new Properties();
+                reopened.setProperty("state", OPEN);
+                writeProps(uploadPath.resolve(STATE_FILE), reopened, storageProps.isFsync());
+                return;
+            }
+            if (COMPLETING.equals(st)) return;
+            if (now - lastActivity > staleAfterMs) {
+                log.info("Cleaning up stale upload: {} (idle {} ms)", uploadId, now - lastActivity);
+                deleteTree(uploadPath);
+                UPLOAD_LOCKS.remove(uploadId);
+            }
+        }
+
+        /** Last activity = newest of the initiation time and the modification times of the directory and its files. */
+        private static long lastActivity(Path uploadPath) throws IOException {
+            long newest = Files.getLastModifiedTime(uploadPath).toMillis();
+            try (var files = Files.list(uploadPath)) {
+                for (Path f : (Iterable<Path>) files::iterator) {
+                    newest = Math.max(newest, Files.getLastModifiedTime(f).toMillis());
+                }
+            }
+            Properties meta = new Properties();
+            try (InputStream is = Files.newInputStream(uploadPath.resolve("meta.properties"))) {
+                meta.load(is);
+                newest = Math.max(newest, parseLong(meta.getProperty("initiatedAt"), 0));
+            } catch (IOException ignored) {
+                // an upload without a readable meta file ages by the file times alone
+            }
+            return newest;
+        }
+
+        private static long parseLong(String v, long fallback) {
+            try {
+                return v == null ? fallback : Long.parseLong(v.trim());
+            } catch (NumberFormatException e) {
+                return fallback;   // a corrupt number must not abort the sweep
+            }
+        }
+
+        private static void deleteTree(Path dir) {
             try (var s = Files.walk(dir)) {
                 s.sorted(Comparator.reverseOrder())
-                 .forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) {} });
-            } catch (IOException ignored) {}
+                 .forEach(p -> { try { Files.deleteIfExists(p); } catch (IOException ignored) { /* retried next sweep */ } });
+            } catch (IOException ignored) {
+                // retried next sweep
+            }
         }
     }
 
@@ -751,7 +974,16 @@ public class S3MultipartController {
     private static final java.util.regex.Pattern UPLOAD_ID_PATTERN = java.util.regex.Pattern.compile(
             "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
 
-    private Path validateUploadId(String uploadId, String bucket) throws IOException {
+    private Path validateUploadId(String uploadId, String bucket, HttpServletRequest request) throws IOException {
+        return validateUploadId(uploadId, bucket, request, false);
+    }
+
+    /**
+     * @param allowCompleted a finished upload is still addressable (a retried Complete gets the stored answer); every
+     *                       other operation on it is NoSuchUpload
+     */
+    private Path validateUploadId(String uploadId, String bucket, HttpServletRequest request, boolean allowCompleted)
+            throws IOException {
         // Strict canonical UUID only (hex digits and hyphens): rules out path separators, "..", and the
         // lenient forms UUID.fromString accepts, before the id is ever used as a directory name.
         if (uploadId == null || !UPLOAD_ID_PATTERN.matcher(uploadId).matches()) {
@@ -766,7 +998,7 @@ public class S3MultipartController {
             throw S3Exception.noSuchUpload(uploadId);
         }
 
-        // Verify bucket ownership
+        // Verify bucket and key ownership: an upload id is only valid for the object it was created for
         Properties meta = new Properties();
         try (InputStream is = Files.newInputStream(uploadDir.resolve("meta.properties"))) {
             meta.load(is);
@@ -774,12 +1006,38 @@ public class S3MultipartController {
             throw S3Exception.noSuchUpload(uploadId);
         }
 
-        String storedBucket = meta.getProperty("bucket");
-        if (!bucket.equals(storedBucket)) {
+        if (!bucket.equals(meta.getProperty("bucket"))
+                || !S3Support.extractKey(request, bucket).equals(meta.getProperty("key"))) {
+            throw S3Exception.noSuchUpload(uploadId);
+        }
+        if (!allowCompleted && COMPLETED.equals(stateOf(uploadDir))) {
             throw S3Exception.noSuchUpload(uploadId);
         }
 
         return uploadDir;
+    }
+
+    /** "bytes=first-last" of UploadPartCopy: malformed is InvalidArgument, beyond the object is InvalidRange. */
+    static long[] parseCopyRange(String header, long total) {
+        String bad = "The x-amz-copy-source-range value must be of the form bytes=first-last where first and last are the "
+                + "zero-based offsets of the first and last bytes to copy";
+        if (header == null || !header.startsWith("bytes=")) throw S3Exception.invalidArgument(bad);
+        String[] parts = header.substring("bytes=".length()).split("-", -1);
+        if (parts.length != 2) throw S3Exception.invalidArgument(bad);
+        long start;
+        long end;
+        try {
+            start = Long.parseLong(parts[0].trim());
+            end = Long.parseLong(parts[1].trim());
+        } catch (NumberFormatException e) {
+            throw S3Exception.invalidArgument(bad);
+        }
+        if (start < 0 || end < start) throw S3Exception.invalidArgument(bad);
+        if (end >= total) {
+            throw new S3Exception(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE, "InvalidRange",
+                    "The requested range is not satisfiable");
+        }
+        return new long[]{start, end};
     }
 
     /** The checksum algorithm the upload was created with (x-amz-checksum-algorithm), or null. */
@@ -841,17 +1099,20 @@ public class S3MultipartController {
                     }
                 }
 
-                if (partNum > 0) {
-                    result.add(partNum);
-                    if (etag != null) {
-                        etags.put(partNum, etag);
-                    }
-                    if (!partChecksums.isEmpty()) checksums.put(partNum, partChecksums);
+                if (partNum < 1 || partNum > 10000) {
+                    throw S3Exception.invalidArgument("Part number must be an integer between 1 and 10000, inclusive");
                 }
+                result.add(partNum);
+                if (etag != null) {
+                    etags.put(partNum, etag);
+                }
+                if (!partChecksums.isEmpty()) checksums.put(partNum, partChecksums);
             }
 
-            result.sort(Integer::compareTo);
+            // NOT sorted: S3 requires ascending order and answers InvalidPartOrder otherwise
             return new ParsedParts(result, etags, checksums);
+        } catch (S3Exception e) {
+            throw e;
         } catch (Exception e) {
             throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedXML",
                     "The XML you provided was not well-formed or did not validate against our published schema");
@@ -896,72 +1157,54 @@ public class S3MultipartController {
         }
     }
 
-    private static byte[] hexToBytes(String hex) {
-        byte[] result = new byte[hex.length() / 2];
-        for (int i = 0; i < result.length; i++) {
-            result[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
-        }
-        return result;
-    }
-
-    /**
-     * Lazy sequence input stream that opens part files only when needed.
-     * Prevents holding thousands of file descriptors.
-     */
+    /** Concatenation of part files; each file is opened only when the previous one is exhausted (one descriptor at a time). */
     static class LazySequenceInputStream extends InputStream {
-        private final List<InputStream> streams;
-        private int currentIdx = 0;
+        private final List<Path> files;
+        private int next = 0;
         private InputStream current = null;
 
-        LazySequenceInputStream(List<InputStream> streams) {
-            this.streams = streams;
+        LazySequenceInputStream(List<Path> files) {
+            this.files = files;
+        }
+
+        private boolean advance() throws IOException {
+            if (current != null) {
+                current.close();
+                current = null;
+            }
+            if (next >= files.size()) return false;
+            current = Files.newInputStream(files.get(next++));
+            return true;
         }
 
         @Override
         public int read() throws IOException {
-            while (currentIdx < streams.size()) {
-                if (current == null) {
-                    current = streams.get(currentIdx);
-                }
+            while (true) {
+                if (current == null && !advance()) return -1;
                 int b = current.read();
-                if (b >= 0) {
-                    return b;
-                }
-                current.close();
-                current = null;
-                currentIdx++;
+                if (b >= 0) return b;
+                if (!advance()) return -1;
             }
-            return -1;
         }
 
         @Override
         public int read(byte[] b, int off, int len) throws IOException {
             if (len == 0) return 0;
-            while (currentIdx < streams.size()) {
-                if (current == null) {
-                    current = streams.get(currentIdx);
-                }
+            while (true) {
+                if (current == null && !advance()) return -1;
                 int n = current.read(b, off, len);
-                if (n > 0) {
-                    return n;
-                }
-                current.close();
-                current = null;
-                currentIdx++;
+                if (n > 0) return n;
+                if (!advance()) return -1;
             }
-            return -1;
         }
 
         @Override
         public void close() throws IOException {
             if (current != null) {
                 current.close();
+                current = null;
             }
-            for (InputStream s : streams) {
-                try {
-                    s.close();
-                } catch (IOException ignored) {}
-            }
+            next = files.size();
         }
     }
 }

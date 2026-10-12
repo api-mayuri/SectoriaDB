@@ -74,6 +74,8 @@ class GarbageCollectionS3Test {
 
     @Test
     void deletedObjectsGiveTheirSpaceBackThroughTheShell() throws Exception {
+        // the context is shared with the race test below: drain whatever garbage it left, so the counts are this test's own
+        gc.run(GcReports.Options.defaults().withGrace(0));
         assertEquals(200, send(HttpRequest.newBuilder(uri("/gc-bkt")).PUT(BodyPublishers.noBody())).statusCode());
         byte[] big = random(20_000, 1);            // 5 chunks of 4096
         byte[] small = random(300, 2);

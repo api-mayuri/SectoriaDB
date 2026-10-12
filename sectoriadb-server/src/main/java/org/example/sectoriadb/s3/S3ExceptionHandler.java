@@ -86,34 +86,47 @@ public class S3ExceptionHandler {
     }
 
     /**
-     * Fallback for IllegalArgumentException (from legacy code paths).
-     * Tries to classify the error, but convert to S3Exception where possible.
+     * An IllegalArgumentException that reached the web layer is a rejected argument (a malformed number, a range
+     * outside the object, ...), never "not found": the classification is by type, not by message text, and the
+     * internal message is logged but never sent to the client. Missing buckets and keys are raised as typed
+     * {@link S3Exception}s by the controllers.
      */
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<S3Error> handleIllegalArgument(IllegalArgumentException ex) {
-        String msg = ex.getMessage() != null ? ex.getMessage() : "";
         String requestId = S3Support.requestId();
-        log.debug("S3 error (IllegalArgumentException): {}", msg);
-
-        // Classify based on message content
-        String code;
-        HttpStatus status;
-
-        if (msg.contains("Bucket") || msg.contains("Pool") || msg.contains("pool") || msg.contains("not found")) {
-            code = "NoSuchBucket";
-            status = HttpStatus.NOT_FOUND;
-        } else if (msg.contains("already exists")) {
-            code = "BucketAlreadyExists";
-            status = HttpStatus.CONFLICT;
-        } else {
-            code = "NoSuchKey";
-            status = HttpStatus.NOT_FOUND;
-        }
-
-        ObservabilityAttributes.noteErrorCode(code);
-        return ResponseEntity.status(status)
+        log.debug("S3 error (IllegalArgumentException): {}", ex.getMessage());
+        ObservabilityAttributes.noteErrorCode("InvalidArgument");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
                 .contentType(MediaType.APPLICATION_XML)
-                .body(new S3Error(code, msg, null, requestId));
+                .body(new S3Error("InvalidArgument", "A request argument is invalid.", null, requestId));
+    }
+
+    /**
+     * The client stopped sending the body (Tomcat connection timeout): not a server fault. Answered 400 RequestTimeout like S3
+     * (the connection is usually gone, so the write may fail silently); logged at INFO without a stack trace.
+     */
+    @ExceptionHandler(java.net.SocketTimeoutException.class)
+    public ResponseEntity<S3Error> handleSocketTimeout(java.net.SocketTimeoutException ex) {
+        log.info("Request body timed out [{}]", S3Support.requestId());
+        ObservabilityAttributes.noteErrorCode("RequestTimeout");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                .contentType(MediaType.APPLICATION_XML)
+                .body(new S3Error("RequestTimeout",
+                        "Your socket connection to the server was not read from or written to within the timeout period.",
+                        null, S3Support.requestId()));
+    }
+
+    /** A conditional write (If-None-Match: * / If-Match) did not hold at commit time; nothing was committed. */
+    @ExceptionHandler(ManifestRepository.CommitPreconditionException.class)
+    public ResponseEntity<S3Error> handleCommitPrecondition(ManifestRepository.CommitPreconditionException ex) {
+        String requestId = S3Support.requestId();
+        boolean missing = ex.keyMissing();
+        String code = missing ? "NoSuchKey" : "PreconditionFailed";
+        ObservabilityAttributes.noteErrorCode(code);
+        return ResponseEntity.status(missing ? HttpStatus.NOT_FOUND : HttpStatus.PRECONDITION_FAILED)
+                .contentType(MediaType.APPLICATION_XML)
+                .body(new S3Error(code, missing ? "The specified key does not exist."
+                        : "At least one of the pre-conditions you specified did not hold.", null, requestId));
     }
 
     /** The bucket was deleted between the start of a PUT and its commit; nothing was committed. */
@@ -172,35 +185,22 @@ public class S3ExceptionHandler {
     }
 
     /**
-     * IllegalStateException: BucketNotEmpty from a bucket deletion conflict; anything else is a server-side state
-     * problem (for example the metadata store refusing work after a failed commit, "must be reopened"), which is a
-     * 503, not a bucket conflict: reads of existing objects used to answer 409 BucketNotEmpty in that state.
+     * IllegalStateException is a server-side state problem (for example the metadata store refusing work after a failed
+     * commit, "must be reopened"): 503, the internal message is only logged. A bucket that is not empty is decided
+     * by the controller (it checks the index), not by parsing this message.
      */
     @ExceptionHandler(IllegalStateException.class)
     public ResponseEntity<S3Error> handleIllegalState(IllegalStateException ex) {
-        String msg = ex.getMessage() != null ? ex.getMessage() : "";
         String requestId = S3Support.requestId();
-        boolean notEmpty = msg.contains("BucketNotEmpty") || msg.contains("still has") || msg.contains("not empty");
-        if (!notEmpty) {
-            log.error("S3 request failed, the storage engine is in an unusable state [{}]: {}", requestId, msg, ex);
-            ObservabilityAttributes.noteErrorCode("ServiceUnavailable");
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .contentType(MediaType.APPLICATION_XML)
-                    .body(new S3Error("ServiceUnavailable",
-                            "The storage engine cannot serve this request right now. Please try again later.",
-                            null, requestId));
-        }
-        log.debug("S3 conflict (IllegalStateException): {}", msg);
-        String code = "BucketNotEmpty";
-        ObservabilityAttributes.noteErrorCode(code);
-        return ResponseEntity.status(HttpStatus.CONFLICT)
+        log.error("S3 request failed, the storage engine is in an unusable state [{}]: {}", requestId, ex.getMessage(), ex);
+        ObservabilityAttributes.noteErrorCode("ServiceUnavailable");
+        return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                 .contentType(MediaType.APPLICATION_XML)
-                .body(new S3Error(code, msg, null, requestId));
+                .body(new S3Error("ServiceUnavailable",
+                        "The storage engine cannot serve this request right now. Please try again later.",
+                        null, requestId));
     }
 
-    /**
-     * Catch-all for unexpected errors.
-     */
     /** The client went away mid-download (player seek/close): not an error, and nothing can be written anymore. */
     @ExceptionHandler({AsyncRequestNotUsableException.class, ClientAbortException.class})
     public void handleClientAbort(Exception ex) {

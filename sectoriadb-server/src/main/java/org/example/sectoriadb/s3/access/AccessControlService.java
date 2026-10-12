@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.model.ManifestEntity;
 import org.example.sectoriadb.model.PoolEntity;
 import org.example.sectoriadb.repository.ManifestRepository;
+import org.example.sectoriadb.s3.S3Exception;
 import org.example.sectoriadb.s3.S3Support;
 import org.example.sectoriadb.service.PoolService;
 import org.slf4j.Logger;
@@ -41,81 +42,45 @@ public class AccessControlService {
     }
 
     /**
-     * Applies bucket ACL from request (canned ACL, headers, or XML body).
-     * If no ACL specified in request, does nothing.
+     * Applies the bucket ACL given by the request (canned ACL header, grant headers or XML body); nothing is changed
+     * when the request names no ACL. A malformed ACL document or an unknown canned ACL is an error, never a silent no-op.
      */
     public void applyBucketAcl(HttpServletRequest request, byte[] body, PoolEntity pool) {
-        try {
-            String acl = null;
+        String acl = resolveAcl(request, body);
+        if (acl != null) {
+            poolService.setAcl(pool.getName(), acl);
+        }
+    }
 
-            // Check x-amz-acl header (canned ACL)
-            String cannedAcl = request.getHeader("x-amz-acl");
-            if (cannedAcl != null && !cannedAcl.isBlank()) {
-                acl = normalizeCannedAcl(cannedAcl);
-            } else {
-                // Check x-amz-grant-read/write headers
-                String grantRead = request.getHeader("x-amz-grant-read");
-                String grantWrite = request.getHeader("x-amz-grant-write");
-                if (grantRead != null || grantWrite != null) {
-                    if (isGrantForAllUsers(grantRead) && isGrantForAllUsers(grantWrite)) {
-                        acl = "public-read-write";
-                    } else if (isGrantForAllUsers(grantRead)) {
-                        acl = "public-read";
-                    }
-                }
-            }
-
-            // Check XML body (AccessControlPolicy)
-            if (acl == null && body != null && body.length > 0) {
-                acl = parseAclFromXml(new String(body));
-            }
-
-            // Apply ACL if determined
-            if (acl != null) {
-                poolService.setAcl(pool.getName(), acl);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to apply bucket ACL: {}", e.getMessage());
+    /** As {@link #applyBucketAcl} for an object manifest (the caller persists it). */
+    public void applyObjectAcl(HttpServletRequest request, byte[] body, ManifestEntity manifest) {
+        String acl = resolveAcl(request, body);
+        if (acl != null) {
+            manifest.setAcl(acl);
         }
     }
 
     /**
-     * Applies object ACL from request.
-     * If no ACL specified in request and this is not a PutObjectAcl request, leaves as-is.
+     * The ACL the request asks for ("private", "public-read" or "public-read-write"), or null if it names none.
+     *
+     * @throws S3Exception 400 InvalidArgument for an unknown canned ACL, 400 MalformedACLError for a bad document
      */
-    public void applyObjectAcl(HttpServletRequest request, byte[] body, ManifestEntity manifest) {
-        try {
-            String acl = null;
-
-            // Check x-amz-acl header
-            String cannedAcl = request.getHeader("x-amz-acl");
-            if (cannedAcl != null && !cannedAcl.isBlank()) {
-                acl = normalizeCannedAcl(cannedAcl);
-            } else {
-                // Check grant headers
-                String grantRead = request.getHeader("x-amz-grant-read");
-                String grantWrite = request.getHeader("x-amz-grant-write");
-                if (grantRead != null || grantWrite != null) {
-                    if (isGrantForAllUsers(grantRead) && isGrantForAllUsers(grantWrite)) {
-                        acl = "public-read-write";
-                    } else if (isGrantForAllUsers(grantRead)) {
-                        acl = "public-read";
-                    }
-                }
-            }
-
-            // Check XML body
-            if (acl == null && body != null && body.length > 0) {
-                acl = parseAclFromXml(new String(body));
-            }
-
-            // Apply ACL if determined
-            if (acl != null) {
-                manifest.setAcl(acl);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to apply object ACL: {}", e.getMessage());
+    public String resolveAcl(HttpServletRequest request, byte[] body) {
+        String cannedAcl = request.getHeader("x-amz-acl");
+        if (cannedAcl != null && !cannedAcl.isBlank()) {
+            return normalizeCannedAcl(cannedAcl);
         }
+        String grantRead = request.getHeader("x-amz-grant-read");
+        String grantWrite = request.getHeader("x-amz-grant-write");
+        if (grantRead != null || grantWrite != null) {
+            if (isGrantForAllUsers(grantRead) && isGrantForAllUsers(grantWrite)) return "public-read-write";
+            if (isGrantForAllUsers(grantRead)) return "public-read";
+            return null;
+        }
+        if (body != null && body.length > 0) {
+            return parseAclFromXml(new String(body, java.nio.charset.StandardCharsets.UTF_8));
+        }
+        return null;
     }
 
     /**
@@ -251,17 +216,25 @@ public class AccessControlService {
 
     // ── Helper methods ────────────────────────────────────────────────────────
 
+    /**
+     * Canned ACLs. SectoriaDB has one owner, so the owner-oriented ones (bucket-owner-*, aws-exec-read, log-delivery-write)
+     * and authenticated-read (conservatively) are stored as "private"; an unknown name is rejected.
+     */
     private String normalizeCannedAcl(String acl) {
-        if (acl == null) return "private";
-        String normalized = acl.toLowerCase();
-        // Map authenticated-read to private (conservative approach)
-        if ("authenticated-read".equals(normalized)) {
-            return "private";
+        String normalized = acl.trim().toLowerCase(java.util.Locale.ROOT);
+        switch (normalized) {
+            case "private", "public-read", "public-read-write":
+                return normalized;
+            case "authenticated-read", "aws-exec-read", "bucket-owner-read", "bucket-owner-full-control", "log-delivery-write":
+                return "private";
+            default:
+                throw S3Exception.invalidArgument("Unknown canned ACL: " + sanitizeForMessage(acl));
         }
-        if ("public-read".equals(normalized) || "public-read-write".equals(normalized) || "private".equals(normalized)) {
-            return normalized;
-        }
-        return "private";
+    }
+
+    private static String sanitizeForMessage(String s) {
+        String t = s.replaceAll("\\p{Cntrl}", "?");
+        return t.length() > 64 ? t.substring(0, 64) + "..." : t;
     }
 
     private boolean isGrantForAllUsers(String grantHeader) {
@@ -294,7 +267,7 @@ public class AccessControlService {
                             org.w3c.dom.Node gc = granteeChildren.item(k);
                             if ("URI".equals(gc.getNodeName())) {
                                 String uri = gc.getTextContent();
-                                if (uri != null && uri.contains("global/AllUsers")) {
+                                if (uri != null && "http://acs.amazonaws.com/groups/global/AllUsers".equals(uri.trim())) {
                                     isAllUsers = true;
                                 }
                             }
@@ -318,10 +291,12 @@ public class AccessControlService {
             } else if (hasPublicRead) {
                 return "public-read";
             }
+            return "private";   // a valid document without public grants removes public access
         } catch (Exception e) {
             log.debug("Failed to parse ACL from XML: {}", e.getMessage());
+            throw new S3Exception(org.springframework.http.HttpStatus.BAD_REQUEST, "MalformedACLError",
+                    "The XML you provided was not well-formed or did not validate against our published schema");
         }
-        return null;
     }
 
     /** Sub-resources that must never be reachable anonymously (matched by parameter name). */
