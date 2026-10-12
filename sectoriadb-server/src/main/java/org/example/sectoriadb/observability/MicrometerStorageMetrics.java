@@ -214,7 +214,7 @@ public class MicrometerStorageMetrics implements StorageMetrics {
 
     @Override public void gcRun(long nanos, boolean success) {
         (success ? gcRunOk : gcRunFailed).record(nanos, TimeUnit.NANOSECONDS);
-        gcLastRunSeconds.set(System.currentTimeMillis() / 1000);
+        if (success) gcLastRunSeconds.set(System.currentTimeMillis() / 1000);   // failed passes must not hide a stuck collector from the staleness alert
     }
 
     @Override public void gcChunksFreed(long chunks, long bytes) {

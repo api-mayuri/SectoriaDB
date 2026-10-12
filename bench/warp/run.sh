@@ -74,7 +74,8 @@ export WARP_MOUNT="$RUN_DIR"
 if [ -n "$BUCKET" ]; then OWN_BUCKET=0; else BUCKET="warp-bench-${MODE}-${SIZE_LABEL}-c${CONC}-${STAMP:9:6}"; fi
 BUCKET="$(echo "$BUCKET" | tr 'A-Z_' 'a-z-')"
 
-ARGS=("$MODE" --no-color --host "$WARP_HOST" --access-key "$WARP_ACCESS_KEY" --secret-key "$WARP_SECRET_KEY"
+export WARP_ACCESS_KEY WARP_SECRET_KEY   # warp reads its credentials from the environment: nothing secret in argv
+ARGS=("$MODE" --no-color --host "$WARP_HOST"
       --bucket "$BUCKET" --concurrent "$CONC" --duration "$DURATION" --benchdata "$(warp_path warp)")
 # shellcheck disable=SC2206
 case "$MODE" in
@@ -106,10 +107,22 @@ TAGS="[\"warp\",\"mode:$MODE\",\"size:$SIZE_LABEL\",\"conc:$CONC\",\"commit:$SHA
 START_UTC="$(date -u +%FT%TZ)"
 [ "$ANNOTATE" = 1 ] && grafana_annotate_start "warp $MODE $SIZE_LABEL c$CONC @ $SHA (running)" "$TAGS"
 
+# Interrupted run (Ctrl-C / TERM): close the Grafana annotation and drop the run's own bucket, as a normal end would
+cleanup_on_exit() {
+  trap - INT TERM
+  [ "${ANNOTATE:-0}" = 1 ] && grafana_annotate_end "warp $MODE $SIZE_LABEL c$CONC @ $SHA: interrupted" "$TAGS" || true
+  if [ "${OWN_BUCKET:-1}" = 1 ] && [ "${KEEP_BUCKET:-0}" = 0 ] && [ "${LIST_EXISTING:-0}" = 0 ]; then
+    delete_bucket "$BUCKET" >/dev/null || true
+  fi
+  exit 130
+}
+trap cleanup_on_exit INT TERM
+
 set +e
 warp_exec "${ARGS[@]}" 2>&1 | tee "$RUN_DIR/warp-run.log"
 WARP_RC=${PIPESTATUS[0]}
 set -e
+trap - INT TERM
 END_UTC="$(date -u +%FT%TZ)"
 
 BENCHFILE="$(ls "$RUN_DIR"/warp*.zst 2>/dev/null | head -1 || true)"

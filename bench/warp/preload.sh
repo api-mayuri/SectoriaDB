@@ -37,7 +37,7 @@ case "$CMD" in
     # `--objects` of `get` preparation (prepares exactly N objects, then runs for 1s).
     WARP_MOUNT="$RESULTS_DIR"; mkdir -p "$WARP_MOUNT"
     # shellcheck disable=SC2046
-    warp_exec get --no-color --host "$WARP_HOST" --access-key "$WARP_ACCESS_KEY" --secret-key "$WARP_SECRET_KEY" \
+    warp_exec get --no-color --host "$WARP_HOST" \
       --bucket "$BUCKET" --concurrent "$CONC" $(size_args "$SIZE") --objects "$OBJECTS" \
       ${PREFIX:+--prefix "$PREFIX"} --noclear --duration 1s --benchdata "$(warp_path preload-$(utc_now))" "${PASS[@]}"
     ;;

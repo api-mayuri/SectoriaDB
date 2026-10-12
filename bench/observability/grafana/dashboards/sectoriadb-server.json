@@ -2764,7 +2764,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (kind) (increase(sectoriadb_integrity_crc_failures_total[$__interval]))",
+          "expr": "sum by (kind) (increase(sectoriadb_integrity_crc_failures_total[$__rate_interval]))",
           "legendFormat": "{{kind}}",
           "refId": "A",
           "editorMode": "code",
@@ -3671,7 +3671,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(sectoriadb_resize_seconds_count[$__interval])",
+          "expr": "increase(sectoriadb_resize_seconds_count[$__rate_interval])",
           "legendFormat": "resizes {{result}}",
           "refId": "A",
           "editorMode": "code",
@@ -3683,7 +3683,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(sectoriadb_resize_seconds_sum[$__interval]))",
+          "expr": "sum(rate(sectoriadb_resize_seconds_sum[$__rate_interval]))",
           "legendFormat": "time resizing (s/s)",
           "refId": "B",
           "editorMode": "code",
@@ -3695,7 +3695,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "increase(sectoriadb_auto_resize_runs_total[$__interval])",
+          "expr": "increase(sectoriadb_auto_resize_runs_total[$__rate_interval])",
           "legendFormat": "auto-resize passes",
           "refId": "C",
           "editorMode": "code",
@@ -3907,7 +3907,7 @@
     {
       "type": "timeseries",
       "title": "Cuckoo fill %",
-      "description": "Latency starts to grow at about 70 % fill; see the fill-level section of the benchmark docs.",
+      "description": "Resident tables only (sectoriadb.cache.max-resident-tables): with more blobs than that the ratio under-reports. Latency starts to grow at about 70 % fill.",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -4066,7 +4066,7 @@
     },
     {
       "type": "timeseries",
-      "title": "Disk full ETA (linear, 1h window)",
+      "title": "Disk full ETA (linear, 15 min window)",
       "description": "Free bytes divided by the current consumption rate; empty when free space is not shrinking.",
       "datasource": {
         "type": "prometheus",
@@ -4632,7 +4632,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(node_disk_read_time_seconds_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]) / clamp_min(rate(node_disk_reads_completed_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]), 1)",
+          "expr": "rate(node_disk_read_time_seconds_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]) / (rate(node_disk_reads_completed_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]) > 0)",
           "legendFormat": "read {{device}}",
           "refId": "A",
           "editorMode": "code",
@@ -4644,7 +4644,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(node_disk_write_time_seconds_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]) / clamp_min(rate(node_disk_writes_completed_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]), 1)",
+          "expr": "rate(node_disk_write_time_seconds_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]) / (rate(node_disk_writes_completed_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]) > 0)",
           "legendFormat": "write {{device}}",
           "refId": "B",
           "editorMode": "code",
@@ -4656,7 +4656,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(node_disk_flush_requests_time_seconds_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]) / clamp_min(rate(node_disk_flush_requests_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]), 1)",
+          "expr": "rate(node_disk_flush_requests_time_seconds_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]) / (rate(node_disk_flush_requests_total{device=~\"(vd|sd|nvme|xvd)[a-z0-9]*\"}[$__rate_interval]) > 0)",
           "legendFormat": "flush {{device}}",
           "refId": "C",
           "editorMode": "code",

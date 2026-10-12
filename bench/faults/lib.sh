@@ -13,7 +13,7 @@ export FAULT_ACCESS_KEY="${FAULT_ACCESS_KEY:-FAULTACCESSKEY0001}"
 export FAULT_SECRET_KEY="${FAULT_SECRET_KEY:-faultsecretkey0123456789abcdef}"
 export FAULT_ALT_ACCESS_KEY="${FAULT_ALT_ACCESS_KEY:-FAULTALTKEY0000002}"
 export FAULT_ALT_SECRET_KEY="${FAULT_ALT_SECRET_KEY:-faultaltsecret0123456789abcdef}"
-JAVA_OPTS_FAULT="${FAULT_JAVA_OPTS:--Xmx768m -XX:+UseG1GC -Dlogging.level.org.example.sectoriadb=INFO -Dlogging.level.org.springframework.web=WARN -Dlogging.level.org.springframework.web.servlet.mvc.method.annotation=WARN}"
+JAVA_OPTS_FAULT="${FAULT_JAVA_OPTS:--Xmx768m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError}"
 PY="$WORK/venv/bin/python"
 
 PASSES=0; FAILS=0

@@ -51,7 +51,8 @@ die() { echo "error: $*" >&2; exit 2; }
 # never deletes it, and every bucket keeps its blob files and in-memory tables until it is deleted, so a run that
 # creates one bucket per run must remove it again (otherwise a long matrix exhausts the server heap).
 delete_bucket() {
-  curl -sS -m 60 -o /dev/null -w '%{http_code}' -X DELETE --user "$WARP_ACCESS_KEY:$WARP_SECRET_KEY" \
+  # the credentials go to curl through a config file descriptor, not through argv (visible in `ps`)
+  curl -sS -m 60 -o /dev/null -w '%{http_code}' -X DELETE --config <(printf 'user = "%s:%s"\n' "$WARP_ACCESS_KEY" "$WARP_SECRET_KEY") \
     --aws-sigv4 "aws:amz:${SECTORIADB_REGION:-us-east-1}:s3" "$S3_CURL_ENDPOINT/$1" 2>/dev/null || echo 000
 }
 
@@ -60,7 +61,8 @@ warp_exec() {
   if [ "$WARP_RUNNER" = local ]; then
     warp "$@"
   else
-    docker run --rm --network "$WARP_NETWORK" -v "${WARP_MOUNT:-$RESULTS_DIR}:/out" "$WARP_IMAGE" "$@"
+    # WARP_ACCESS_KEY / WARP_SECRET_KEY are passed by name (inherited from this shell), never as values on the command line
+    docker run --rm --network "$WARP_NETWORK" -e WARP_ACCESS_KEY -e WARP_SECRET_KEY -v "${WARP_MOUNT:-$RESULTS_DIR}:/out" "$WARP_IMAGE" "$@"
   fi
 }
 # Path of a file inside the results directory as warp sees it.

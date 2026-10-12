@@ -267,7 +267,7 @@ def server():
         pq(f"increase(sectoriadb_cuckoo_rekeys_total[{R}])", "rekeys (hash collisions)", "B"),
         pq(f"rate(sectoriadb_cuckoo_dedup_hits_total[{R}])", "dedup hits/s", "C")], "short"), 8, 8)
     d.add(ts("CRC / integrity failures (any > 0 is an incident)", [
-        pq("sum by (kind) (increase(sectoriadb_integrity_crc_failures_total[$__interval]))", "{{kind}}")], "short", minv=0), 8, 8)
+        pq("sum by (kind) (increase(sectoriadb_integrity_crc_failures_total[$__rate_interval]))", "{{kind}}")], "short", minv=0), 8, 8)
     d.add(ts("Quarantined slots", [pq("sectoriadb_cuckoo_slots_quarantined", "quarantined")], "short", minv=0), 8, 8)
     d.add(ts("GC queue (manifests waiting for garbage collection)", [pq("sectoriadb_gc_queue_length", "queue")], "short", minv=0), 8, 8)
     d.add(ts("Chunk index", [
@@ -313,9 +313,9 @@ def server():
         pq("sectoriadb_pool_blobs_max", "most blobs in one pool", "D")], "short",
         desc="Chunks are ranked over the blobs of a pool by weighted rendezvous hashing; a fallback means the best-ranked blob was full and the next one took the chunk."), 8, 8)
     d.add(ts("Resize", [
-        pq("increase(sectoriadb_resize_seconds_count[$__interval])", "resizes {{result}}", "A"),
-        pq("sum(rate(sectoriadb_resize_seconds_sum[$__interval]))", "time resizing (s/s)", "B"),
-        pq(f"increase(sectoriadb_auto_resize_runs_total[$__interval])", "auto-resize passes", "C")], "short"), 8, 8)
+        pq("increase(sectoriadb_resize_seconds_count[$__rate_interval])", "resizes {{result}}", "A"),
+        pq("sum(rate(sectoriadb_resize_seconds_sum[$__rate_interval]))", "time resizing (s/s)", "B"),
+        pq(f"increase(sectoriadb_auto_resize_runs_total[$__rate_interval])", "auto-resize passes", "C")], "short"), 8, 8)
     d.add(ts("Cuckoo slots", [
         pq("sectoriadb_cuckoo_slots_active", "active", "A"), pq("sectoriadb_cuckoo_slots_capacity", "capacity", "B")], "short", fill=0), 8, 8)
     d.add(ts("Blobs", [pq("sectoriadb_blobs", "{{kind}}"), pq("sectoriadb_cuckoo_tables_loaded", "cuckoo loaded", "B"),
@@ -325,10 +325,10 @@ def server():
     d.row("Capacity")
     d.add(ts("Cuckoo fill %", [pq("100 * sum(sectoriadb_cuckoo_slots_active) / sum(sectoriadb_cuckoo_slots_capacity)", "slots")], "percent", minv=0, maxv=100,
              thresholds=[{"color": "green", "value": None}, {"color": "yellow", "value": 70}, {"color": "red", "value": 90}],
-             desc="Latency starts to grow at about 70 % fill; see the fill-level section of the benchmark docs."), 8, 8)
+             desc="Resident tables only (sectoriadb.cache.max-resident-tables): with more blobs than that the ratio under-reports. Latency starts to grow at about 70 % fill."), 8, 8)
     d.add(ts("Disk free %", [pq("100 * sectoriadb_disk_free_bytes / sectoriadb_disk_total_bytes", "{{dir}}")], "percent", minv=0, maxv=100,
              thresholds=[{"color": "red", "value": None}, {"color": "yellow", "value": 10}, {"color": "green", "value": 20}]), 8, 8)
-    d.add(ts("Disk full ETA (linear, 1h window)", [
+    d.add(ts("Disk full ETA (linear, 15 min window)", [
         pq('(sectoriadb_disk_free_bytes{dir="data"} > 0) / clamp_min(-deriv(sectoriadb_disk_free_bytes{dir="data"}[15m]), 1) / 3600', "hours to full")], "h", minv=0,
         desc="Free bytes divided by the current consumption rate; empty when free space is not shrinking."), 8, 8)
     d.add(ts("Objects stored", [pq("sectoriadb_objects_stored", "objects")], "short", fill=0), 6, 8)
@@ -354,9 +354,9 @@ def server():
     d.add(ts("Disk IO utilisation", [pq(f"rate(node_disk_io_time_seconds_total{{{dev}}}[{R}])", "{{device}}")], "percentunit", minv=0, maxv=1.05,
              desc="Share of time the device had IO in flight (iostat %util). Near 100 % = saturated."), 8, 8)
     d.add(ts("Disk latency (await)", [
-        pq(f"rate(node_disk_read_time_seconds_total{{{dev}}}[{R}]) / clamp_min(rate(node_disk_reads_completed_total{{{dev}}}[{R}]), 1)", "read {{device}}", "A"),
-        pq(f"rate(node_disk_write_time_seconds_total{{{dev}}}[{R}]) / clamp_min(rate(node_disk_writes_completed_total{{{dev}}}[{R}]), 1)", "write {{device}}", "B"),
-        pq(f"rate(node_disk_flush_requests_time_seconds_total{{{dev}}}[{R}]) / clamp_min(rate(node_disk_flush_requests_total{{{dev}}}[{R}]), 1)", "flush {{device}}", "C")], "s"), 8, 8)
+        pq(f"rate(node_disk_read_time_seconds_total{{{dev}}}[{R}]) / (rate(node_disk_reads_completed_total{{{dev}}}[{R}]) > 0)", "read {{device}}", "A"),
+        pq(f"rate(node_disk_write_time_seconds_total{{{dev}}}[{R}]) / (rate(node_disk_writes_completed_total{{{dev}}}[{R}]) > 0)", "write {{device}}", "B"),
+        pq(f"rate(node_disk_flush_requests_time_seconds_total{{{dev}}}[{R}]) / (rate(node_disk_flush_requests_total{{{dev}}}[{R}]) > 0)", "flush {{device}}", "C")], "s"), 8, 8)
     d.add(ts("Disk throughput", [
         pq(f"rate(node_disk_read_bytes_total{{{dev}}}[{R}])", "read {{device}}", "A"),
         pq(f"-rate(node_disk_written_bytes_total{{{dev}}}[{R}])", "write {{device}}", "B")], "Bps"), 8, 8)

@@ -16,6 +16,23 @@ groups:
         expr: increase(sectoriadb_cuckoo_table_full_total[10m]) > 0
         labels: {severity: critical}
         annotations: {summary: "inserts rejected: the cuckoo table is full (resize needed)"}
+      - alert: SectoriaMetastoreRecoveryFailed
+        expr: increase(sectoriadb_metastore_recoveries_total{result="failure"}[5m]) > 0
+        labels: {severity: critical}
+        annotations: {summary: "the metadata store failed to recover after a commit error: writes are refused (503/507), check the disk"}
+      - alert: SectoriaGcErrors
+        expr: increase(sectoriadb_gc_errors_total[1h]) > 0
+        labels: {severity: warning}
+        annotations: {summary: "garbage collection steps failed in the last hour (they are retried); look at the log"}
+      - alert: SectoriaGcStale
+        expr: time() - sectoriadb_gc_last_run_timestamp_seconds > 3600 and sectoriadb_gc_last_run_timestamp_seconds > 0
+        for: 10m
+        labels: {severity: warning}
+        annotations: {summary: "no successful garbage collection pass for over an hour (failed passes do not count)"}
+      - alert: SectoriaResizeFailed
+        expr: increase(sectoriadb_resize_seconds_count{result="failure"}[1d]) > 0
+        labels: {severity: warning}
+        annotations: {summary: "a blob resize failed in the last day"}
   - name: sectoriadb-availability
     rules:
       - alert: SectoriaDown
@@ -75,12 +92,12 @@ groups:
         expr: 100 * sum(sectoriadb_cuckoo_slots_active) / sum(sectoriadb_cuckoo_slots_capacity) > 80
         for: 10m
         labels: {severity: warning}
-        annotations: {summary: "cuckoo table above 80 % full: latency grows, expand the blob"}
+        annotations: {summary: "resident cuckoo tables above 80 % full: a pool grows at 75 %, so this means the pool reached sectoriadb.pool.max-blobs or growth failed; raise max-blobs or add capacity"}
       - alert: SectoriaFillCritical
         expr: 100 * sum(sectoriadb_cuckoo_slots_active) / sum(sectoriadb_cuckoo_slots_capacity) > 90
         for: 5m
         labels: {severity: critical}
-        annotations: {summary: "cuckoo table above 90 % full"}
+        annotations: {summary: "resident cuckoo tables above 90 % full: inserts will be rejected soon (see SectoriaTableFull)"}
       - alert: SectoriaDiskFreeLow
         expr: 100 * sectoriadb_disk_free_bytes / sectoriadb_disk_total_bytes < 15
         for: 5m

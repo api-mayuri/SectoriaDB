@@ -15,13 +15,14 @@ source "$HERE/../warp/lib.sh"
 : "${MAIN_ACCESS:=${SECTORIADB_ACCESS_KEY:-BENCHACCESSKEY0001}}"; : "${MAIN_SECRET:=${SECTORIADB_SECRET_KEY:-benchsecretkey0123456789abcdef}}"
 : "${ALT_ACCESS:=${SECTORIADB_ALT_ACCESS_KEY:-ALTACCESSKEY00002}}"; : "${ALT_SECRET:=${SECTORIADB_ALT_SECRET_KEY:-altsecretkey0123456789abcdef}}"
 : "${TIMEOUT:=1200}"
-: "${S3TESTS_REF:=master}"
+: "${S3TESTS_REF:=5522d1c}"   # pinned: the commit the documented results were measured with
 WORK="$HERE/work"; mkdir -p "$WORK"
 SRC="$WORK/s3-tests"
 
 if [ ! -d "$SRC/.git" ]; then
-  git clone --depth 1 --branch "$S3TESTS_REF" https://github.com/ceph/s3-tests.git "$SRC"
+  git clone https://github.com/ceph/s3-tests.git "$SRC"
 fi
+git -C "$SRC" checkout -q "$S3TESTS_REF"
 S3TESTS_COMMIT="$(git -C "$SRC" rev-parse --short HEAD)"
 if [ ! -x "$WORK/venv/bin/pytest" ]; then
   python3 -m venv "$WORK/venv"
@@ -31,8 +32,11 @@ fi
 
 OUT="$WORK/s3tests-$(utc_now)"; mkdir -p "$OUT"
 CONF="$OUT/s3tests.conf"
-sed -e "s|@HOST@|$S3_HOST|; s|@PORT@|$S3_PORT|; s|@MAIN_ACCESS@|$MAIN_ACCESS|; s|@MAIN_SECRET@|$MAIN_SECRET|; s|@ALT_ACCESS@|$ALT_ACCESS|; s|@ALT_SECRET@|$ALT_SECRET|" \
-    "$HERE/s3tests.conf.template" > "$CONF"
+# values may contain any character (|, &, \): substitute in Python, not in a sed expression
+S3_HOST="$S3_HOST" S3_PORT="$S3_PORT" MAIN_ACCESS="$MAIN_ACCESS" MAIN_SECRET="$MAIN_SECRET" ALT_ACCESS="$ALT_ACCESS" ALT_SECRET="$ALT_SECRET" \
+  python3 -I -c 'import os,sys; t=open(sys.argv[1]).read(); m={"@HOST@":"S3_HOST","@PORT@":"S3_PORT","@MAIN_ACCESS@":"MAIN_ACCESS","@MAIN_SECRET@":"MAIN_SECRET","@ALT_ACCESS@":"ALT_ACCESS","@ALT_SECRET@":"ALT_SECRET"}
+for k,v in m.items(): t=t.replace(k, os.environ[v])
+open(sys.argv[2],"w").write(t)' "$HERE/s3tests.conf.template" "$CONF"
 
 # Tests that need features SectoriaDB deliberately does not have are deselected up front (IAM/STS/SNS/lifecycle/website/
 # versioning/encryption/object lock/CORS/...) so the numbers show what could pass. S3TESTS_FULL=1 runs everything.
