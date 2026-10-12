@@ -19,6 +19,15 @@ public class S3Error {
     @JacksonXmlProperty(localName = "RequestId")
     private String requestId;
 
+    @JacksonXmlProperty(localName = "ProposedSize")
+    private Long proposedSize;
+
+    @JacksonXmlProperty(localName = "MinSizeAllowed")
+    private Long minSizeAllowed;
+
+    @JacksonXmlProperty(localName = "PartNumber")
+    private Integer partNumber;
+
     public S3Error() {}
 
     public S3Error(String code, String message, String resource, String requestId) {
@@ -27,6 +36,18 @@ public class S3Error {
         this.resource = resource;
         this.requestId = requestId;
     }
+
+    /** EntityTooSmall details. */
+    public S3Error withPartSizes(int partNumber, long proposedSize, long minSizeAllowed) {
+        this.partNumber = partNumber;
+        this.proposedSize = proposedSize;
+        this.minSizeAllowed = minSizeAllowed;
+        return this;
+    }
+
+    public Long getProposedSize() { return proposedSize; }
+    public Long getMinSizeAllowed() { return minSizeAllowed; }
+    public Integer getPartNumber() { return partNumber; }
 
     public String getCode() { return code; }
     public void setCode(String code) { this.code = code; }

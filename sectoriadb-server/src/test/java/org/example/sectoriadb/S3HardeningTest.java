@@ -40,6 +40,7 @@ class S3HardeningTest {
 
     @DynamicPropertySource
     static void props(DynamicPropertyRegistry r) {
+        r.add("sectoriadb.multipart.min-part-size", () -> "0");   // these tests use tiny parts on purpose
         r.add("sectoriadb.meta-dir",            () -> tempRoot.resolve("meta").toString());
         r.add("sectoriadb.data-dir",            () -> tempRoot.resolve("data").toString());
         r.add("sectoriadb.auto-resize.enabled", () -> "false");

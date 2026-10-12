@@ -118,8 +118,11 @@ public class CoreConfiguration {
     }
 
     @Bean
-    public MultipartRepository multipartRepository(MetaStoreProvider stores) {
-        return CatalogGuard.guard(MultipartRepository.class, new MetaStoreMultipartRepository(stores));
+    public MultipartRepository multipartRepository(MetaStoreProvider stores,
+            @org.springframework.beans.factory.annotation.Value("${sectoriadb.multipart.min-part-size:5MB}")
+            org.springframework.util.unit.DataSize minPartSize) {
+        return CatalogGuard.guard(MultipartRepository.class,
+                new MetaStoreMultipartRepository(stores, minPartSize.toBytes()));
     }
 
     @Bean

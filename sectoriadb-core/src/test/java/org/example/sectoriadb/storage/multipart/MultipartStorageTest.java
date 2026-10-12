@@ -580,4 +580,32 @@ class MultipartStorageTest {
         assertArrayEquals(concat(data), read(m));
         assertEquals(multipartEtag(data), m.getEtag());
     }
+
+    @Test
+    void theMinimumPartSizeAppliesToEveryPartButTheLast() throws Exception {
+        var strict = new org.example.sectoriadb.storage.multipart.MultipartService(
+                new org.example.sectoriadb.catalog.metastore.MetaStoreMultipartRepository(
+                        org.example.sectoriadb.catalog.metastore.MetaStoreProvider.of(rig.store), 1000),
+                rig.pools, rig.writer, rig.reader);
+        MultipartUpload u = create("strict");
+        MultipartPart small = upload(u, 1, bytes(999, 1));
+        MultipartPart ok = upload(u, 2, bytes(1000, 2));
+        MultipartPart last = upload(u, 3, bytes(5, 3));
+        var tooSmall = assertThrows(MultipartException.class, () -> strictComplete(strict, u, small, last));
+        assertEquals(MultipartException.Kind.ENTITY_TOO_SMALL, tooSmall.kind());
+        assertEquals(999, tooSmall.proposedSize());
+        assertEquals(1000, tooSmall.minSizeAllowed());
+        assertEquals(1, tooSmall.partNumber());
+        assertNull(rig.catalog.findObject("bkt", "strict").orElse(null));
+        assertEquals(MultipartUpload.State.OPEN, rig.multipartRepo.find(u.getUploadId()).orElseThrow().getState());
+        strictComplete(strict, u, ok, last);                       // the small last part is exempt
+        assertEquals(1005, object("strict").getTotalBytes());
+    }
+
+    private void strictComplete(org.example.sectoriadb.storage.multipart.MultipartService svc, MultipartUpload u, MultipartPart... parts) {
+        List<RequestedPart> req = new ArrayList<>();
+        for (MultipartPart p : parts) req.add(new RequestedPart(p.partNumber(), p.etag(), Map.of()));
+        svc.complete(new CompleteCommand(u.getUploadId(), u.getBucket(), u.getKey(), req,
+                ManifestRepository.CommitPrecondition.NONE, Map.of(), System.currentTimeMillis()));
+    }
 }

@@ -50,9 +50,17 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
             "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
 
     private final MetaStoreProvider stores;
+    private final long minPartSize;
 
+    /** No minimum part size (tests with tiny parts). */
     public MetaStoreMultipartRepository(MetaStoreProvider stores) {
+        this(stores, 0);
+    }
+
+    /** @param minPartSize every part but the last of a Complete must have at least this many bytes (0: no check) */
+    public MetaStoreMultipartRepository(MetaStoreProvider stores, long minPartSize) {
         this.stores = stores;
+        this.minPartSize = minPartSize;
     }
 
     private MetaStore store() {
@@ -329,6 +337,9 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
                     throw new MultipartException(Kind.INVALID_PART, "Part " + pn + " has no " + uploadAlg.name() + " checksum");
                 }
                 partDigests.add(uploadAlg.decode(row.checksum()));
+            }
+            if (minPartSize > 0 && rows.size() < cmd.parts().size() - 1 && row.size() < minPartSize) {
+                throw MultipartException.entityTooSmall(pn, row.size(), minPartSize);
             }
             ManifestEntity pm = Trees.manifest(tx, row.manifestId()).filter(m -> !m.isDeleted()).orElseThrow(() ->
                     new MultipartException(Kind.INVALID_PART, "Part " + pn + " has no stored data"));

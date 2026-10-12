@@ -19,11 +19,28 @@ public class MultipartException extends RuntimeException {
     }
 
     private final Kind kind;
+    private long proposedSize = -1;
+    private long minSizeAllowed = -1;
+    private int partNumber;
 
     public MultipartException(Kind kind, String message) {
         super(message);
         this.kind = kind;
     }
+
+    /** EntityTooSmall: the part {@code partNumber} has {@code proposedSize} bytes, fewer than {@code minSizeAllowed}. */
+    public static MultipartException entityTooSmall(int partNumber, long proposedSize, long minSizeAllowed) {
+        MultipartException e = new MultipartException(Kind.ENTITY_TOO_SMALL, "Your proposed upload is smaller than the minimum"
+                + " allowed size: part " + partNumber + " has " + proposedSize + " bytes, the minimum is " + minSizeAllowed);
+        e.proposedSize = proposedSize;
+        e.minSizeAllowed = minSizeAllowed;
+        e.partNumber = partNumber;
+        return e;
+    }
+
+    public long proposedSize() { return proposedSize; }
+    public long minSizeAllowed() { return minSizeAllowed; }
+    public int partNumber() { return partNumber; }
 
     public Kind kind() {
         return kind;

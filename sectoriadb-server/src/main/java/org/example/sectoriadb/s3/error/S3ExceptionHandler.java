@@ -152,9 +152,13 @@ public class S3ExceptionHandler {
         }
         log.debug("Multipart request refused [{}]: {} ({})", requestId, code, ex.getMessage());
         ObservabilityAttributes.noteErrorCode(code);
+        S3Error body = new S3Error(code, message, null, requestId);
+        if (ex.kind() == org.example.sectoriadb.catalog.MultipartException.Kind.ENTITY_TOO_SMALL) {
+            body.withPartSizes(ex.partNumber(), ex.proposedSize(), ex.minSizeAllowed());
+        }
         return ResponseEntity.status(status)
                 .contentType(MediaType.APPLICATION_XML)
-                .body(new S3Error(code, message, null, requestId));
+                .body(body);
     }
 
     /** The bucket was deleted between the start of a PUT and its commit; nothing was committed. */

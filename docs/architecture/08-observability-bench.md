@@ -696,7 +696,7 @@ checksum-режимы AWS, SigV2. Из 886 собранных тестов за�
 | ~~`partNumber` для multipart-объектов не поддерживается (границы частей не сохраняются в манифесте), режим `warp multipart` не работает~~ исправлено в `13-multipart-metastore`: границы частей в раскладке `MULTIPART`, `GET`/`HEAD ?partNumber` отдают `206` с байтами части; `warp multipart` и `multipart-put` идут без ошибок (doc 13, п. 17) | warp: 204 ошибки `unexpected download size`; `test_multipart_get_part` | 13 |
 | Нет модели владельца и ACL: `ListBuckets` и доступ видят все ключи, канонические ACL (`public-read`, `authenticated-read`, `bucket-owner-*`) и гранты не соответствуют S3; бакет «чужого» аккаунта доступен | 41 тест ACL, раздел «Отказы и безопасность» | 02 (дополнение) |
 | Версионирование, блокировки объектов, CORS, public access block, ownership controls, `GetObjectAttributes`, условные записи (`If-Match` / `If-None-Match` в PUT и Copy), POST-форма | 37 + 38 + 12 + 16 + 7 + 5 + 3 + 25 тестов | вне плана |
-| `EntityTooSmall` не проверяется (часть меньше 5 МиБ, не последняя, принимается); в `ListMultipartUploads` нет `Initiator` / `Owner`; метаданные больше 2 КБ принимаются | `test_multipart_upload_size_too_small`, `test_list_multipart_upload_owner` | |
+| ~~`EntityTooSmall` не проверяется~~ проверяется при `Complete` с этапа 13 (`sectoriadb.multipart.min-part-size`); в `ListMultipartUploads` нет `Initiator` / `Owner`; метаданные больше 2 КБ принимаются | `test_multipart_upload_size_too_small`, `test_list_multipart_upload_owner` | |
 | `x-amz-storage-class` не возвращается в `HeadObject` | mint: `awscli`, `mc` | |
 | Presigned URL: проверка диапазона `X-Amz-Expires` и коды ошибок отличаются от S3 | 7 тестов | 02 |
 
