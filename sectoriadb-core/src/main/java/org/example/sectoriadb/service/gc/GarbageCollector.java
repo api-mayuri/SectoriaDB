@@ -145,7 +145,8 @@ public class GarbageCollector {
             collectChunks(o.poolId(), cutoff, max, r);
             collectOrphans(o.poolId(), max, r);
             collectTombstones(o.poolId(), cutoff, max, r);
-            long releaseAt = o.graceMillis() != null ? Long.MAX_VALUE : now;
+            // only an explicit grace of 0 releases every pending old file at once; any other grace keeps the files that are not yet due
+            long releaseAt = o.graceMillis() != null && o.graceMillis() <= 0 ? Long.MAX_VALUE : now;
             r.filesDeleted += compactor.releaseOldFiles(releaseAt);
             r.filesDeleted += reaper.releaseDue(releaseAt);
         } catch (RuntimeException e) {

@@ -242,7 +242,7 @@ public class FileStorageService {
                 ByteBuffer chunk = chunks.read(i);
                 crc.update(chunk.duplicate());
                 if (isLast) checkWholeObjectCrc(entity, crc);
-                out.write(chunk);
+                writeFully(out, chunk);
 
                 if (total >= 10) {
                     int decile = (int)(10.0 * (i + 1) / total);
@@ -285,8 +285,12 @@ public class FileStorageService {
         }
 
         if (entity.getStorageKind() != StorageKind.CHUNKED) {
+            boolean done = false;
             try (OutputStream out = Files.newOutputStream(outputPath)) {
                 streamRange(entity, out, startByte, lengthBytes);
+                done = true;
+            } finally {
+                if (!done) Files.deleteIfExists(outputPath);   // no partial output
             }
             opLog.success("RESTORE_RANGE", manifestId, entity.getSourceFileName(),
                     Map.of("startByte", startByte, "length", lengthBytes, "outputPath", outputPath.toString()),
@@ -303,6 +307,7 @@ public class FileStorageService {
         log.info("Restoring range: id={} [{}, +{}] chunks [{},{}]",
                 manifestId, startByte, lengthBytes, firstIdx, lastIdx);
 
+        boolean rangeOk = false;
         try (FileChannel out = FileChannel.open(outputPath,
                 StandardOpenOption.CREATE, StandardOpenOption.WRITE,
                 StandardOpenOption.TRUNCATE_EXISTING)) {
@@ -317,9 +322,12 @@ public class FileStorageService {
                 int trimLen    = (int) Math.min(actualSize - trimStart, remaining);
 
                 chunk.position(trimStart).limit(trimStart + trimLen);
-                out.write(chunk);
+                writeFully(out, chunk);
                 written += trimLen;
             }
+            rangeOk = true;
+        } finally {
+            if (!rangeOk) Files.deleteIfExists(outputPath);   // never leave a partial range behind
         }
 
         opLog.success("RESTORE_RANGE", manifestId, entity.getSourceFileName(),
@@ -554,6 +562,13 @@ public class FileStorageService {
         }
     }
 
+    /** Writes the whole remaining content of the buffer (a FileChannel write may be short). */
+    private static void writeFully(FileChannel out, ByteBuffer buf) throws IOException {
+        while (buf.hasRemaining()) {
+            out.write(buf);
+        }
+    }
+
     /** Streams a byte range of the object to an OutputStream (for Range requests). */
     public void streamRange(ManifestEntity entity, OutputStream out,
                             long startByte, long lengthBytes) throws IOException {
@@ -570,6 +585,13 @@ public class FileStorageService {
         }
         if (entity.chunkKeyArray().length == 0) {
             // Empty file, can't stream any range
+            return;
+        }
+        if (startByte < 0 || lengthBytes < 0 || startByte + lengthBytes > entity.getTotalBytes()) {
+            throw new IllegalArgumentException("Range [" + startByte + ", +" + lengthBytes
+                    + "] exceeds object size " + entity.getTotalBytes());
+        }
+        if (lengthBytes == 0) {
             return;
         }
 
