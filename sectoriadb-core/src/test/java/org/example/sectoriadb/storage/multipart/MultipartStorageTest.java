@@ -525,4 +525,59 @@ class MultipartStorageTest {
         pool = rig.bucket("bkt");   // the name is reusable and starts empty
         assertFalse(rig.multipartRepo.hasOpenUploads("bkt"));
     }
+
+    @Test
+    void aFailedPreconditionLeavesTheUploadOpenAndItsPartsIntact() throws Exception {
+        rig.writer.storeStream(new ByteArrayInputStream(bytes(10, 1)), pool, "exists", "text/plain");
+        MultipartUpload u = create("exists");
+        MultipartPart p = upload(u, 1, bytes(2 * CHUNK, 2));
+        var ifNone = new ManifestRepository.CommitPrecondition(true, null);
+        assertThrows(ManifestRepository.CommitPreconditionException.class,
+                () -> complete(u, ifNone, Map.of(), p));
+        assertEquals(MultipartUpload.State.OPEN, rig.multipartRepo.find(u.getUploadId()).orElseThrow().getState());
+        assertEquals(1, rig.multipart.listParts(u.getUploadId(), "bkt", "exists", 0, 10).parts().size());
+        assertEquals(10, object("exists").getTotalBytes(), "the existing object was not touched");
+        complete(u, p);                                    // without the condition the same part list is accepted
+        assertEquals(2 * CHUNK, object("exists").getTotalBytes());
+    }
+
+    @Test
+    void concurrentCompletesOfOneUploadYieldOneObjectAndReplayedAnswers() throws Exception {
+        MultipartUpload u = create("twice");
+        MultipartPart p1 = upload(u, 1, bytes(3 * CHUNK, 3));
+        MultipartPart p2 = upload(u, 2, bytes(70, 4));
+        var exec = java.util.concurrent.Executors.newFixedThreadPool(4);
+        try {
+            List<java.util.concurrent.Future<MultipartRepository.CompleteResult>> fs = new ArrayList<>();
+            for (int i = 0; i < 4; i++) fs.add(exec.submit(() -> complete(u, p1, p2)));
+            List<MultipartRepository.CompleteResult> rs = new ArrayList<>();
+            for (var f : fs) rs.add(f.get());
+            assertEquals(1, rs.stream().filter(r -> !r.replayed()).count());
+            assertEquals(1, rs.stream().map(MultipartRepository.CompleteResult::manifestId).distinct().count());
+        } finally {
+            exec.shutdownNow();
+        }
+        assertEquals(1, rig.catalog.listAll().size());
+    }
+
+    @Test
+    void anUploadWithManyPartsCompletesInOneQuickTransaction() throws Exception {
+        MultipartUpload u = create("many");
+        int parts = 2000;
+        List<MultipartPart> rows = new ArrayList<>();
+        List<byte[]> data = new ArrayList<>();
+        for (int i = 1; i <= parts; i++) {
+            byte[] d = bytes(i % 7 == 0 ? CHUNK + i % 50 : 20 + i % 50, i);
+            data.add(d);
+            rows.add(upload(u, i, d));
+        }
+        long t0 = System.nanoTime();
+        complete(u, rows.toArray(new MultipartPart[0]));
+        long ms = (System.nanoTime() - t0) / 1_000_000;
+        assertTrue(ms < 5_000, "Complete of " + parts + " parts took " + ms + " ms");
+        ManifestEntity m = object("many");
+        assertEquals(parts, m.getSegments().size());
+        assertArrayEquals(concat(data), read(m));
+        assertEquals(multipartEtag(data), m.getEtag());
+    }
 }

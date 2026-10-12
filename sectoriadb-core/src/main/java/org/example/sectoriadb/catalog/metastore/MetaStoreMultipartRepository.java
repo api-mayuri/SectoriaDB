@@ -444,7 +444,8 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
         //    WITHOUT releasing anything (a tombstone would let the collector mark the small records DELETED)
         for (ManifestEntity pm : partManifests) Trees.deleteManifestRecord(tx, pm);
         // parts that were uploaded but not listed are discarded
-        List<String> listed = rows.stream().map(MultipartPart::manifestId).toList();
+        java.util.Set<String> listed = new java.util.HashSet<>();
+        for (MultipartPart row : rows) listed.add(row.manifestId());
         for (MultipartPart extra : MultipartTrees.parts(tx, uploadId)) {
             if (!listed.contains(extra.manifestId())) Trees.retire(tx, extra.manifestId());
         }
