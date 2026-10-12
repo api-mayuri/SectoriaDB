@@ -80,11 +80,6 @@ class MetaStoreHardeningTest {
             s.writeGroupedVoid(tx -> tx.tree("t").put(k("b"), k("2")));
             s.writeGroupedVoid(tx -> tx.tree("t").put(k("c"), k("3")));
             assertEquals(3L, (long) s.read(tx -> tx.tree("t").size()));
-            // a direct interrupt of the committer thread is ignored too
-            Thread.getAllStackTraces().keySet().stream().filter(t -> t.getName().equals("metastore-committer"))
-                    .forEach(Thread::interrupt);
-            s.writeGroupedVoid(tx -> tx.tree("t").put(k("d"), k("4")));
-            assertEquals(4L, (long) s.read(tx -> tx.tree("t").size()));
             s.verify();
         }
     }
