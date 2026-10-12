@@ -1,7 +1,9 @@
 package org.example.sectoriadb.service;
 
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.engine.metrics.EngineListener;
 import org.example.sectoriadb.metrics.StorageMetrics;
+import org.example.sectoriadb.metrics.StorageMetricsEngineListener;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.service.impl.CuckooHashTable;
@@ -41,6 +43,7 @@ public class HashTableCache {
     private final ConcurrentHashMap<String, CuckooHashTable.FillStats> evictedStats = new ConcurrentHashMap<>();
     private final StorageProperties props;
     private final StorageMetrics metrics;
+    private final EngineListener engineListener;
     private volatile java.util.function.Supplier<StorageIOEngine> engineFactory;
 
     public HashTableCache(StorageProperties props) {
@@ -51,6 +54,7 @@ public class HashTableCache {
     public HashTableCache(StorageProperties props, StorageMetrics metrics) {
         this.props = props;
         this.metrics = metrics;
+        this.engineListener = new StorageMetricsEngineListener(metrics);
         StorageProperties.Cache c = props.getCache();
         this.cache = new ResidentCache<>("table", c.getMaxResidentTables(), c.getMaxResidentTableBytes(),
                 CuckooHashTable::memoryBytes, t -> !t.hasUnforcedWrites(), CuckooHashTable::close,
@@ -91,12 +95,17 @@ public class HashTableCache {
     /** A new IO engine for a table of this cache (also used by {@code ResizeService} for the table it builds). */
     public StorageIOEngine newEngine() {
         var f = engineFactory;
-        return f != null ? f.get() : new FileChannelStorageIOEngine(props.isFsync(), metrics);
+        return f != null ? f.get() : new FileChannelStorageIOEngine(props.isFsync(), engineListener);
     }
 
     /** Metrics receiver given to every table this cache creates (also used by ResizeService for its new tables). */
     public StorageMetrics metrics() {
         return metrics;
+    }
+
+    /** Engine events receiver given to every table this cache creates (also used by ResizeService). */
+    public EngineListener engineListener() {
+        return engineListener;
     }
 
     /** Pins the table if it is resident (no IO, no metastore access), else returns null. */
@@ -240,7 +249,7 @@ public class HashTableCache {
         BlobFile bf = new BlobFile(e.getId(), Path.of(e.getFilePath()), e.getTotalBytes());
         CuckooHashTable table = new CuckooHashTable(
                 bf, newEngine(), new XxHash64BytesHasher(),
-                e.getNumBuckets(), e.getChunkSize(), props.getMaxEvictions(), metrics);
+                e.getNumBuckets(), e.getChunkSize(), props.getMaxEvictions(), engineListener);
         try {
             table.loadMetadataFromDisk();
         } catch (IOException | RuntimeException ex) {

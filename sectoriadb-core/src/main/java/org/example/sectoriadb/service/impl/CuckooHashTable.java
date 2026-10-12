@@ -2,7 +2,7 @@ package org.example.sectoriadb.service.impl;
 
 import org.example.sectoriadb.format.BlobLayout;
 import org.example.sectoriadb.format.InvalidBlobHeaderException;
-import org.example.sectoriadb.metrics.StorageMetrics;
+import org.example.sectoriadb.engine.metrics.EngineListener;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.model.Bucket;
 import org.example.sectoriadb.model.ChunkLocation;
@@ -83,7 +83,7 @@ public class CuckooHashTable implements AutoCloseable {
     private final int numBuckets;
     private final int chunkSize;
     private final int maxEvictions;
-    private final StorageMetrics metrics;
+    private final EngineListener listener;
     // O(1) fill statistics, kept in step with stateMeta (guarded by the write lock; read under the read lock)
     private int activeCount;
     private int quarantinedCount;
@@ -158,18 +158,18 @@ public class CuckooHashTable implements AutoCloseable {
                            int numBuckets,
                            int chunkSize,
                            int maxEvictions) {
-        this(blobFile, ioEngine, hasher, numBuckets, chunkSize, maxEvictions, StorageMetrics.NOOP);
+        this(blobFile, ioEngine, hasher, numBuckets, chunkSize, maxEvictions, EngineListener.NOOP);
     }
 
-    /** Full constructor: engine events (evictions, dedup, CRC failures, lock waits) are reported to {@code metrics}. */
+    /** Full constructor: engine events (evictions, dedup, CRC failures, lock waits) are reported to {@code listener}. */
     public CuckooHashTable(BlobFile blobFile,
                            StorageIOEngine ioEngine,
                            BytesHasher hasher,
                            int numBuckets,
                            int chunkSize,
                            int maxEvictions,
-                           StorageMetrics metrics) {
-        this.metrics = metrics;
+                           EngineListener listener) {
+        this.listener = listener;
         this.blobFile = blobFile;
         this.ioEngine = ioEngine;
         this.hasher = hasher;
@@ -238,7 +238,7 @@ public class CuckooHashTable implements AutoCloseable {
 
         long lockT0 = System.nanoTime();
         lock.writeLock().lock();
-        metrics.cuckooLockWait(System.nanoTime() - lockT0);
+        listener.onCuckooLockWait(System.nanoTime() - lockT0);
         try {
             long key = chunkKey;
             for (int attempt = 0; ; attempt++) {
@@ -249,17 +249,17 @@ public class CuckooHashTable implements AutoCloseable {
                 if (lengthMeta[idx] == len && crcMeta[idx] == crc) {
                     byte[] stored = readRaw(idx, len);
                     if (Arrays.equals(stored, payload)) {
-                        metrics.dedupHit();
+                        listener.onDedupHit();
                         return new InsertResult(key, locationOf(idx), true);
                     }
                     if (crc32c(stored, len) != crcMeta[idx]) {
                         // Stored bytes are damaged but the new bytes match the recorded CRC: heal in place.
-                        metrics.crcFailure(StorageMetrics.CrcKind.CHUNK);
+                        listener.onChecksumFailure(EngineListener.ChecksumKind.CHUNK);
                         log.warn("Healing corrupted chunk 0x{} in slot {} of blob {} from identical incoming data",
                                 Long.toHexString(key), idx, blobFile.id());
                         ioEngine.writeChunk(blobFile, dataOffset(idx), ByteBuffer.wrap(payload));
                         ioEngine.force(blobFile);
-                        metrics.dedupHit();
+                        listener.onDedupHit();
                         return new InsertResult(key, locationOf(idx), true);
                     }
                 }
@@ -274,18 +274,18 @@ public class CuckooHashTable implements AutoCloseable {
                 }
                 log.warn("Hash collision on key 0x{} in blob {}: re-keying chunk (attempt {})",
                         Long.toHexString(key), blobFile.id(), attempt + 1);
-                metrics.hashCollisionRekey();
+                listener.onHashCollisionRekey();
                 key = hasher.hash64(payload, attempt + 1L);
             }
 
             int[] path = findEvictionPath(key);
             if (path == null) {
-                metrics.tableFull();
+                listener.onTableFull();
                 throw new TableFullException("CuckooHashTable: no eviction path within " + maxEvictions
                         + " moves — table is too full");
             }
 
-            metrics.evictionPath(path.length - 1);
+            listener.onEvictionPath(path.length - 1);
 
             // Move chunks from the free end of the path backwards. Invariant after every step: each chunk
             // that was stored before the insert is ACTIVE (with its data) in at least one slot.
@@ -437,7 +437,7 @@ public class CuckooHashTable implements AutoCloseable {
                         log.error("Blob {}: slot {} quarantined: {}", blobFile.id(), idx, problem);
                         stateMeta[idx] = QUARANTINED;
                         quarantined++;
-                        metrics.crcFailure(StorageMetrics.CrcKind.SLOT_META);
+                        listener.onChecksumFailure(EngineListener.ChecksumKind.SLOT_META);
                         continue;
                     }
                     stateMeta[idx] = state;
@@ -691,7 +691,7 @@ public class CuckooHashTable implements AutoCloseable {
         } finally {
             forceLock.unlock();
         }
-        metrics.cuckooBarrier(System.nanoTime() - t0, led, covered);
+        listener.onCuckooBarrier(System.nanoTime() - t0, led, covered);
     }
 
     /** True if inserted chunks were written but not forced to disk yet (such a table is not evicted from the cache). */
@@ -919,13 +919,13 @@ public class CuckooHashTable implements AutoCloseable {
 
     private void verify(int idx, byte[] data) throws ChunkCorruptedException {
         if (data.length != lengthMeta[idx]) {
-            metrics.crcFailure(StorageMetrics.CrcKind.CHUNK);
+            listener.onChecksumFailure(EngineListener.ChecksumKind.CHUNK);
             throw new ChunkCorruptedException(blobFile.id(), idx, chunkIdMeta[idx],
                     "length " + data.length + " != recorded " + lengthMeta[idx]);
         }
         int actual = crc32c(data, data.length);
         if (actual != crcMeta[idx]) {
-            metrics.crcFailure(StorageMetrics.CrcKind.CHUNK);
+            listener.onChecksumFailure(EngineListener.ChecksumKind.CHUNK);
             throw new ChunkCorruptedException(blobFile.id(), idx, chunkIdMeta[idx],
                     String.format("CRC32C mismatch (stored bytes 0x%08x, recorded 0x%08x)", actual, crcMeta[idx]));
         }

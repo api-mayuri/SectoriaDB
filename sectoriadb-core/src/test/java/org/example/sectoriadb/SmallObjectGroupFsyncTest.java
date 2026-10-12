@@ -26,7 +26,7 @@ class SmallObjectGroupFsyncTest {
 
     private static final long BIG = 1L << 30;
 
-    private SmallObjectBlob open(RecordingMetrics m, boolean fsync) throws Exception {
+    private SmallObjectBlob open(RecordingEngineListener m, boolean fsync) throws Exception {
         Path p = dir.resolve("small_g.sob");
         if (!java.nio.file.Files.exists(p)) SmallObjectBlob.create(p);
         return SmallObjectBlob.open("g", p, fsync, BIG, 16L << 20, m);
@@ -43,7 +43,7 @@ class SmallObjectGroupFsyncTest {
 
     @Test
     void concurrentAppendsShareForcesAndEveryRecordIsReadableAfterReopen() throws Exception {
-        RecordingMetrics m = new RecordingMetrics();
+        RecordingEngineListener m = new RecordingEngineListener();
         int threads = 32, perThread = 50;
         List<Stored> stored = Collections.synchronizedList(new ArrayList<>());
         try (SmallObjectBlob b = open(m, true)) {
@@ -99,7 +99,7 @@ class SmallObjectGroupFsyncTest {
 
     @Test
     void theTailIsPublishedOnlyAfterTheForce() throws Exception {
-        RecordingMetrics m = new RecordingMetrics();
+        RecordingEngineListener m = new RecordingEngineListener();
         try (SmallObjectBlob b = open(m, true)) {
             long first = b.tail();
             CountDownLatch inForce = new CountDownLatch(1);
@@ -128,7 +128,7 @@ class SmallObjectGroupFsyncTest {
 
     @Test
     void aFailedForceFailsEveryWaiterAndTurnsTheBlobReadOnlyWithoutLosingEarlierRecords() throws Exception {
-        RecordingMetrics m = new RecordingMetrics();
+        RecordingEngineListener m = new RecordingEngineListener();
         SmallObjectBlob.Location kept;
         try (SmallObjectBlob b = open(m, true)) {
             kept = b.append(bytes(500, 1), 1);
@@ -174,7 +174,7 @@ class SmallObjectGroupFsyncTest {
 
     @Test
     void crashAtAnyPointKeepsExactlyTheCompleteRecordsBeforeIt() throws Exception {
-        RecordingMetrics m = new RecordingMetrics();
+        RecordingEngineListener m = new RecordingEngineListener();
         List<Stored> stored = Collections.synchronizedList(new ArrayList<>());
         Path p = dir.resolve("small_g.sob");
         try (SmallObjectBlob b = open(m, true)) {
@@ -238,7 +238,7 @@ class SmallObjectGroupFsyncTest {
 
     @Test
     void withoutFsyncTheTailIsPublishedImmediately() throws Exception {
-        RecordingMetrics m = new RecordingMetrics();
+        RecordingEngineListener m = new RecordingEngineListener();
         try (SmallObjectBlob b = open(m, false)) {
             SmallObjectBlob.Location l = b.append(bytes(64, 3), 3);
             assertEquals(l.offset() + SmallBlobLayout.recordSpan(64), b.tail());

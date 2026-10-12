@@ -2,7 +2,9 @@ package org.example.sectoriadb.service;
 
 import jakarta.annotation.PreDestroy;
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.engine.metrics.EngineListener;
 import org.example.sectoriadb.metrics.StorageMetrics;
+import org.example.sectoriadb.metrics.StorageMetricsEngineListener;
 import org.example.sectoriadb.model.BlobFileEntity;
 import org.example.sectoriadb.model.BlobKind;
 import org.example.sectoriadb.service.impl.SmallObjectBlob;
@@ -25,7 +27,7 @@ public class SmallBlobCache {
 
     private final ResidentCache<SmallObjectBlob> cache;
     private final StorageProperties props;
-    private final StorageMetrics metrics;
+    private final EngineListener listener;
 
     public SmallBlobCache(StorageProperties props) {
         this(props, StorageMetrics.NOOP);
@@ -34,7 +36,7 @@ public class SmallBlobCache {
     @Autowired
     public SmallBlobCache(StorageProperties props, StorageMetrics metrics) {
         this.props = props;
-        this.metrics = metrics;
+        this.listener = new StorageMetricsEngineListener(metrics);
         this.cache = new ResidentCache<>("small-object blob", props.getCache().getMaxOpenSmallBlobs(), 0,
                 b -> 1, b -> !b.isSealed(), SmallObjectBlob::close, null);
     }
@@ -55,7 +57,7 @@ public class SmallBlobCache {
                     id, entity.getFilePath());
             return SmallObjectBlob.open(id, Path.of(entity.getFilePath()), props.isFsync(),
                     props.getSmallObject().getMaxFileBytes(),
-                    props.getSmallObject().getCheckpointIntervalBytes(), metrics);
+                    props.getSmallObject().getCheckpointIntervalBytes(), listener);
         });
     }
 

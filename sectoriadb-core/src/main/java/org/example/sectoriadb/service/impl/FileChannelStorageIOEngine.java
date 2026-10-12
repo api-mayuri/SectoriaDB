@@ -1,6 +1,6 @@
 package org.example.sectoriadb.service.impl;
 
-import org.example.sectoriadb.metrics.StorageMetrics;
+import org.example.sectoriadb.engine.metrics.EngineListener;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.service.StorageIOEngine;
 
@@ -43,7 +43,7 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
     }
 
     private final boolean fsync;
-    private final StorageMetrics metrics;
+    private final EngineListener listener;
     private FileChannel channel;
     private Path channelPath;
     private boolean closed;
@@ -55,13 +55,13 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
 
     /** @param fsync if false, {@link #force} is a no-op (faster, not crash-safe; for tests). */
     public FileChannelStorageIOEngine(boolean fsync) {
-        this(fsync, StorageMetrics.NOOP);
+        this(fsync, EngineListener.NOOP);
     }
 
-    /** As {@link #FileChannelStorageIOEngine(boolean)}; reads, writes and forces are reported to {@code metrics}. */
-    public FileChannelStorageIOEngine(boolean fsync, StorageMetrics metrics) {
+    /** As {@link #FileChannelStorageIOEngine(boolean)}; reads, writes and forces are reported to {@code listener}. */
+    public FileChannelStorageIOEngine(boolean fsync, EngineListener listener) {
         this.fsync = fsync;
-        this.metrics = metrics;
+        this.listener = listener;
     }
 
     /** Fills {@code dst} completely, retrying short reads. Throws on EOF before the buffer is full. */
@@ -95,7 +95,7 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
             readFully(ch::read, buffer, offset);
             return null;
         });
-        metrics.diskRead(StorageMetrics.Target.CUCKOO, System.nanoTime() - t0, length);
+        listener.onDiskRead(EngineListener.Target.CUCKOO, System.nanoTime() - t0, length);
         buffer.flip();
         return buffer;
     }
@@ -110,7 +110,7 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
             writeFully(ch::write, chunk, offset);
             return null;
         });
-        metrics.diskWrite(StorageMetrics.Target.CUCKOO, System.nanoTime() - t0, bytes);
+        listener.onDiskWrite(EngineListener.Target.CUCKOO, System.nanoTime() - t0, bytes);
     }
 
     @Override
@@ -126,7 +126,7 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
                 ch.force(false);
                 return null;
             });
-            metrics.fsync(StorageMetrics.Target.CUCKOO, System.nanoTime() - t0);
+            listener.onFsync(EngineListener.Target.CUCKOO, System.nanoTime() - t0);
         }
     }
 

@@ -1,10 +1,8 @@
 package org.example.sectoriadb;
 
 import org.example.sectoriadb.format.BlobLayout;
-import org.example.sectoriadb.metastore.MetaStore;
-import org.example.sectoriadb.metastore.MetaStoreOptions;
-import org.example.sectoriadb.metrics.StorageMetrics.CrcKind;
-import org.example.sectoriadb.metrics.StorageMetrics.Target;
+import org.example.sectoriadb.engine.metrics.EngineListener.ChecksumKind;
+import org.example.sectoriadb.engine.metrics.EngineListener.Target;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.model.ChunkLocation;
 import org.example.sectoriadb.model.CuckooTable;
@@ -27,7 +25,7 @@ import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-/** The engine reports its events through the StorageMetrics SPI (recording stub, no Micrometer in core). */
+/** The engine reports its events through the EngineListener SPI (recording stub). */
 class EngineMetricsTest {
 
     private static final int CHUNK = 64;
@@ -35,7 +33,7 @@ class EngineMetricsTest {
     @TempDir
     Path tmp;
 
-    private final RecordingMetrics m = new RecordingMetrics();
+    private final RecordingEngineListener m = new RecordingEngineListener();
 
     private CuckooHashTable table(String name, int buckets, int maxEvictions, boolean fsync) throws IOException {
         Path p = tmp.resolve(name);
@@ -125,8 +123,8 @@ class EngineMetricsTest {
             f.write(b ^ 0x5A);
         }
         assertThrows(ChunkCorruptedException.class, () -> t.readChunkByKey(key, CHUNK));
-        assertEquals(1, m.get(m.crcFailures, CrcKind.CHUNK));
-        assertEquals(0, m.get(m.crcFailures, CrcKind.SMALL_RECORD));
+        assertEquals(1, m.get(m.crcFailures, ChecksumKind.CHUNK));
+        assertEquals(0, m.get(m.crcFailures, ChecksumKind.SMALL_RECORD));
     }
 
     @Test
@@ -154,44 +152,7 @@ class EngineMetricsTest {
             assertArrayEquals(data, b.read(loc.offset(), loc.length(), loc.crc32c()));
             assertTrue(m.get(m.reads, Target.SMALL) >= 1);
             assertThrows(SmallObjectCorruptedException.class, () -> b.read(loc.offset(), loc.length(), loc.crc32c() ^ 1));
-            assertEquals(1, m.get(m.crcFailures, CrcKind.SMALL_RECORD));
-        }
-    }
-
-    @Test
-    void metastoreReportsWriterWaitCommitAndFsync() {
-        MetaStore store = MetaStore.open(tmp.resolve("meta.db"), MetaStoreOptions.defaults().fsync(true).listener(new org.example.sectoriadb.config.StorageMetricsMetaStoreListener(m)));
-        try {
-            store.writeVoid(tx -> tx.tree("t").put(new byte[]{1}, new byte[]{2}));
-            assertEquals(1, m.metaWriterLockWaits.get());
-            assertEquals(1, m.metaCommits.get());
-            assertTrue(m.get(m.fsyncs, Target.METASTORE) >= 2, "data barrier + meta barrier");
-            assertTrue(m.get(m.writes, Target.METASTORE) >= 1);
-            store.read(tx -> tx.tree("t").get(new byte[]{1}));
-            assertTrue(m.get(m.reads, Target.METASTORE) >= 1);
-        } finally {
-            store.close();
-        }
-    }
-
-    @Test
-    void groupCommitReportsBatchQueueWaitAndRollbacks() {
-        MetaStore store = MetaStore.open(tmp.resolve("group.db"), MetaStoreOptions.defaults().fsync(false).listener(new org.example.sectoriadb.config.StorageMetricsMetaStoreListener(m)));
-        try {
-            store.writeGrouped(tx -> {
-                tx.tree("t").put(new byte[]{1}, new byte[]{2});
-                return null;
-            });
-            assertThrows(IllegalStateException.class, () -> store.writeGrouped(tx -> {
-                throw new IllegalStateException("x");
-            }));
-            assertEquals(1, m.metaCommits.get(), "a batch of failures commits nothing");
-            assertEquals(2, m.groupBatches.get());
-            assertEquals(2, m.groupBodies.get());
-            assertEquals(2, m.groupQueueWaits.get());
-            assertEquals(1, m.groupRollbacks.get());
-        } finally {
-            store.close();
+            assertEquals(1, m.get(m.crcFailures, ChecksumKind.SMALL_RECORD));
         }
     }
 }

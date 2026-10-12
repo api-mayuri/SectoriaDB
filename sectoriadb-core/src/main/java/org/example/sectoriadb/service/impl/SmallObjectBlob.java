@@ -4,7 +4,7 @@ import org.example.sectoriadb.format.InvalidBlobHeaderException;
 import org.example.sectoriadb.format.SmallBlobLayout;
 import org.example.sectoriadb.format.SmallBlobLayout.Checkpoint;
 import org.example.sectoriadb.format.SmallBlobLayout.RecordHeader;
-import org.example.sectoriadb.metrics.StorageMetrics;
+import org.example.sectoriadb.engine.metrics.EngineListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -71,7 +71,7 @@ public final class SmallObjectBlob implements AutoCloseable {
     private final long checkpointInterval;
     /** Replaced by {@link #reopenAfterInterrupt} when a thread interrupt closed it under us. */
     private volatile FileChannel channel;
-    private final StorageMetrics metrics;
+    private final EngineListener listener;
     private final ReentrantLock lock = new ReentrantLock();
 
     private final Condition durableChanged = lock.newCondition();
@@ -98,8 +98,8 @@ public final class SmallObjectBlob implements AutoCloseable {
     private long checkpointGeneration;
 
     private SmallObjectBlob(String id, Path path, boolean fsync, long maxFileBytes, long checkpointInterval,
-                            FileChannel channel, StorageMetrics metrics) {
-        this.metrics = metrics;
+                            FileChannel channel, EngineListener listener) {
+        this.listener = listener;
         this.id = id;
         this.path = path;
         this.fsync = fsync;
@@ -126,15 +126,15 @@ public final class SmallObjectBlob implements AutoCloseable {
     /** Opens an existing blob and runs recovery. */
     public static SmallObjectBlob open(String id, Path path, boolean fsync, long maxFileBytes,
                                        long checkpointIntervalBytes) throws IOException {
-        return open(id, path, fsync, maxFileBytes, checkpointIntervalBytes, StorageMetrics.NOOP);
+        return open(id, path, fsync, maxFileBytes, checkpointIntervalBytes, EngineListener.NOOP);
     }
 
-    /** As above; append lock waits, IO latencies and CRC failures are reported to {@code metrics}. */
+    /** As above; append lock waits, IO latencies and CRC failures are reported to {@code listener}. */
     public static SmallObjectBlob open(String id, Path path, boolean fsync, long maxFileBytes,
-                                       long checkpointIntervalBytes, StorageMetrics metrics) throws IOException {
+                                       long checkpointIntervalBytes, EngineListener listener) throws IOException {
         FileChannel fc = FileChannel.open(path, StandardOpenOption.READ, StandardOpenOption.WRITE);
         try {
-            SmallObjectBlob b = new SmallObjectBlob(id, path, fsync, maxFileBytes, checkpointIntervalBytes, fc, metrics);
+            SmallObjectBlob b = new SmallObjectBlob(id, path, fsync, maxFileBytes, checkpointIntervalBytes, fc, listener);
             b.recover();
             return b;
         } catch (IOException | RuntimeException e) {
@@ -232,7 +232,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         long at;
         long lockT0 = System.nanoTime();
         lock.lock();
-        metrics.smallAppendLockWait(System.nanoTime() - lockT0);
+        listener.onSmallAppendLockWait(System.nanoTime() - lockT0);
         long written0 = System.nanoTime();
         try {
             ensureOpen();
@@ -248,7 +248,7 @@ public final class SmallObjectBlob implements AutoCloseable {
             try {
                 long w0 = System.nanoTime();
                 writeAt(ByteBuffer.wrap(rec), at);
-                metrics.diskWrite(StorageMetrics.Target.SMALL, System.nanoTime() - w0, rec.length);
+                listener.onDiskWrite(EngineListener.Target.SMALL, System.nanoTime() - w0, rec.length);
             } catch (IOException e) {
                 // nobody reserved anything after `at` (reserve and write are one critical section): cut it off
                 try { onChannel(ch -> ch.truncate(at)); } catch (IOException ignored) { }
@@ -273,7 +273,7 @@ public final class SmallObjectBlob implements AutoCloseable {
             lock.unlock();
         }
         awaitDurable(end, generation);
-        metrics.smallDurabilityWait(System.nanoTime() - written0);
+        listener.onSmallDurabilityWait(System.nanoTime() - written0);
         return new Location(at, data.length, dataCrc);
     }
 
@@ -319,7 +319,7 @@ public final class SmallObjectBlob implements AutoCloseable {
             }
             long f0 = System.nanoTime();
             onChannel(ch -> { ch.force(false); return null; });
-            metrics.fsync(StorageMetrics.Target.SMALL, System.nanoTime() - f0);
+            listener.onFsync(EngineListener.Target.SMALL, System.nanoTime() - f0);
         } catch (IOException | RuntimeException e) {
             failure = e instanceof IOException io ? io : new IOException(e);
         }
@@ -330,7 +330,7 @@ public final class SmallObjectBlob implements AutoCloseable {
             if (failure == null) {
                 tail = target;                             // publish: every record below target is durable
                 pendingRecords -= records;
-                metrics.smallGroupFsync(records);
+                listener.onSmallGroupFsync(records);
                 checkpoint = tail - checkpointTail >= checkpointInterval && writable && !checkpointing;
             } else {
                 failForce(failure);
@@ -401,7 +401,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         }
         RecordHeader h = parseRecordHeader(readFully(offset, RECORD_HEADER_SIZE), 0);
         if (h == null) {
-            metrics.crcFailure(StorageMetrics.CrcKind.SMALL_RECORD);
+            listener.onChecksumFailure(EngineListener.ChecksumKind.SMALL_RECORD);
             throw new SmallObjectCorruptedException(id, offset, "bad record header (magic/CRC/state)");
         }
         if (h.state() != STATE_ACTIVE) {
@@ -412,7 +412,7 @@ public final class SmallObjectBlob implements AutoCloseable {
                     "length " + h.dataLength() + " but the manifest expects " + length);
         }
         if (h.dataCrc32c() != expectedCrc) {
-            metrics.crcFailure(StorageMetrics.CrcKind.SMALL_RECORD);
+            listener.onChecksumFailure(EngineListener.ChecksumKind.SMALL_RECORD);
             throw new SmallObjectCorruptedException(id, offset, "record CRC differs from the manifest CRC");
         }
         if (offset + h.span() > t) {
@@ -420,7 +420,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         }
         byte[] data = readFully(offset + RECORD_HEADER_SIZE, length);
         if (crc(data, 0, length) != expectedCrc) {
-            metrics.crcFailure(StorageMetrics.CrcKind.SMALL_RECORD);
+            listener.onChecksumFailure(EngineListener.ChecksumKind.SMALL_RECORD);
             throw new SmallObjectCorruptedException(id, offset, "data CRC32C mismatch");
         }
         return data;
@@ -495,7 +495,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         if (fsync) {
             long t0 = System.nanoTime();
             onChannel(ch -> { ch.force(false); return null; });
-            metrics.fsync(StorageMetrics.Target.SMALL, System.nanoTime() - t0);
+            listener.onFsync(EngineListener.Target.SMALL, System.nanoTime() - t0);
         }
     }
 
@@ -729,7 +729,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         try {
             return readFully0(pos, len);
         } finally {
-            metrics.diskRead(StorageMetrics.Target.SMALL, System.nanoTime() - t0, len);
+            listener.onDiskRead(EngineListener.Target.SMALL, System.nanoTime() - t0, len);
         }
     }
 
