@@ -20,7 +20,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -83,14 +82,14 @@ class ResizeSafetyTest {
     }
 
     void put(String key, byte[] data) throws Exception {
-        rig.files.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
+        rig.writer.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
         model.put(key, data);
     }
 
     byte[] get(String key) throws Exception {
-        ManifestEntity m = rig.files.findObject("bkt", key).orElseThrow(() -> new AssertionError("no object " + key));
+        ManifestEntity m = rig.catalog.findObject("bkt", key).orElseThrow(() -> new AssertionError("no object " + key));
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        rig.files.streamToOutput(m, out);
+        rig.reader.streamToOutput(m, out);
         return out.toByteArray();
     }
 
@@ -188,11 +187,11 @@ class ResizeSafetyTest {
         for (int i = 0; i < 6; i++) put("pre" + i, bytes(3 * CHUNK, 200 + i));
         BlobFileEntity victim = cuckoo().get(0);
         byte[] data = bytes(8 * CHUNK, 999);
-        ManifestEntity staged = rig.files.stageStream(new ByteArrayInputStream(data), pool, "straddler", null,
+        ManifestEntity staged = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "straddler", null,
                 org.example.sectoriadb.checksum.UploadChecksums.none());
         assertTrue(rig.chunks.countByBlob(victim.getId()) < 8 * 2 + 18, "sanity: index knows no chunk of the staged upload yet");
         BlobFileEntity replacement = rig.resizeService.resizeBlobFile(victim.getId(), BUCKETS * 2);
-        rig.files.commitObject(staged);          // placements name the old blob: redirected to the replacement
+        rig.writer.commitObject(staged);          // placements name the old blob: redirected to the replacement
         model.put("straddler", data);
         assertAllReadable();
         long chunks = rig.chunks.countByBlob(replacement.getId());
@@ -203,7 +202,7 @@ class ResizeSafetyTest {
     void aReaderWithAnOlderIndexSnapshotKeepsReadingAcrossTheResize() throws Exception {
         byte[] data = bytes(40 * CHUNK, 31);
         put("big", data);
-        ManifestEntity m = rig.files.findObject("bkt", "big").orElseThrow();
+        ManifestEntity m = rig.catalog.findObject("bkt", "big").orElseThrow();
         BlobFileEntity victim = cuckoo().get(0);
         ChunkStore.Reader reader = rig.chunkStore.reader(m.getPoolId(), m.chunkKeyArray(), m.getChunkSize(), m.getLastChunkSize());
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -250,7 +249,7 @@ class ResizeSafetyTest {
     void theCollectorLeavesAFrozenBlobAloneAndFreesItsChunksAfterTheResize() throws Exception {
         put("keep", bytes(4 * CHUNK, 1));
         put("gone", bytes(6 * CHUNK, 2));
-        rig.files.deleteObject("bkt", "gone");
+        rig.catalog.deleteObject("bkt", "gone");
         model.remove("gone");
         BlobFileEntity victim = cuckoo().get(0);
         long[] freedDuringFreeze = new long[1];
@@ -279,7 +278,7 @@ class ResizeSafetyTest {
     void restoringAMissingChunkWaitsForTheFreezeAndHealsTheReplacement() throws Exception {
         byte[] data = bytes(3 * CHUNK, 5);
         put("victim", data);
-        ManifestEntity m = rig.files.findObject("bkt", "victim").orElseThrow();
+        ManifestEntity m = rig.catalog.findObject("bkt", "victim").orElseThrow();
         BlobFileEntity blob = cuckoo().get(0);
         assertTrue(rig.table(blob).freeSlot(m.chunkKeyArray()[1]) > 0, "the table loses one chunk, the index keeps it");
         ExecutorService ex = Executors.newSingleThreadExecutor();

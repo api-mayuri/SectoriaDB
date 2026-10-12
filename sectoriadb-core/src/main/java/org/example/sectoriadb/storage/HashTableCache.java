@@ -12,8 +12,6 @@ import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -34,7 +32,6 @@ import org.example.sectoriadb.engine.io.StorageIOEngine;
  * <p>The fill statistics of an evicted table are remembered until it is loaded again (nothing else changes a blob), so
  * placement weights and gauges need no reload. Call {@link #evict} before replacing or deleting a blob file.
  */
-@Service
 public class HashTableCache {
 
     private static final Logger log = LoggerFactory.getLogger(HashTableCache.class);
@@ -47,11 +44,6 @@ public class HashTableCache {
     private final EngineListener engineListener;
     private volatile java.util.function.Supplier<StorageIOEngine> engineFactory;
 
-    public HashTableCache(StorageProperties props) {
-        this(props, StorageMetrics.NOOP);
-    }
-
-    @Autowired
     public HashTableCache(StorageProperties props, StorageMetrics metrics) {
         this.props = props;
         this.metrics = metrics;

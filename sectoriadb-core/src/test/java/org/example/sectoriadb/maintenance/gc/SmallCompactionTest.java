@@ -69,21 +69,21 @@ class SmallCompactionTest {
     }
 
     ManifestEntity put(String key, byte[] data) throws Exception {
-        return rig.files.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
+        return rig.writer.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
     }
 
     byte[] get(String key) throws Exception {
-        return read(rig.files.findObject("bkt", key).orElseThrow());
+        return read(rig.catalog.findObject("bkt", key).orElseThrow());
     }
 
     byte[] read(ManifestEntity m) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        rig.files.streamToOutput(m, out);
+        rig.reader.streamToOutput(m, out);
         return out.toByteArray();
     }
 
     String blobOf(String key) {
-        return rig.files.findObject("bkt", key).orElseThrow().getSmallBlobId();
+        return rig.catalog.findObject("bkt", key).orElseThrow().getSmallBlobId();
     }
 
     List<BlobFileEntity> smallBlobs() {
@@ -108,7 +108,7 @@ class SmallCompactionTest {
         for (String k : List.copyOf(model.keySet())) {
             if (!blobOf(k).equals(first)) continue;
             if (kept++ < keep) continue;
-            rig.files.deleteObject("bkt", k);
+            rig.catalog.deleteObject("bkt", k);
             model.remove(k);
         }
         return first;
@@ -159,7 +159,7 @@ class SmallCompactionTest {
         Map<String, byte[]> model = fill(50);
         deleteMostOfTheFirstBlob(model, 3);
         String survivor = model.keySet().iterator().next();
-        ManifestEntity holder = rig.files.findObject("bkt", survivor).orElseThrow();   // snapshot from before the compaction
+        ManifestEntity holder = rig.catalog.findObject("bkt", survivor).orElseThrow();   // snapshot from before the compaction
         String oldId = holder.getSmallBlobId();
         gc0();
         assertTrue(rig.gc.compact(pool, false).stream().anyMatch(CompactionReport::compacted));
@@ -177,7 +177,7 @@ class SmallCompactionTest {
     @Test
     void blobsBelowTheThresholdAndTheAppendTargetAreLeftAlone() throws Exception {
         Map<String, byte[]> model = fill(50);
-        rig.files.deleteObject("bkt", "o0");                           // one dead record: far below 50 %
+        rig.catalog.deleteObject("bkt", "o0");                           // one dead record: far below 50 %
         model.remove("o0");
         gc0();
         assertTrue(rig.gc.compact(pool, false).isEmpty(), "nothing is eligible");
@@ -196,11 +196,11 @@ class SmallCompactionTest {
         Map<String, byte[]> model = fill(50);
         deleteMostOfTheFirstBlob(model, 3);
         gc0();
-        ManifestEntity staged = rig.files.stageStream(new ByteArrayInputStream(bytes(SIZE, 4242)), pool, "inflight", null,
+        ManifestEntity staged = rig.writer.stageStream(new ByteArrayInputStream(bytes(SIZE, 4242)), pool, "inflight", null,
                 UploadChecksums.none());                                 // a small record written, not committed
         CompactionReport r = rig.gc.compact(pool, false).stream().filter(x -> !x.compacted()).findFirst().orElseThrow();
         assertTrue(r.reason().contains("in flight"), r.reason());
-        rig.files.commitObject(staged);
+        rig.writer.commitObject(staged);
         assertTrue(rig.gc.compact(pool, false).stream().anyMatch(CompactionReport::compacted));
         assertArrayEquals(bytes(SIZE, 4242), get("inflight"));
         for (var e : model.entrySet()) assertArrayEquals(e.getValue(), get(e.getKey()), e.getKey());
@@ -224,7 +224,7 @@ class SmallCompactionTest {
         String first = blobOf("o0");
         for (int i = 0; i < 300; i++) {
             if (i % 10 != 0 && blobOf("o" + i).equals(first)) {
-                rig.files.deleteObject("bkt", "o" + i);
+                rig.catalog.deleteObject("bkt", "o" + i);
                 model.remove("o" + i);
             }
         }
@@ -269,7 +269,7 @@ class SmallCompactionTest {
                     if (n % 3 == 0) {
                         String victim = "w" + (n - 2);
                         model.remove(victim);
-                        rig.files.deleteObject("bkt", victim);
+                        rig.catalog.deleteObject("bkt", victim);
                     }
                 }
             } catch (Exception e) {
@@ -309,7 +309,7 @@ class SmallCompactionTest {
         }
         // after the snapshot: one of the objects is deleted, and the old blob can no longer take appends anyway
         String victimKey = live.get(2).getObjectKey();
-        rig.files.deleteObject("bkt", victimKey);
+        rig.catalog.deleteObject("bkt", victimKey);
         model.remove(victimKey);
 
         GcRepository.CompactionSwap swap = rig.gcRepo.swapSmallBlob(oldId, target.getId(), moves);

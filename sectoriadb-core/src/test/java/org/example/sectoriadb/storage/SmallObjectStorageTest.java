@@ -1,5 +1,7 @@
 package org.example.sectoriadb.storage;
 
+import org.example.sectoriadb.metrics.StorageMetrics;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.catalog.BlobFileEntity;
@@ -7,7 +9,6 @@ import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.StorageKind;
-import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
 import org.junit.jupiter.api.AfterEach;
@@ -33,12 +34,7 @@ import org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreManifestRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStorePoolRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
-import org.example.sectoriadb.storage.BlobService;
-import org.example.sectoriadb.storage.ChunkStore;
-import org.example.sectoriadb.storage.FileStorageService;
-import org.example.sectoriadb.storage.HashTableCache;
 import org.example.sectoriadb.audit.OperationLogService;
-import org.example.sectoriadb.storage.SmallBlobCache;
 
 /** FileStorageService routing: empty / small (whole record) / chunked, and all read paths for each kind. */
 class SmallObjectStorageTest {
@@ -55,7 +51,9 @@ class SmallObjectStorageTest {
     HashTableCache cache;
     SmallBlobCache smallCache;
     BlobService blobService;
-    FileStorageService files;
+    ObjectWriter writer;
+    ObjectReader reader;
+    ObjectCatalog catalog;
     PoolEntity pool;
     ObjectMapper mapper;
     MetaStore store;
@@ -93,12 +91,14 @@ class SmallObjectStorageTest {
         poolRepo = new MetaStorePoolRepository(stores);
         blobRepo = new MetaStoreBlobFileRepository(stores);
         manifestRepo = new MetaStoreManifestRepository(stores);
-        cache = new HashTableCache(props);
-        smallCache = new SmallBlobCache(props);
+        cache = new HashTableCache(props, StorageMetrics.NOOP);
+        smallCache = new SmallBlobCache(props, StorageMetrics.NOOP);
         OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         blobService = new BlobService(blobRepo, cache, smallCache, props, opLog);
-        var chunkStore = new org.example.sectoriadb.storage.ChunkStore(new org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository(stores), blobService, cache);
-        files = new FileStorageService(manifestRepo, blobService, cache, smallCache, chunkStore, opLog, props);
+        var chunkStore = new org.example.sectoriadb.storage.ChunkStore(new org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository(stores), blobService, cache, props);
+        catalog = new ObjectCatalog(manifestRepo, opLog);
+        writer = new ObjectWriter(manifestRepo, blobService, cache, smallCache, chunkStore, opLog, props);
+        reader = new ObjectReader(chunkStore, smallCache, catalog, opLog, StorageMetrics.NOOP);
     }
 
     private static byte[] bytes(int n) {
@@ -108,12 +108,12 @@ class SmallObjectStorageTest {
     }
 
     private ManifestEntity put(byte[] data) throws Exception {
-        return files.storeStream(new java.io.ByteArrayInputStream(data), pool, "k" + data.length, null);
+        return writer.storeStream(new java.io.ByteArrayInputStream(data), pool, "k" + data.length, null);
     }
 
     private byte[] get(ManifestEntity m) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        files.streamToOutput(manifestRepo.findById(m.getId()).orElseThrow(), out);
+        reader.streamToOutput(manifestRepo.findById(m.getId()).orElseThrow(), out);
         return out.toByteArray();
     }
 
@@ -158,40 +158,40 @@ class SmallObjectStorageTest {
         ManifestEntity m = put(small);
         for (long[] r : new long[][]{{0, 1}, {0, 3000}, {2999, 1}, {100, 2000}, {1, 2998}}) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            files.streamRange(manifestRepo.findById(m.getId()).orElseThrow(), out, r[0], r[1]);
+            reader.streamRange(manifestRepo.findById(m.getId()).orElseThrow(), out, r[0], r[1]);
             assertArrayEquals(Arrays.copyOfRange(small, (int) r[0], (int) (r[0] + r[1])), out.toByteArray());
         }
         assertThrows(IllegalArgumentException.class,
-                () -> files.streamRange(m, new ByteArrayOutputStream(), 2999, 2));
+                () -> reader.streamRange(m, new ByteArrayOutputStream(), 2999, 2));
 
         // restore / restoreRange to disk for SMALL, EMPTY and CHUNKED
         Path out = root.resolve("out.bin");
-        files.restore(m.getId(), out);
+        reader.restore(m.getId(), out);
         assertArrayEquals(small, Files.readAllBytes(out));
-        files.restoreRange(m.getId(), out, 10, 20);
+        reader.restoreRange(m.getId(), out, 10, 20);
         assertArrayEquals(Arrays.copyOfRange(small, 10, 30), Files.readAllBytes(out));
 
         ManifestEntity empty = put(new byte[0]);
-        files.restore(empty.getId(), out);
+        reader.restore(empty.getId(), out);
         assertEquals(0, Files.size(out));
-        assertThrows(IllegalArgumentException.class, () -> files.restoreRange(empty.getId(), out, 0, 1));
+        assertThrows(IllegalArgumentException.class, () -> reader.restoreRange(empty.getId(), out, 0, 1));
 
         byte[] big = bytes(CHUNK * 3 + 5);
         ManifestEntity chunked = put(big);
-        files.restore(chunked.getId(), out);
+        reader.restore(chunked.getId(), out);
         assertArrayEquals(big, Files.readAllBytes(out));
-        files.restoreRange(chunked.getId(), out, CHUNK - 3, 10);
+        reader.restoreRange(chunked.getId(), out, CHUNK - 3, 10);
         assertArrayEquals(Arrays.copyOfRange(big, CHUNK - 3, CHUNK + 7), Files.readAllBytes(out));
     }
 
     @Test
     void deleteLeavesTheRecordForTheCollector() throws Exception {
         ManifestEntity a = put(bytes(100));
-        ManifestEntity b = files.storeStream(new java.io.ByteArrayInputStream(bytes(200)), pool, "other", null);
+        ManifestEntity b = writer.storeStream(new java.io.ByteArrayInputStream(bytes(200)), pool, "other", null);
         BlobFileEntity sob = manifestRepo.findById(a.getId()).orElseThrow().getSmallBlob();
         assertEquals(2, blobService.getSmallStats(sob).liveRecords());
 
-        files.delete(a.getId());
+        catalog.delete(a.getId());
         // the record is NOT marked DELETED at delete time (a reader that holds the old manifest must still read it);
         // the garbage collector does that after the grace period (GarbageCollectionTest)
         var stats = blobService.getSmallStats(sob);
@@ -202,15 +202,15 @@ class SmallObjectStorageTest {
         assertArrayEquals(bytes(200), get(b));
 
         // empty and chunked deletes still work
-        files.delete(put(new byte[0]).getId());
-        files.delete(put(bytes(CHUNK)).getId());
+        catalog.delete(put(new byte[0]).getId());
+        catalog.delete(put(bytes(CHUNK)).getId());
     }
 
     @Test
     void everythingSurvivesARestart() throws Exception {
         ManifestEntity a = put(bytes(100));
         ManifestEntity b = put(bytes(2000));
-        files.delete(a.getId());
+        catalog.delete(a.getId());
         smallCache.closeAll();
         cache.closeAll();
 
@@ -231,7 +231,7 @@ class SmallObjectStorageTest {
         props.getSmallObject().setMaxFileBytes(4096 + 3 * 144);       // header + three 100-byte records
         ManifestEntity[] ms = new ManifestEntity[7];
         for (int i = 0; i < ms.length; i++) {
-            ms[i] = files.storeStream(new java.io.ByteArrayInputStream(bytes(100 + i)), pool, "r" + i, null);
+            ms[i] = writer.storeStream(new java.io.ByteArrayInputStream(bytes(100 + i)), pool, "r" + i, null);
         }
         long soBlobs = blobRepo.findByPoolId(pool.getId()).stream().filter(b -> b.getKind() == BlobKind.SMALL).count();
         assertTrue(soBlobs >= 2, "expected rollover, got " + soBlobs + " blob(s)");

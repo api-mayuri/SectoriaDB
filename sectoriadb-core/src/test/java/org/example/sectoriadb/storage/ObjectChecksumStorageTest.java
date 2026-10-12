@@ -1,5 +1,7 @@
 package org.example.sectoriadb.storage;
 
+import org.example.sectoriadb.metrics.StorageMetrics;
+
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.checksum.ChecksumMismatchException;
@@ -10,7 +12,6 @@ import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.StorageKind;
-import org.example.sectoriadb.storage.ObjectCorruptedException;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
 import org.junit.jupiter.api.AfterEach;
@@ -38,13 +39,7 @@ import org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreManifestRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStorePoolRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
-import org.example.sectoriadb.storage.BlobService;
-import org.example.sectoriadb.storage.ChunkStore;
-import org.example.sectoriadb.storage.FileStorageService;
-import org.example.sectoriadb.storage.HashTableCache;
-import org.example.sectoriadb.storage.ObjectVerificationService;
 import org.example.sectoriadb.audit.OperationLogService;
-import org.example.sectoriadb.storage.SmallBlobCache;
 
 /** Upload-side checksum verification, stored whole-object checksums, read-side verification, verify / verify-all. */
 class ObjectChecksumStorageTest {
@@ -59,7 +54,9 @@ class ObjectChecksumStorageTest {
     org.example.sectoriadb.catalog.ChunkRepository chunkRepo;
     ManifestRepository manifestRepo;
     PoolRepository poolRepo;
-    FileStorageService files;
+    ObjectWriter writer;
+    ObjectReader reader;
+    ObjectCatalog catalog;
     ObjectVerificationService verifier;
     PoolEntity pool;
     ObjectMapper mapper;
@@ -85,14 +82,16 @@ class ObjectChecksumStorageTest {
         poolRepo = new MetaStorePoolRepository(stores);
         blobRepo = new MetaStoreBlobFileRepository(stores);
         manifestRepo = new MetaStoreManifestRepository(stores);
-        var cache = new HashTableCache(props);
-        var smallCache = new SmallBlobCache(props);
+        var cache = new HashTableCache(props, StorageMetrics.NOOP);
+        var smallCache = new SmallBlobCache(props, StorageMetrics.NOOP);
         OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         BlobService blobService = new BlobService(blobRepo, cache, smallCache, props, opLog);
         chunkRepo = new org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository(stores);
-        var chunkStore = new org.example.sectoriadb.storage.ChunkStore(chunkRepo, blobService, cache);
-        files = new FileStorageService(manifestRepo, blobService, cache, smallCache, chunkStore, opLog, props);
-        verifier = new ObjectVerificationService(files);
+        var chunkStore = new org.example.sectoriadb.storage.ChunkStore(chunkRepo, blobService, cache, props);
+        catalog = new ObjectCatalog(manifestRepo, opLog);
+        writer = new ObjectWriter(manifestRepo, blobService, cache, smallCache, chunkStore, opLog, props);
+        reader = new ObjectReader(chunkStore, smallCache, catalog, opLog, StorageMetrics.NOOP);
+        verifier = new ObjectVerificationService(catalog, reader);
         pool = new PoolEntity("pool-1", "bkt", root.resolve("data/bkt").toString(), java.time.Instant.now());
         Files.createDirectories(Path.of(pool.getBasePath()));
         poolRepo.save(pool);
@@ -105,12 +104,12 @@ class ObjectChecksumStorageTest {
     }
 
     private ManifestEntity put(String key, byte[] data, UploadChecksums c) throws Exception {
-        return files.storeStream(new ByteArrayInputStream(data), pool, key, null, c);
+        return writer.storeStream(new ByteArrayInputStream(data), pool, key, null, c);
     }
 
     private byte[] get(ManifestEntity m) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        files.streamToOutput(manifestRepo.findById(m.getId()).orElseThrow(), out);
+        reader.streamToOutput(manifestRepo.findById(m.getId()).orElseThrow(), out);
         return out.toByteArray();
     }
 
@@ -186,7 +185,7 @@ class ObjectChecksumStorageTest {
                 return n;
             }
         };
-        files.storeStream(in, pool, "late", null, late);
+        writer.storeStream(in, pool, "late", null, late);
         assertEquals(1, manifestRepo.count());
     }
 
@@ -202,7 +201,7 @@ class ObjectChecksumStorageTest {
             manifestRepo.save(stored);
             assertThrows(ObjectCorruptedException.class, () -> get(m), "size " + n);
             Path out = root.resolve("restore-" + n);
-            assertThrows(ObjectCorruptedException.class, () -> files.restore(m.getId(), out), "restore size " + n);
+            assertThrows(ObjectCorruptedException.class, () -> reader.restore(m.getId(), out), "restore size " + n);
             assertFalse(Files.exists(out), "a corrupt restore must not leave a file behind");
         }
     }
@@ -215,7 +214,7 @@ class ObjectChecksumStorageTest {
         stored.setCrc32c("AAAAAA==");
         manifestRepo.save(stored);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        assertThrows(ObjectCorruptedException.class, () -> files.streamToOutput(manifestRepo.findById(m.getId()).orElseThrow(), out));
+        assertThrows(ObjectCorruptedException.class, () -> reader.streamToOutput(manifestRepo.findById(m.getId()).orElseThrow(), out));
         assertEquals(3 * CHUNK, out.size(), "the final chunk is withheld until the whole-object CRC is verified");
     }
 
@@ -226,7 +225,7 @@ class ObjectChecksumStorageTest {
         stored.setCrc32c("AAAAAA==");
         manifestRepo.save(stored);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        files.streamRange(manifestRepo.findById(m.getId()).orElseThrow(), out, 10, 20);
+        reader.streamRange(manifestRepo.findById(m.getId()).orElseThrow(), out, 10, 20);
         assertArrayEquals(Arrays.copyOfRange(bytes(3 * CHUNK, 31), 10, 30), out.toByteArray());
     }
 

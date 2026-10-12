@@ -9,15 +9,8 @@ import org.example.sectoriadb.catalog.BlobFileRepository;
 import org.example.sectoriadb.audit.JsonOperationLogRepository;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.PoolRepository;
-import org.example.sectoriadb.storage.BlobService;
-import org.example.sectoriadb.storage.ChunkStore;
-import org.example.sectoriadb.storage.FileStorageService;
-import org.example.sectoriadb.storage.HashTableCache;
-import org.example.sectoriadb.storage.ObjectVerificationService;
 import org.example.sectoriadb.audit.OperationLogService;
-import org.example.sectoriadb.storage.PoolService;
 import org.example.sectoriadb.maintenance.ResizeService;
-import org.example.sectoriadb.storage.SmallBlobCache;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -63,7 +56,9 @@ public final class StorageRig implements AutoCloseable {
     }
     public BlobService blobService;
     public PoolService poolService;
-    public FileStorageService files;
+    public ObjectWriter writer;
+    public ObjectReader reader;
+    public ObjectCatalog catalog;
     public ObjectVerificationService verifier;
     public org.example.sectoriadb.catalog.GcRepository gcRepo;
     public org.example.sectoriadb.maintenance.gc.SmallBlobCompactor compactor;
@@ -93,16 +88,18 @@ public final class StorageRig implements AutoCloseable {
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
         cache = new HashTableCache(props, metrics);
         if (engineFactory != null) cache.setEngineFactory(engineFactory);
-        smallCache = new SmallBlobCache(props);
+        smallCache = new SmallBlobCache(props, metrics);
         opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
         blobService = new BlobService(blobs, cache, smallCache, props, opLog);
         poolService = new PoolService(pools, blobs, opLog, props, cache, smallCache, blobService);
         chunks = new MetaStoreChunkRepository(stores);
-        chunkStore = new ChunkStore(chunks, blobService, cache);
-        files = new FileStorageService(manifests, blobService, cache, smallCache, chunkStore, opLog, props);
+        chunkStore = new ChunkStore(chunks, blobService, cache, props);
+        catalog = new ObjectCatalog(manifests, opLog);
+        writer = new ObjectWriter(manifests, blobService, cache, smallCache, chunkStore, opLog, props);
+        reader = new ObjectReader(chunkStore, smallCache, catalog, opLog, metrics);
         reaper = new org.example.sectoriadb.maintenance.BlobFileReaper(blobs, pools, cache);
         resizeService = new ResizeService(blobs, pools, cache, props, opLog, reaper);
-        verifier = new ObjectVerificationService(files);
+        verifier = new ObjectVerificationService(catalog, reader);
         gcRepo = new MetaStoreGcRepository(stores);
         compactor = new org.example.sectoriadb.maintenance.gc.SmallBlobCompactor(blobs, manifests, pools, gcRepo, blobService,
                 smallCache, chunkStore, props, metrics);

@@ -3,7 +3,7 @@ package org.example.sectoriadb;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.storage.FileStorageService;
+import org.example.sectoriadb.storage.ObjectWriter;
 import org.example.sectoriadb.storage.PoolService;
 import org.example.sectoriadb.shell.FileCommands;
 import org.junit.jupiter.api.Test;
@@ -38,14 +38,14 @@ class VerifyCommandsTest {
     }
 
     @Autowired FileCommands commands;
-    @Autowired FileStorageService files;
+    @Autowired ObjectWriter writer;
     @Autowired PoolService poolService;
     @Autowired ManifestRepository manifestRepo;
 
     private ManifestEntity put(PoolEntity pool, String key, int size) throws Exception {
         byte[] b = new byte[size];
         new Random(size).nextBytes(b);
-        return files.storeStream(new ByteArrayInputStream(b), pool, key, null);
+        return writer.storeStream(new ByteArrayInputStream(b), pool, key, null);
     }
 
     @Test

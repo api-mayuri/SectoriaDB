@@ -1,6 +1,5 @@
 package org.example.sectoriadb.catalog;
 
-import org.example.sectoriadb.catalog.ChunkEntry;
 
 import java.util.List;
 import java.util.Map;

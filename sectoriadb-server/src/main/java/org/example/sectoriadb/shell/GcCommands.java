@@ -3,7 +3,6 @@ package org.example.sectoriadb.shell;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.storage.PoolService;
 import org.example.sectoriadb.maintenance.gc.GarbageCollector;
-import org.example.sectoriadb.maintenance.gc.GcReports;
 import org.example.sectoriadb.maintenance.gc.GcReports.CompactionReport;
 import org.example.sectoriadb.maintenance.gc.GcReports.Options;
 import org.example.sectoriadb.maintenance.gc.GcReports.RunReport;

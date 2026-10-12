@@ -2,10 +2,8 @@ package org.example.sectoriadb.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.audit.OperationLogEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Repository;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -20,7 +18,6 @@ import java.util.Optional;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-@Repository
 public class JsonOperationLogRepository implements OperationLogRepository {
 
     private static final Logger log = LoggerFactory.getLogger(JsonOperationLogRepository.class);

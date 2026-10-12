@@ -10,8 +10,6 @@ import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -52,7 +50,6 @@ import org.example.sectoriadb.storage.ResidentHandle;
  * The frozen state and the redirects are memory only: after a restart the pool is whichever blob the metastore
  * names, and leftover files are removed by {@link BlobFileReaper#reconcileAtStartup}.
  */
-@Service
 public class ResizeService {
 
     private static final Logger log = LoggerFactory.getLogger(ResizeService.class);
@@ -77,7 +74,6 @@ public class ResizeService {
     private final Set<String> resizing = ConcurrentHashMap.newKeySet();
     private volatile StageHook stageHook;
 
-    @Autowired
     public ResizeService(BlobFileRepository blobRepo, PoolRepository poolRepo, HashTableCache cache,
                          StorageProperties props, OperationLogService opLog, BlobFileReaper reaper) {
         this.blobRepo = blobRepo;

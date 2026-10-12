@@ -12,7 +12,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.example.sectoriadb.engine.io.BlobFile;
 import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
-import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.junit.jupiter.api.RepeatedTest;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;

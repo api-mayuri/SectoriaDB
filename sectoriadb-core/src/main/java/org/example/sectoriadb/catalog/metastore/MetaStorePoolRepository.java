@@ -8,7 +8,6 @@ import org.example.sectoriadb.metastore.WriteTxn;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.PoolRepository;
-import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,7 +15,6 @@ import java.util.Optional;
 import java.util.function.Consumer;
 
 /** {@link PoolRepository} over the {@code pools} and {@code pools_by_name} trees. */
-@Repository
 public class MetaStorePoolRepository implements PoolRepository {
 
     private final MetaStoreProvider stores;

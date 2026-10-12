@@ -2,7 +2,6 @@ package org.example.sectoriadb.engine.blob;
 
 import org.example.sectoriadb.engine.format.BlobLayout;
 import org.example.sectoriadb.engine.io.BlobFile;
-import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
 import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,12 +10,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.nio.channels.FileChannel;
 import java.nio.file.Path;
-import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Random;
 
 import static org.junit.jupiter.api.Assertions.*;

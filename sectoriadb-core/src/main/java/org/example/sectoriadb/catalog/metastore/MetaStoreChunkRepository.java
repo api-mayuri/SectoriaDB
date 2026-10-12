@@ -5,7 +5,6 @@ import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.catalog.ChunkEntry;
 import org.example.sectoriadb.catalog.ChunkRepository;
-import org.springframework.stereotype.Repository;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
@@ -15,7 +14,6 @@ import java.util.Map;
 import java.util.Optional;
 
 /** {@link ChunkRepository} over the {@code chunks}, {@code chunks_by_blob}, {@code chunk_gc} and {@code chunk_orphans} trees. */
-@Repository
 public class MetaStoreChunkRepository implements ChunkRepository {
 
     private final MetaStoreProvider stores;

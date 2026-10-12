@@ -8,7 +8,6 @@ import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.storage.BlobService;
 import org.example.sectoriadb.storage.HashTableCache;
 import org.example.sectoriadb.storage.PoolService;
-import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;

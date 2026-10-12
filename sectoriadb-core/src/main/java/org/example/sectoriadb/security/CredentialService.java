@@ -1,10 +1,7 @@
 package org.example.sectoriadb.security;
 
-import org.example.sectoriadb.security.CredentialEntity;
-import org.example.sectoriadb.security.CredentialRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
 
 import java.security.SecureRandom;
 import java.time.Instant;
@@ -14,7 +11,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
-@Service
 public class CredentialService {
 
     private static final Logger log = LoggerFactory.getLogger(CredentialService.class);

@@ -1,13 +1,9 @@
 package org.example.sectoriadb.storage;
 
-import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ChunkRepository;
-import org.example.sectoriadb.storage.BlobService;
-import org.example.sectoriadb.storage.ChunkStore;
-import org.example.sectoriadb.storage.FileStorageService;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.example.sectoriadb.engine.error.TableFullException;
 import org.example.sectoriadb.engine.hash.BytesHasher;
@@ -71,13 +67,13 @@ class MultiBlobPoolTest {
     }
 
     ManifestEntity put(String key, byte[] data) throws Exception {
-        return rig.files.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
+        return rig.writer.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
     }
 
     byte[] get(String key) throws Exception {
-        ManifestEntity m = rig.files.findObject("bkt", key).orElseThrow();
+        ManifestEntity m = rig.catalog.findObject("bkt", key).orElseThrow();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        rig.files.streamToOutput(m, out);
+        rig.reader.streamToOutput(m, out);
         return out.toByteArray();
     }
 
@@ -237,10 +233,11 @@ class MultiBlobPoolTest {
         BlobFileEntity other = svc.create(pool, TINY_BUCKETS, CHUNK);
         fill(full);
         svc.favourite = full.getId();
-        ChunkStore store = new ChunkStore(rig.chunks, svc, rig.cache);
-        FileStorageService files = new FileStorageService(rig.manifests, svc, rig.cache, rig.smallCache, store, rig.opLog, rig.props);
+        ChunkStore store = new ChunkStore(rig.chunks, svc, rig.cache, rig.props);
+        ObjectWriter writer = writerOver(store);
+        ObjectReader reader = readerOver(store);
         byte[] data = bytes(20 * CHUNK, 88);
-        files.storeStream(new ByteArrayInputStream(data), pool, "y", null);
+        writer.storeStream(new ByteArrayInputStream(data), pool, "y", null);
         // a "full" cuckoo table still takes the keys that happen to have a free slot in reach; the rest fall through
         long inOther = rig.chunks.countByBlob(other.getId());
         assertEquals(20, inOther + rig.chunks.countByBlob(full.getId()));
@@ -248,7 +245,7 @@ class MultiBlobPoolTest {
         assertEquals(inOther, rig.metrics.placementFallbacks.get(), "each one counted as a fallback of the top choice");
         ManifestEntity m = rig.manifests.findCurrent("bkt", "y").orElseThrow();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        files.streamToOutput(m, out);
+        reader.streamToOutput(m, out);
         assertArrayEquals(data, out.toByteArray());
     }
 
@@ -258,7 +255,7 @@ class MultiBlobPoolTest {
         put("fits", bytes(60 * CHUNK, 3));
         assertThrows(TableFullException.class, () -> put("too-much", bytes(120 * CHUNK, 4)));
         assertEquals(1, cuckoo().size(), "max-blobs is a hard limit");
-        assertTrue(rig.files.findObject("bkt", "too-much").isEmpty());
+        assertTrue(rig.catalog.findObject("bkt", "too-much").isEmpty());
         assertEquals(60, rig.chunks.stats().chunks(), "the failed upload indexed nothing");
         assertArrayEquals(bytes(60 * CHUNK, 3), get("fits"));
     }
@@ -345,27 +342,36 @@ class MultiBlobPoolTest {
         }
     };
 
-    private FileStorageService collidingFiles() {
-        ChunkStore store = new ChunkStore(rig.chunks, rig.blobService, rig.cache, COLLIDING);
-        return new FileStorageService(rig.manifests, rig.blobService, rig.cache, rig.smallCache, store, rig.opLog, rig.props);
+    private ChunkStore collidingStore() {
+        return new ChunkStore(rig.chunks, rig.blobService, rig.cache, COLLIDING, rig.props);
+    }
+
+    private ObjectWriter writerOver(ChunkStore store) {
+        return new ObjectWriter(rig.manifests, rig.blobService, rig.cache, rig.smallCache, store, rig.opLog, rig.props);
+    }
+
+    private ObjectReader readerOver(ChunkStore store) {
+        return new ObjectReader(store, rig.smallCache, rig.catalog, rig.opLog, rig.metrics);
     }
 
     @Test
     void collidingKeysAreResolvedAgainstTheCommittedIndexAndWithinOneUpload() throws Exception {
-        FileStorageService files = collidingFiles();
+        ChunkStore store = collidingStore();
+        ObjectWriter writer = writerOver(store);
+        ObjectReader reader = readerOver(store);
         byte[] x = bytes(CHUNK, 1), y = bytes(CHUNK, 2), z = bytes(CHUNK, 3);
-        files.storeStream(new ByteArrayInputStream(x), pool, "x", null);
-        files.storeStream(new ByteArrayInputStream(y), pool, "y", null);   // key 42 is taken by x in the index
+        writer.storeStream(new ByteArrayInputStream(x), pool, "x", null);
+        writer.storeStream(new ByteArrayInputStream(y), pool, "y", null);   // key 42 is taken by x in the index
         byte[] two = new byte[2 * CHUNK];                                  // two different chunks in one upload
         System.arraycopy(y, 0, two, 0, CHUNK);
         System.arraycopy(z, 0, two, CHUNK, CHUNK);
-        files.storeStream(new ByteArrayInputStream(two), pool, "two", null);
+        writer.storeStream(new ByteArrayInputStream(two), pool, "two", null);
         assertEquals(3, rig.chunks.stats().chunks());
         assertTrue(rig.metrics.rekeys.get() >= 3);
         for (var e : Map.of("x", x, "y", y, "two", two).entrySet()) {
             ManifestEntity m = rig.manifests.findCurrent("bkt", e.getKey()).orElseThrow();
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            files.streamToOutput(m, out);
+            reader.streamToOutput(m, out);
             assertArrayEquals(e.getValue(), out.toByteArray(), e.getKey());
         }
         assertEquals(1 + 1 + 2, rig.chunks.stats().refs());
@@ -373,20 +379,22 @@ class MultiBlobPoolTest {
 
     @Test
     void aCollisionWithAnUncommittedCopyInABlobIsRekeyedToo() throws Exception {
-        FileStorageService files = collidingFiles();
+        ChunkStore store = collidingStore();
+        ObjectWriter writer = writerOver(store);
+        ObjectReader reader = readerOver(store);
         byte[] x = bytes(CHUNK, 1), y = bytes(CHUNK, 2);
         // x is written (key 42 now sits in a blob table) but not committed: the index does not know it
-        ManifestEntity sx = files.stageStream(new ByteArrayInputStream(x), pool, "x", null,
+        ManifestEntity sx = writer.stageStream(new ByteArrayInputStream(x), pool, "x", null,
                 org.example.sectoriadb.checksum.UploadChecksums.none());
-        ManifestEntity sy = files.stageStream(new ByteArrayInputStream(y), pool, "y", null,
+        ManifestEntity sy = writer.stageStream(new ByteArrayInputStream(y), pool, "y", null,
                 org.example.sectoriadb.checksum.UploadChecksums.none());
         assertNotEquals(sx.chunkKeyArray()[0], sy.chunkKeyArray()[0]);
-        files.commitObject(sx);
-        files.commitObject(sy);
+        writer.commitObject(sx);
+        writer.commitObject(sy);
         for (var e : Map.of("x", x, "y", y).entrySet()) {
             ManifestEntity m = rig.manifests.findCurrent("bkt", e.getKey()).orElseThrow();
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            files.streamToOutput(m, out);
+            reader.streamToOutput(m, out);
             assertArrayEquals(e.getValue(), out.toByteArray());
         }
     }
@@ -409,17 +417,18 @@ class MultiBlobPoolTest {
         rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
         rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
         AtomicInteger lookups = new AtomicInteger();
-        ChunkStore store = new ChunkStore(counting(lookups), rig.blobService, rig.cache);
-        FileStorageService files = new FileStorageService(rig.manifests, rig.blobService, rig.cache, rig.smallCache, store, rig.opLog, rig.props);
+        ChunkStore store = new ChunkStore(counting(lookups), rig.blobService, rig.cache, rig.props);
+        ObjectWriter writer = writerOver(store);
+        ObjectReader reader = readerOver(store);
         byte[] data = bytes(30 * CHUNK, 321);
-        files.storeStream(new ByteArrayInputStream(data), pool, "hot", null);
+        writer.storeStream(new ByteArrayInputStream(data), pool, "hot", null);
         int afterPut = lookups.get();
         assertTrue(store.cachedLocations() >= 30);
 
         ManifestEntity m = rig.manifests.findCurrent("bkt", "hot").orElseThrow();
         for (int i = 0; i < 3; i++) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            files.streamToOutput(m, out);
+            reader.streamToOutput(m, out);
             assertArrayEquals(data, out.toByteArray());
         }
         assertEquals(afterPut, lookups.get(), "reads of chunks written by this process do not touch the index");
@@ -428,14 +437,14 @@ class MultiBlobPoolTest {
         BlobFileEntity victim = cuckoo().get(0);
         rig.resizeService.resizeBlobFile(victim.getId(), TINY_BUCKETS * 4);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        files.streamToOutput(m, out);
+        reader.streamToOutput(m, out);
         assertArrayEquals(data, out.toByteArray());
         assertEquals(afterPut, lookups.get(), "still no index lookups: hints are re-pointed through the replacement table");
 
         // a cold process (new store) resolves through the index, one batched lookup per 256 positions
         AtomicInteger cold = new AtomicInteger();
-        ChunkStore coldStore = new ChunkStore(counting(cold), rig.blobService, rig.cache);
-        FileStorageService coldFiles = new FileStorageService(rig.manifests, rig.blobService, rig.cache, rig.smallCache, coldStore, rig.opLog, rig.props);
+        ChunkStore coldStore = new ChunkStore(counting(cold), rig.blobService, rig.cache, rig.props);
+        ObjectReader coldFiles = readerOver(coldStore);
         ByteArrayOutputStream out2 = new ByteArrayOutputStream();
         coldFiles.streamToOutput(m, out2);
         assertArrayEquals(data, out2.toByteArray());
@@ -443,7 +452,7 @@ class MultiBlobPoolTest {
         // a disabled cache is correct too
         rig.props.getPool().setLocationCacheEntries(0);
         ChunkStore noCache = new ChunkStore(rig.chunks, rig.blobService, rig.cache, rig.props);
-        FileStorageService nf = new FileStorageService(rig.manifests, rig.blobService, rig.cache, rig.smallCache, noCache, rig.opLog, rig.props);
+        ObjectReader nf = readerOver(noCache);
         ByteArrayOutputStream out3 = new ByteArrayOutputStream();
         nf.streamToOutput(m, out3);
         assertArrayEquals(data, out3.toByteArray());

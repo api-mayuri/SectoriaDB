@@ -6,7 +6,7 @@ import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.s3.access.AccessControlService;
 import org.example.sectoriadb.s3.xml.ListBucketResult;
 import org.example.sectoriadb.s3.xml.S3ObjectEntry;
-import org.example.sectoriadb.storage.FileStorageService;
+import org.example.sectoriadb.storage.ObjectCatalog;
 import org.example.sectoriadb.storage.PoolService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -16,7 +16,6 @@ import org.w3c.dom.Document;
 import org.w3c.dom.NodeList;
 
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
@@ -35,16 +34,16 @@ public class S3BucketController {
 
     private final PoolService poolService;
     private final ManifestRepository manifestRepo;
-    private final FileStorageService fileService;
+    private final ObjectCatalog catalog;
     private final S3Lookup lookup;
     private final AccessControlService accessControl;
 
     public S3BucketController(PoolService poolService, ManifestRepository manifestRepo,
-                               FileStorageService fileService, S3Lookup lookup,
+                               ObjectCatalog catalog, S3Lookup lookup,
                                AccessControlService accessControl) {
         this.poolService   = poolService;
         this.manifestRepo  = manifestRepo;
-        this.fileService   = fileService;
+        this.catalog = catalog;
         this.lookup        = lookup;
         this.accessControl = accessControl;
     }
@@ -129,7 +128,7 @@ public class S3BucketController {
                 "<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
 
         for (String key : keys) {
-            fileService.deleteObject(bucket, key);   // one transaction per key
+            catalog.deleteObject(bucket, key);   // one transaction per key
             if (!del.quiet()) {
                 result.append("<Deleted><Key>").append(S3Support.xmlEscape(key)).append("</Key></Deleted>");
             }

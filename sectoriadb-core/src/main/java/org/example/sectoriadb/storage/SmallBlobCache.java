@@ -8,8 +8,6 @@ import org.example.sectoriadb.metrics.StorageMetricsEngineListener;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.engine.blob.SmallObjectBlob;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -22,18 +20,12 @@ import java.util.Collection;
  * so an idle blob is the one that is closed. A blob that is sealed (a compaction is working on it) is not evicted: the
  * seal is in-memory state.
  */
-@Service
 public class SmallBlobCache {
 
     private final ResidentCache<SmallObjectBlob> cache;
     private final StorageProperties props;
     private final EngineListener listener;
 
-    public SmallBlobCache(StorageProperties props) {
-        this(props, StorageMetrics.NOOP);
-    }
-
-    @Autowired
     public SmallBlobCache(StorageProperties props, StorageMetrics metrics) {
         this.props = props;
         this.listener = new StorageMetricsEngineListener(metrics);

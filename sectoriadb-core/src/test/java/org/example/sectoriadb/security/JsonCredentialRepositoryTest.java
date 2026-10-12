@@ -10,7 +10,6 @@ import com.fasterxml.jackson.databind.ObjectWriter;
 import java.nio.file.Path;
 import java.util.List;
 import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.security.CredentialEntity;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

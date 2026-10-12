@@ -23,6 +23,9 @@ public class StorageProperties {
     private SmallObject smallObject = new SmallObject();
     private Gc gc = new Gc();
     private Cache cache = new Cache();
+    private Metastore metastore = new Metastore();
+    /** Remove blob files no record names, once, when the context is up (not in the lazy admin CLI). */
+    private boolean reconcileOnStart = true;
 
     public String getMetaDir() { return metaDir; }
     public void setMetaDir(String v) { this.metaDir = v; }
@@ -64,6 +67,12 @@ public class StorageProperties {
 
     public Gc getGc() { return gc; }
     public void setGc(Gc v) { this.gc = v; }
+
+    public Metastore getMetastore() { return metastore; }
+    public void setMetastore(Metastore v) { this.metastore = v; }
+
+    public boolean isReconcileOnStart() { return reconcileOnStart; }
+    public void setReconcileOnStart(boolean v) { this.reconcileOnStart = v; }
 
     public S3 getS3() { return s3; }
     public void setS3(S3 v) { this.s3 = v; }
@@ -233,5 +242,49 @@ public class StorageProperties {
 
         public long getCheckIntervalMs() { return checkIntervalMs; }
         public void setCheckIntervalMs(long v) { this.checkIntervalMs = v; }
+    }
+
+    /**
+     * The embedded metadata store (doc 06, doc 09): when it is opened, how a failed commit recovers and the group commit
+     * limits ({@code sectoriadb.metastore.group.*}).
+     */
+    public static class Metastore {
+        private boolean lazy = false;
+        private Duration recoveryBackoff = Duration.ofSeconds(1);
+        private Group group = new Group();
+
+        /**
+         * Open the store on first use instead of at start-up. The admin CLI sets it, so that credential commands keep
+         * working next to a running server (the file is single-process).
+         */
+        public boolean isLazy() { return lazy; }
+        public void setLazy(boolean v) { this.lazy = v; }
+
+        /** Pause between recovery attempts after a failed commit. */
+        public Duration getRecoveryBackoff() { return recoveryBackoff; }
+        public void setRecoveryBackoff(Duration v) { this.recoveryBackoff = v; }
+
+        public Group getGroup() { return group; }
+        public void setGroup(Group v) { this.group = v; }
+    }
+
+    /** Group commit limits of the metadata store. */
+    public static class Group {
+        private int maxBatchSize = 256;
+        private int maxBatchPages = 1024;
+        private long maxWaitMicros = 0;
+        private int queueCapacity = 4096;
+
+        public int getMaxBatchSize() { return maxBatchSize; }
+        public void setMaxBatchSize(int v) { this.maxBatchSize = v; }
+
+        public int getMaxBatchPages() { return maxBatchPages; }
+        public void setMaxBatchPages(int v) { this.maxBatchPages = v; }
+
+        public long getMaxWaitMicros() { return maxWaitMicros; }
+        public void setMaxWaitMicros(long v) { this.maxWaitMicros = v; }
+
+        public int getQueueCapacity() { return queueCapacity; }
+        public void setQueueCapacity(int v) { this.queueCapacity = v; }
     }
 }

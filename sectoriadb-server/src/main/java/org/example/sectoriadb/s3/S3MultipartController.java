@@ -12,7 +12,8 @@ import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.storage.FileStorageService;
+import org.example.sectoriadb.storage.ObjectWriter;
+import org.example.sectoriadb.storage.ObjectReader;
 import org.example.sectoriadb.storage.PoolService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,7 +29,6 @@ import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.*;
 import java.nio.file.*;
 import java.security.MessageDigest;
@@ -56,20 +56,23 @@ public class S3MultipartController {
     private static final Logger log = LoggerFactory.getLogger(S3MultipartController.class);
 
     private final PoolService poolService;
-    private final FileStorageService fileService;
+    private final ObjectWriter writer;
+    private final ObjectReader reader;
     private final ManifestRepository manifestRepo;
     private final S3Lookup lookup;
     private final StorageProperties storageProps;
     private final RequestBodies bodies;
     private Path mpuDir;
 
-    public S3MultipartController(PoolService poolService, FileStorageService fileService,
+    public S3MultipartController(PoolService poolService, ObjectWriter writer, ObjectReader reader,
                                   ManifestRepository manifestRepo, S3Lookup lookup, StorageProperties storageProps,
                                   RequestBodies bodies) {
         this.bodies = bodies;
         this.lookup = lookup;
         this.poolService = poolService;
-        this.fileService = fileService;
+        this.writer = writer;
+
+        this.reader = reader;
         this.manifestRepo = manifestRepo;
         this.storageProps = storageProps;
     }
@@ -356,10 +359,10 @@ public class S3MultipartController {
         MultiDigest digest = new MultiDigest(true, uploadAlg != null ? EnumSet.of(uploadAlg) : EnumSet.noneOf(ChecksumAlgorithm.class));
         try (OutputStream out = new MultiDigestOutputStream(Files.newOutputStream(tmpFile), digest)) {
             if (range != null) {
-                fileService.streamRange(srcManifest, out, range[0], range[1] - range[0] + 1);
+                reader.streamRange(srcManifest, out, range[0], range[1] - range[0] + 1);
             } else {
                 // a corrupt source (whole-object CRC32C mismatch) fails the copy with 500 and no part is stored
-                fileService.streamToOutput(srcManifest, out);
+                reader.streamToOutput(srcManifest, out);
             }
         } catch (IOException | RuntimeException e) {
             Files.deleteIfExists(tmpFile);
@@ -575,7 +578,7 @@ public class S3MultipartController {
         PoolEntity pool = lookupBucket(bucket);
         ManifestEntity entity;
         try (InputStream combined = new LazySequenceInputStream(partFiles)) {
-            entity = fileService.stageStream(combined, pool, objectKey, contentType, wholeObject);
+            entity = writer.stageStream(combined, pool, objectKey, contentType, wholeObject);
         }
 
         String s3Etag;
@@ -599,9 +602,9 @@ public class S3MultipartController {
             }
             // One transaction: the manifest with its final multipart ETag / checksum, the (bucket, key) index entry, and
             // retirement of the version it replaces.
-            entity = fileService.commitObject(entity, precondition);
+            entity = writer.commitObject(entity, precondition);
         } finally {
-            fileService.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
+            writer.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
         }
 
         // Keep a tombstone (meta + result) so that a client retry of this Complete gets the same answer; the parts go

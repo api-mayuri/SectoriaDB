@@ -7,7 +7,6 @@ import org.example.sectoriadb.catalog.BlobFileRepository;
 import org.example.sectoriadb.catalog.PoolRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -18,7 +17,6 @@ import java.util.Map;
 import java.util.UUID;
 import org.example.sectoriadb.audit.OperationLogService;
 
-@Service
 public class PoolService {
 
     private static final Logger log = LoggerFactory.getLogger(PoolService.class);

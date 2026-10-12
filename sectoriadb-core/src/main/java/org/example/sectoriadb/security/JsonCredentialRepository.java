@@ -3,10 +3,8 @@ package org.example.sectoriadb.security;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.security.CredentialEntity;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Repository;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -23,7 +21,6 @@ import java.util.Optional;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-@Repository
 public class JsonCredentialRepository implements CredentialRepository {
 
     private static final Logger log = LoggerFactory.getLogger(JsonCredentialRepository.class);

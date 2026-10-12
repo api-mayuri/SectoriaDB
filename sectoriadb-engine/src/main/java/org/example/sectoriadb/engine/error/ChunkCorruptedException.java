@@ -1,6 +1,5 @@
 package org.example.sectoriadb.engine.error;
 
-import org.example.sectoriadb.engine.error.StorageException;
 
 /** A stored chunk failed its length / CRC32C verification. */
 public class ChunkCorruptedException extends StorageException {

@@ -1,6 +1,5 @@
 package org.example.sectoriadb.engine.error;
 
-import org.example.sectoriadb.engine.error.StorageException;
 
 /** A small-object record failed header, length or CRC32C verification. */
 public class SmallObjectCorruptedException extends StorageException {

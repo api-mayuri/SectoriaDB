@@ -8,7 +8,6 @@ import org.example.sectoriadb.metastore.ReadTxn;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.ManifestRepository;
-import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -21,7 +20,6 @@ import java.util.function.Consumer;
  * {@code deleted_manifests} trees. Every public method is one atomic metastore write; the hot ones run as group-commit
  * bodies ({@link MetaStore#writeGrouped}), i.e. share a commit (and its fsyncs) with concurrent writers.
  */
-@Repository
 public class MetaStoreManifestRepository implements ManifestRepository {
 
     private final MetaStoreProvider stores;

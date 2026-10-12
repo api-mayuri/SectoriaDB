@@ -12,7 +12,6 @@ import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.GcRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Repository;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -29,7 +28,6 @@ import java.util.Set;
  * {@link MetaStore#beginWrite()} (not a group-commit body: it must exclude commits for its whole duration, and the
  * slot free it performs through the callback is a side effect that a savepoint could not undo).
  */
-@Repository
 public class MetaStoreGcRepository implements GcRepository {
 
     private static final Logger log = LoggerFactory.getLogger(MetaStoreGcRepository.class);

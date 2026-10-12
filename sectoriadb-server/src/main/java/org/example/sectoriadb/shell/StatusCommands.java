@@ -2,7 +2,6 @@ package org.example.sectoriadb.shell;
 
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.catalog.BlobFileEntity;
-import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.audit.OperationLogEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ChunkRepository;
@@ -11,7 +10,6 @@ import org.example.sectoriadb.audit.OperationLogRepository;
 import org.example.sectoriadb.storage.BlobService;
 import org.example.sectoriadb.storage.HashTableCache;
 import org.example.sectoriadb.storage.PoolService;
-import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;

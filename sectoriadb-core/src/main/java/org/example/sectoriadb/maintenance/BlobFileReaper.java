@@ -7,8 +7,6 @@ import org.example.sectoriadb.catalog.BlobFileRepository;
 import org.example.sectoriadb.catalog.PoolRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
@@ -36,7 +34,6 @@ import org.example.sectoriadb.storage.HashTableCache;
  *       file goes at once, otherwise only files older than {@code max(minAge, 60 s)}.</li>
  * </ul>
  */
-@Service
 public class BlobFileReaper {
 
     private static final Logger log = LoggerFactory.getLogger(BlobFileReaper.class);
@@ -51,7 +48,6 @@ public class BlobFileReaper {
     private final ConcurrentLinkedQueue<Pending> pending = new ConcurrentLinkedQueue<>();
     private final Set<Path> building = ConcurrentHashMap.newKeySet();
 
-    @Autowired
     public BlobFileReaper(BlobFileRepository blobRepo, PoolRepository poolRepo, HashTableCache cache) {
         this.blobRepo = blobRepo;
         this.poolRepo = poolRepo;

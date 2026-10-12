@@ -32,7 +32,7 @@ class ObjectTotalsTest {
     }
 
     private void put(PoolEntity pool, String key, int size) throws Exception {
-        rig.files.storeStream(new ByteArrayInputStream(new byte[size]), pool, key, "application/octet-stream");
+        rig.writer.storeStream(new ByteArrayInputStream(new byte[size]), pool, key, "application/octet-stream");
     }
 
     @Test
@@ -48,9 +48,9 @@ class ObjectTotalsTest {
         put(a, "k1", 300);           // overwrite: still 3 objects, +200 bytes
         assertEquals(new BucketStats(3, 5300), rig.manifests.totals());
 
-        rig.files.deleteObject("a", "k2");
+        rig.catalog.deleteObject("a", "k2");
         assertEquals(new BucketStats(2, 300), rig.manifests.totals());
-        rig.files.deleteObject("a", "does-not-exist");
+        rig.catalog.deleteObject("a", "does-not-exist");
         assertEquals(new BucketStats(2, 300), rig.manifests.totals());
 
         rig.reopen();

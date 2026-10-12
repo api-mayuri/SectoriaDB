@@ -69,13 +69,13 @@ class TableResidencyTest {
     }
 
     ManifestEntity put(String key, byte[] data) throws Exception {
-        return rig.files.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
+        return rig.writer.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
     }
 
     byte[] get(String key) throws Exception {
-        ManifestEntity m = rig.files.findObject("bkt", key).orElseThrow();
+        ManifestEntity m = rig.catalog.findObject("bkt", key).orElseThrow();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        rig.files.streamToOutput(m, out);
+        rig.reader.streamToOutput(m, out);
         return out.toByteArray();
     }
 
@@ -178,7 +178,7 @@ class TableResidencyTest {
         for (int round = 0; round < 3; round++) {
             for (int b = 0; b < 6; b++) {
                 byte[] d = bytes(300 + round, b * 10 + round);
-                rig.files.storeStream(new ByteArrayInputStream(d), buckets.get(b), "k" + round, "application/octet-stream");
+                rig.writer.storeStream(new ByteArrayInputStream(d), buckets.get(b), "k" + round, "application/octet-stream");
                 model.put("s" + b + "/k" + round, d);
             }
         }
@@ -186,9 +186,9 @@ class TableResidencyTest {
         assertTrue(rig.smallCache.evictions() > 0);
         for (var e : model.entrySet()) {
             String[] kv = e.getKey().split("/");
-            ManifestEntity m = rig.files.findObject(kv[0], kv[1]).orElseThrow();
+            ManifestEntity m = rig.catalog.findObject(kv[0], kv[1]).orElseThrow();
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            rig.files.streamToOutput(m, out);
+            rig.reader.streamToOutput(m, out);
             assertArrayEquals(e.getValue(), out.toByteArray(), e.getKey());
         }
     }

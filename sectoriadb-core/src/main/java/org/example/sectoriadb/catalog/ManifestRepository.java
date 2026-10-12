@@ -1,6 +1,5 @@
 package org.example.sectoriadb.catalog;
 
-import org.example.sectoriadb.catalog.ManifestEntity;
 
 import java.time.Instant;
 import java.util.List;

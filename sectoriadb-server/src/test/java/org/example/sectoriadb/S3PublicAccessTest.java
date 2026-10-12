@@ -2,7 +2,7 @@ package org.example.sectoriadb;
 
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.storage.FileStorageService;
+import org.example.sectoriadb.storage.ObjectWriter;
 import org.example.sectoriadb.storage.PoolService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -47,7 +47,7 @@ class S3PublicAccessTest {
 
     @LocalServerPort int port;
     @Autowired PoolService poolService;
-    @Autowired FileStorageService fileService;
+    @Autowired ObjectWriter writer;
     @Autowired ManifestRepository manifestRepo;
 
     private final HttpClient http = HttpClient.newHttpClient();
@@ -62,7 +62,7 @@ class S3PublicAccessTest {
 
     private void putObject(String bucket, String key) throws Exception {
         var pool = poolService.createBucket(bucket);
-        fileService.storeStream(new ByteArrayInputStream("data".getBytes()), pool, key, "text/plain");
+        writer.storeStream(new ByteArrayInputStream("data".getBytes()), pool, key, "text/plain");
     }
 
     @Test

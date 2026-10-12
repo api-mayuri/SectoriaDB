@@ -1,6 +1,5 @@
 package org.example.sectoriadb.catalog.metastore;
 
-import org.example.sectoriadb.catalog.metastore.StorageMetricsMetaStoreListener;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
 import org.example.sectoriadb.metrics.StorageMetrics.Target;

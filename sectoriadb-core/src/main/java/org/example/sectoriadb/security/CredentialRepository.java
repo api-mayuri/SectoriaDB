@@ -1,6 +1,5 @@
 package org.example.sectoriadb.security;
 
-import org.example.sectoriadb.security.CredentialEntity;
 
 import java.util.List;
 import java.util.Optional;

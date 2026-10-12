@@ -5,7 +5,6 @@ import org.example.sectoriadb.engine.format.BlobLayout;
 import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
 import org.example.sectoriadb.engine.metrics.EngineListener;
 import org.example.sectoriadb.engine.io.BlobFile;
-import org.example.sectoriadb.engine.blob.SlotStateMap;
 import org.example.sectoriadb.engine.io.StorageIOEngine;
 import org.example.sectoriadb.engine.hash.BytesHasher;
 import org.slf4j.Logger;

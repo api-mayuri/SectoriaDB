@@ -42,7 +42,7 @@ class RangeAndRestoreTest {
     }
 
     ManifestEntity put(String key, byte[] data) throws Exception {
-        return rig.files.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
+        return rig.writer.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
     }
 
     static byte[] data(int n) {
@@ -56,17 +56,17 @@ class RangeAndRestoreTest {
         byte[] d = data(CHUNK * 3 + 100);
         ManifestEntity m = put("big", d);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        rig.files.streamRange(m, out, CHUNK - 10, 30);
+        rig.reader.streamRange(m, out, CHUNK - 10, 30);
         assertArrayEquals(Arrays.copyOfRange(d, CHUNK - 10, CHUNK + 20), out.toByteArray());
 
         ByteArrayOutputStream empty = new ByteArrayOutputStream();
-        rig.files.streamRange(m, empty, 5, 0);
+        rig.reader.streamRange(m, empty, 5, 0);
         assertEquals(0, empty.size(), "a zero-length range yields nothing");
 
-        assertThrows(IllegalArgumentException.class, () -> rig.files.streamRange(m, new ByteArrayOutputStream(), -1, 10));
-        assertThrows(IllegalArgumentException.class, () -> rig.files.streamRange(m, new ByteArrayOutputStream(), 0, -1));
-        assertThrows(IllegalArgumentException.class, () -> rig.files.streamRange(m, new ByteArrayOutputStream(), d.length - 5, 10));
-        assertThrows(IllegalArgumentException.class, () -> rig.files.streamRange(m, new ByteArrayOutputStream(), d.length + 1, 1));
+        assertThrows(IllegalArgumentException.class, () -> rig.reader.streamRange(m, new ByteArrayOutputStream(), -1, 10));
+        assertThrows(IllegalArgumentException.class, () -> rig.reader.streamRange(m, new ByteArrayOutputStream(), 0, -1));
+        assertThrows(IllegalArgumentException.class, () -> rig.reader.streamRange(m, new ByteArrayOutputStream(), d.length - 5, 10));
+        assertThrows(IllegalArgumentException.class, () -> rig.reader.streamRange(m, new ByteArrayOutputStream(), d.length + 1, 1));
     }
 
     @Test
@@ -74,14 +74,14 @@ class RangeAndRestoreTest {
         byte[] d = data(CHUNK * 4);
         ManifestEntity m = put("big", d);
         Path ok = root.resolve("range.bin");
-        rig.files.restoreRange(m.getId(), ok, CHUNK + 1, CHUNK * 2);
+        rig.reader.restoreRange(m.getId(), ok, CHUNK + 1, CHUNK * 2);
         assertArrayEquals(Arrays.copyOfRange(d, CHUNK + 1, CHUNK * 3 + 1), Files.readAllBytes(ok));
 
         // lose the third chunk: the restore fails after writing the first ones
         BlobFileEntity blob = rig.blobService.cuckooBlobsOf(pool).get(0);
         rig.table(blob).freeSlot(m.chunkKeyArray()[2]);
         Path bad = root.resolve("bad.bin");
-        assertThrows(IOException.class, () -> rig.files.restoreRange(m.getId(), bad, 0, CHUNK * 4));
+        assertThrows(IOException.class, () -> rig.reader.restoreRange(m.getId(), bad, 0, CHUNK * 4));
         assertFalse(Files.exists(bad), "no partial output");
     }
 }

@@ -5,7 +5,7 @@ import com.fasterxml.jackson.databind.SerializationFeature;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.security.CredentialService;
-import org.example.sectoriadb.storage.FileStorageService;
+import org.example.sectoriadb.storage.ObjectWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationRunner;
@@ -118,10 +118,10 @@ public class Application {
      * Not run in CLI mode: a command next to a running server must not delete that server's live uploads.
      */
     @Bean
-    public ApplicationRunner cleanUploadSpool(FileStorageService fileService) {
+    public ApplicationRunner cleanUploadSpool(ObjectWriter writer) {
         return args -> {
             if (System.getProperty("sectoriadb.metastore.lazy") != null) return;
-            java.nio.file.Path dir = fileService.uploadTmpDir();
+            java.nio.file.Path dir = writer.uploadTmpDir();
             int removed = 0;
             try (var files = java.nio.file.Files.newDirectoryStream(dir, "sectoriadb-{upload,copy}-*.tmp")) {
                 for (java.nio.file.Path f : files) {

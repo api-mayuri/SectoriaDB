@@ -33,8 +33,6 @@ import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
@@ -60,7 +58,6 @@ import java.util.concurrent.locks.ReentrantLock;
  * </ul>
  * Every step is idempotent and safe to repeat after a crash; nothing here removes data that a live manifest needs.
  */
-@Service
 public class GarbageCollector {
 
     private static final Logger log = LoggerFactory.getLogger(GarbageCollector.class);
@@ -87,7 +84,6 @@ public class GarbageCollector {
     private volatile CompactionReport lastCompaction;
     private volatile long lastRunEpochMillis;
 
-    @Autowired
     public GarbageCollector(GcRepository gcRepo, ChunkRepository chunkRepo, ManifestRepository manifestRepo,
                             BlobFileRepository blobRepo, PoolRepository poolRepo, BlobService blobs, HashTableCache cache,
                             SmallBlobCache smallCache, ChunkStore chunkStore, SmallBlobCompactor compactor,

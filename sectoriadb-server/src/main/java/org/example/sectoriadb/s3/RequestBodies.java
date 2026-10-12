@@ -3,7 +3,7 @@ package org.example.sectoriadb.s3;
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.s3.auth.AwsChunkedInputStream;
 import org.example.sectoriadb.s3.auth.ChunkSigningContext;
-import org.example.sectoriadb.storage.FileStorageService;
+import org.example.sectoriadb.storage.ObjectWriter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
@@ -27,12 +27,12 @@ public class RequestBodies {
     public static final long MAX_ACL_BYTES = 64 * 1024;
     public static final long MAX_XML_BYTES = 2L * 1024 * 1024;
 
-    private final FileStorageService fileService;
+    private final ObjectWriter writer;
     private final long freeSpaceReserve;
 
-    public RequestBodies(FileStorageService fileService,
+    public RequestBodies(ObjectWriter writer,
                          @Value("${sectoriadb.s3.limits.upload-free-space-reserve-bytes:67108864}") long freeSpaceReserve) {
-        this.fileService = fileService;
+        this.writer = writer;
         this.freeSpaceReserve = freeSpaceReserve;
     }
 
@@ -70,7 +70,7 @@ public class RequestBodies {
                     "Your proposed upload exceeds the maximum allowed size (5 GiB for one request; use multipart upload)");
         }
         try {
-            long usable = Files.getFileStore(fileService.uploadTmpDir()).getUsableSpace();
+            long usable = Files.getFileStore(writer.uploadTmpDir()).getUsableSpace();
             if (usable < declared + freeSpaceReserve) {
                 throw new S3Exception(HttpStatus.SERVICE_UNAVAILABLE, "SlowDown",
                         "The server does not have enough free space to accept this upload right now. Please retry later.");

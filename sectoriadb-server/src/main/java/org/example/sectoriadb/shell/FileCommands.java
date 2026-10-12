@@ -3,7 +3,9 @@ package org.example.sectoriadb.shell;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ChunkRepository;
-import org.example.sectoriadb.storage.FileStorageService;
+import org.example.sectoriadb.storage.ObjectWriter;
+import org.example.sectoriadb.storage.ObjectReader;
+import org.example.sectoriadb.storage.ObjectCatalog;
 import org.example.sectoriadb.storage.ObjectVerificationService;
 import org.example.sectoriadb.storage.PoolService;
 import org.springframework.shell.standard.ShellComponent;
@@ -18,15 +20,21 @@ import java.util.function.Predicate;
 @ShellComponent
 public class FileCommands {
 
-    private final FileStorageService fileService;
+    private final ObjectWriter writer;
+    private final ObjectReader reader;
+    private final ObjectCatalog catalog;
     private final PoolService poolService;
     private final ObjectVerificationService verifier;
     private final ChunkRepository chunkRepo;
 
-    public FileCommands(FileStorageService fileService, PoolService poolService, ObjectVerificationService verifier,
+    public FileCommands(ObjectWriter writer, ObjectReader reader, ObjectCatalog catalog, PoolService poolService, ObjectVerificationService verifier,
                         ChunkRepository chunkRepo) {
         this.chunkRepo = chunkRepo;
-        this.fileService = fileService;
+        this.writer = writer;
+
+        this.reader = reader;
+
+        this.catalog = catalog;
         this.poolService = poolService;
         this.verifier = verifier;
     }
@@ -36,7 +44,7 @@ public class FileCommands {
             @ShellOption(help = "Path to the source file") String file,
             @ShellOption(help = "Target pool name") String pool) throws IOException {
         PoolEntity poolEntity = poolService.getByName(pool);
-        ManifestEntity m = fileService.store(Path.of(file), poolEntity);
+        ManifestEntity m = writer.store(Path.of(file), poolEntity);
         return String.format("Stored  id=%-36s  file=%s  size=%s  chunks=%d",
                 m.getId(), m.getSourceFileName(),
                 ShellTable.humanSize(m.getTotalBytes()), m.getTotalChunks());
@@ -48,13 +56,13 @@ public class FileCommands {
         List<ManifestEntity> manifests;
         if (pool != null) {
             PoolEntity poolEntity = poolService.getByName(pool);
-            manifests = fileService.listAll().stream()
+            manifests = catalog.listAll().stream()
                     .filter(m -> poolEntity.getId().equals(m.getPoolId())
                             || (m.getPhysicalBlob() != null
                                 && poolEntity.getId().equals(m.getPhysicalBlob().getPoolId())))
                     .toList();
         } else {
-            manifests = fileService.listAll();
+            manifests = catalog.listAll();
         }
         if (manifests.isEmpty()) return "No files stored yet. Use 'store --file PATH --pool NAME'.";
 
@@ -66,7 +74,7 @@ public class FileCommands {
 
     @ShellMethod(key = "info", value = "Show detailed info about a stored file  |  info --id FILE_ID")
     public String info(@ShellOption(help = "File ID") String id) {
-        ManifestEntity m = fileService.getActiveManifest(id);
+        ManifestEntity m = catalog.getActiveManifest(id);
         var phys = m.getPhysicalBlob();
         String poolName = m.getPoolId() == null ? "?"
                 : poolService.listAll().stream().filter(p -> p.getId().equals(m.getPoolId()))
@@ -120,7 +128,7 @@ public class FileCommands {
                     help = "Number of bytes to extract (required when --from is set)") Long len)
             throws IOException {
 
-        ManifestEntity m = fileService.getActiveManifest(id);
+        ManifestEntity m = catalog.getActiveManifest(id);
 
         if (from != null || len != null) {
             if (from == null || len == null) {
@@ -130,13 +138,13 @@ public class FileCommands {
             System.out.printf("Extracting [%d, +%d] from '%s' (%s) → %s%n",
                     from, len, m.getSourceFileName(),
                     ShellTable.humanSize(m.getTotalBytes()), out);
-            fileService.restoreRange(id, Path.of(out), from, len);
+            reader.restoreRange(id, Path.of(out), from, len);
             return String.format("Extracted %s at byte %d → %s",
                     ShellTable.humanSize(len), from, Path.of(out).toAbsolutePath());
         } else {
             System.out.printf("Restoring '%s' (%s) → %s%n",
                     m.getSourceFileName(), ShellTable.humanSize(m.getTotalBytes()), out);
-            fileService.restore(id, Path.of(out));
+            reader.restore(id, Path.of(out));
             return "Restored to: " + Path.of(out).toAbsolutePath();
         }
     }
@@ -145,7 +153,7 @@ public class FileCommands {
             value = "Re-read an object and check chunk/record CRCs, the stored whole-object CRC32C, the client " +
                     "checksum and (non-multipart) MD5/ETag  |  verify --id FILE_ID")
     public String verify(@ShellOption(help = "File ID") String id) {
-        ManifestEntity m = fileService.getActiveManifest(id);
+        ManifestEntity m = catalog.getActiveManifest(id);
         ObjectVerificationService.Result r = verifier.verify(m);
         StringBuilder sb = new StringBuilder();
         sb.append(r.status()).append(": ").append(r.name()).append("  (id=").append(r.manifestId()).append(')');
@@ -184,8 +192,8 @@ public class FileCommands {
             @ShellOption(help = "File ID") String id,
             @ShellOption(defaultValue = "false", help = "Skip confirmation prompt") boolean yes) {
         if (!yes) return "Add '--yes' to confirm deletion of file '" + id + "'";
-        ManifestEntity m = fileService.getActiveManifest(id);
-        fileService.delete(id);
+        ManifestEntity m = catalog.getActiveManifest(id);
+        catalog.delete(id);
         return "Deleted: " + m.getSourceFileName() + "  (id=" + id + ")";
     }
 }

@@ -1,11 +1,8 @@
 package org.example.sectoriadb.audit;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.example.sectoriadb.audit.OperationLogEntity;
-import org.example.sectoriadb.audit.OperationLogRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.Map;
@@ -20,7 +17,6 @@ import java.util.UUID;
  * Failures here are swallowed and logged; the audit log must never prevent
  * the main operation from completing.
  */
-@Service
 public class OperationLogService {
 
     private static final Logger log = LoggerFactory.getLogger(OperationLogService.class);

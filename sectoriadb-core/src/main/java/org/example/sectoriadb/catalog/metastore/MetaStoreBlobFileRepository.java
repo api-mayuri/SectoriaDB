@@ -7,14 +7,12 @@ import org.example.sectoriadb.metastore.WriteTxn;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.BlobFileRepository;
-import org.springframework.stereotype.Repository;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
 /** {@link BlobFileRepository} over the {@code blobs} and {@code blobs_by_pool} trees. */
-@Repository
 public class MetaStoreBlobFileRepository implements BlobFileRepository {
 
     private final MetaStoreProvider stores;

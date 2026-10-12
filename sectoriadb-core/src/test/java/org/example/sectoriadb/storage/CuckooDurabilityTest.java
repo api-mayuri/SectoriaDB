@@ -5,7 +5,6 @@ import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.storage.FileStorageService;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -17,7 +16,6 @@ import java.io.ByteArrayOutputStream;
 import java.nio.ByteBuffer;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -76,9 +74,9 @@ class CuckooDurabilityTest {
     }
 
     byte[] get(String key) throws Exception {
-        ManifestEntity m = rig.files.findObject("bkt", key).orElseThrow(() -> new AssertionError("no object " + key));
+        ManifestEntity m = rig.catalog.findObject("bkt", key).orElseThrow(() -> new AssertionError("no object " + key));
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        rig.files.streamToOutput(m, out);
+        rig.reader.streamToOutput(m, out);
         return out.toByteArray();
     }
 
@@ -105,12 +103,12 @@ class CuckooDurabilityTest {
             commits.incrementAndGet();
             if (disk.unforced() != 0) violations.add("commit with " + disk.unforced() + " unforced write(s)");
         });
-        FileStorageService files = new FileStorageService(checking, rig.blobService, rig.cache, rig.smallCache,
+        ObjectWriter writer = new ObjectWriter(checking, rig.blobService, rig.cache, rig.smallCache,
                 rig.chunkStore, rig.opLog, rig.props);
         for (int i = 0; i < 25; i++) {
             // new chunks, a repeat of an earlier object (dedup against the index), and an object that repeats itself
             byte[] d = i % 5 == 4 ? bytes(6 * CHUNK, 0) : bytes(3 * CHUNK + i, i);
-            files.storeStream(new ByteArrayInputStream(d), pool, "o" + i, null);
+            writer.storeStream(new ByteArrayInputStream(d), pool, "o" + i, null);
         }
         assertEquals(25, commits.get());
         assertEquals(List.of(), violations);
@@ -122,12 +120,12 @@ class CuckooDurabilityTest {
     void anUploadThatOnlyDeduplicatesAgainstAnUncommittedUploadForcesItsChunksToo() throws Exception {
         byte[] data = bytes(4 * CHUNK, 77);
         // upload A writes its chunks (no fsync) and has not committed
-        ManifestEntity a = rig.files.stageStream(new ByteArrayInputStream(data), pool, "a", null,
+        ManifestEntity a = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "a", null,
                 org.example.sectoriadb.checksum.UploadChecksums.none());
         assertTrue(disk.unforced() > 0, "A's chunks sit in the page cache");
         // upload B has the same content: its chunks are found in the table (not in the index) and nothing is written
         int writesBefore = disk.writes.get();
-        ManifestEntity b = rig.files.stageStream(new ByteArrayInputStream(data), pool, "b", null,
+        ManifestEntity b = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "b", null,
                 org.example.sectoriadb.checksum.UploadChecksums.none());
         assertEquals(writesBefore, disk.writes.get(), "B deduplicated against the table, it wrote nothing");
         assertTrue(disk.unforced() > 0);
@@ -136,11 +134,11 @@ class CuckooDurabilityTest {
         ManifestRepository checking = spy(rig.manifests, () -> {
             if (disk.unforced() != 0) violations.add("B committed with " + disk.unforced() + " unforced write(s)");
         });
-        FileStorageService files = new FileStorageService(checking, rig.blobService, rig.cache, rig.smallCache,
+        ObjectWriter writer = new ObjectWriter(checking, rig.blobService, rig.cache, rig.smallCache,
                 rig.chunkStore, rig.opLog, rig.props);
-        files.commitObject(b);
+        writer.commitObject(b);
         assertEquals(List.of(), violations);
-        rig.files.commitObject(a);
+        rig.writer.commitObject(a);
         // crash now: both objects were committed
         disk.crash(1, 0.0);
         disk.revive();
@@ -209,7 +207,7 @@ class CuckooDurabilityTest {
                         byte[] d = r.nextInt(3) == 0 ? bytes(2 * CHUNK + 5, r.nextInt(7)) : bytes(2 * CHUNK + r.nextInt(3 * CHUNK), rd * 1000L + id * 100 + i);
                         attempted.put(key, d);
                         try {
-                            rig.files.storeStream(new ByteArrayInputStream(d), pool, key, null);
+                            rig.writer.storeStream(new ByteArrayInputStream(d), pool, key, null);
                             committed.put(key, d);
                         } catch (Exception | AssertionError e) {
                             return null;   // the disk died under this writer
@@ -248,7 +246,7 @@ class CuckooDurabilityTest {
             for (var e : attempted.entrySet()) {
                 if (committed.containsKey(e.getKey())) continue;
                 if (e.getKey().startsWith("r" + round)) {
-                    rig.files.storeStream(new ByteArrayInputStream(e.getValue()), pool, e.getKey(), null);
+                    rig.writer.storeStream(new ByteArrayInputStream(e.getValue()), pool, e.getKey(), null);
                     committed.put(e.getKey(), e.getValue());
                 }
             }
@@ -262,13 +260,13 @@ class CuckooDurabilityTest {
     @Test
     void aSlotWhoseDataWasLostIsDetectedAndHealedByTheNextUpload() throws Exception {
         byte[] data = bytes(CHUNK + 10, 3);
-        rig.files.stageStream(new ByteArrayInputStream(data), pool, "x", null, org.example.sectoriadb.checksum.UploadChecksums.none());
+        rig.writer.stageStream(new ByteArrayInputStream(data), pool, "x", null, org.example.sectoriadb.checksum.UploadChecksums.none());
         // the crash keeps the meta entries and drops the data: every unforced write is decided by the coin; try seeds until the
         // meta entry survived and the data did not
         boolean damaged = false;
         for (int seed = 0; seed < 200 && !damaged; seed++) {
             setUpFresh();
-            rig.files.stageStream(new ByteArrayInputStream(data), pool, "x", null, org.example.sectoriadb.checksum.UploadChecksums.none());
+            rig.writer.stageStream(new ByteArrayInputStream(data), pool, "x", null, org.example.sectoriadb.checksum.UploadChecksums.none());
             disk.crash(seed, 0.5);
             disk.revive();
             rig.reopen();
@@ -279,7 +277,7 @@ class CuckooDurabilityTest {
         }
         assertTrue(damaged, "some crash left an ACTIVE meta entry over stale data");
         // nothing references it, the same upload heals it (or rewrites it) and is readable
-        rig.files.storeStream(new ByteArrayInputStream(data), pool, "x", null);
+        rig.writer.storeStream(new ByteArrayInputStream(data), pool, "x", null);
         assertArrayEquals(data, get("x"));
     }
 

@@ -1,6 +1,5 @@
 package org.example.sectoriadb.audit;
 
-import org.example.sectoriadb.audit.OperationLogEntity;
 
 import java.time.Instant;
 import java.util.List;

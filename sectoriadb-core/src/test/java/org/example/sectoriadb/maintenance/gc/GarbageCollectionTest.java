@@ -6,8 +6,6 @@ import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.GcRepository;
-import org.example.sectoriadb.storage.UploadGate;
-import org.example.sectoriadb.maintenance.gc.GcReports;
 import org.example.sectoriadb.maintenance.gc.GcReports.Options;
 import org.example.sectoriadb.maintenance.gc.GcReports.RunReport;
 import org.example.sectoriadb.maintenance.gc.GcReports.SweepReport;
@@ -86,20 +84,20 @@ class GarbageCollectionTest {
     }
 
     ManifestEntity put(String key, byte[] data) throws Exception {
-        return rig.files.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
+        return rig.writer.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
     }
 
     ManifestEntity stage(String key, byte[] data) throws Exception {
-        return rig.files.stageStream(new ByteArrayInputStream(data), pool, key, null, UploadChecksums.none());
+        return rig.writer.stageStream(new ByteArrayInputStream(data), pool, key, null, UploadChecksums.none());
     }
 
     byte[] get(String key) throws Exception {
-        return read(rig.files.findObject("bkt", key).orElseThrow());
+        return read(rig.catalog.findObject("bkt", key).orElseThrow());
     }
 
     byte[] read(ManifestEntity m) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        rig.files.streamToOutput(m, out);
+        rig.reader.streamToOutput(m, out);
         return out.toByteArray();
     }
 
@@ -129,7 +127,7 @@ class GarbageCollectionTest {
         assertEquals(11, stats().chunks());
         assertEquals(11, physical());
 
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         assertEquals(3, stats().gcQueue(), "only a's three private chunks became garbage, the shared ones are still referenced by b");
         assertEquals(11, physical(), "nothing is freed by the delete itself");
 
@@ -181,7 +179,7 @@ class GarbageCollectionTest {
         assertTrue(fullPercent > 85, "driven close to the limit: " + fullPercent);
         assertThrows(Exception.class, () -> put("overflow", content(8, 999)), "a full pool refuses");
 
-        for (String k : keys) rig.files.deleteObject("bkt", k);
+        for (String k : keys) rig.catalog.deleteObject("bkt", k);
         RunReport r = gc0();
         assertEquals(keys.size() * 8L, r.chunksFreed);
         // the uploads that were refused by the full pool wrote part of their chunks before they failed: strays
@@ -201,7 +199,7 @@ class GarbageCollectionTest {
     @Test
     void gracePeriodIsHonored() throws Exception {
         put("a", content(4, 11));
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         assertEquals(4, stats().gcQueue());
 
         RunReport r = rig.gc.run(Options.defaults());           // default grace: 15 minutes
@@ -221,7 +219,7 @@ class GarbageCollectionTest {
     @Test
     void rateLimitBoundsOnePass() throws Exception {
         put("a", content(10, 12));
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         RunReport r = rig.gc.run(Options.defaults().withGrace(0).withMaxChunks(4));
         assertEquals(4, r.chunksFreed);
         assertEquals(6, stats().gcQueue());
@@ -233,7 +231,7 @@ class GarbageCollectionTest {
     void aChunkRevivedBetweenSelectionAndCollectionIsKept() throws Exception {
         byte[] data = content(3, 13);
         put("a", data);
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         long cutoff = System.currentTimeMillis() + 1000;
         List<GcRepository.ChunkRef> due = rig.gcRepo.dueChunks(null, cutoff, 100);
         assertEquals(3, due.size());
@@ -251,13 +249,13 @@ class GarbageCollectionTest {
     void aChunkThatWentThroughZeroAgainIsNotCollectedEarly() throws Exception {
         byte[] data = content(2, 14);
         put("a", data);
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         Thread.sleep(50);
         long cutoff = System.currentTimeMillis();               // the first zero is older than this
         List<GcRepository.ChunkRef> due = rig.gcRepo.dueChunks(null, cutoff, 100);
         assertEquals(2, due.size());
         put("a2", data);                                        // revived
-        rig.files.deleteObject("bkt", "a2");                    // zero again, a fresh queue row, younger than the cutoff
+        rig.catalog.deleteObject("bkt", "a2");                    // zero again, a fresh queue row, younger than the cutoff
         GcRepository.ChunkBatchResult res = rig.gcRepo.collectChunks(due, cutoff, (p, b, k) -> {
             throw new AssertionError("must not free a chunk that has been garbage for less than the grace period");
         });
@@ -272,7 +270,7 @@ class GarbageCollectionTest {
         byte[] data = content(4, 21);
         ManifestEntity m = put("a", data);
         long[] keys = m.chunkKeyArray();
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         // the collector freed two slots and died before its transaction committed: entries and queue rows remain
         BlobFileEntity blob = rig.blobService.cuckooBlobsOf(pool).get(0);
         assertTrue(rig.table(blob).freeSlot(keys[0]) > 0);
@@ -291,7 +289,7 @@ class GarbageCollectionTest {
         byte[] data = content(4, 22);
         ManifestEntity m = put("a", data);
         long[] keys = m.chunkKeyArray();
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         BlobFileEntity blob = rig.blobService.cuckooBlobsOf(pool).get(0);
         for (long k : keys) rig.table(blob).freeSlot(k);    // all slots gone, entries (zero references) remain
 
@@ -307,7 +305,7 @@ class GarbageCollectionTest {
     void chunkCollectionWaitsForUploadsThatDeduplicatedAgainstZeroReferenceEntries() throws Exception {
         byte[] data = content(3, 23);
         put("a", data);
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
 
         ManifestEntity staged = stage("b", data);               // dedups against the three zero-reference entries
         assertTrue(staged.getStagedChunks().stream().allMatch(p -> p.indexed()), "found in the index, nothing written");
@@ -317,7 +315,7 @@ class GarbageCollectionTest {
         assertEquals(0, r.chunksFreed, "slots are not freed under an upload that relies on them");
         assertEquals(3, r.deferred);
 
-        rig.files.commitObject(staged);                         // the upload commits against intact chunks
+        rig.writer.commitObject(staged);                         // the upload commits against intact chunks
         assertEquals(0, rig.chunkStore.gate().inFlight());
         assertArrayEquals(data, get("b"));
         assertEquals(0, gc0().chunksFreed, "referenced again");
@@ -328,7 +326,7 @@ class GarbageCollectionTest {
     void aFailingSlotFreeEndsTheBatchButKeepsWhatWasDone() throws Exception {
         byte[] data = content(6, 24);
         put("a", data);
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         long cutoff = System.currentTimeMillis() + 1000;
         List<GcRepository.ChunkRef> due = rig.gcRepo.dueChunks(null, cutoff, 100);
         int[] calls = {0};
@@ -365,8 +363,8 @@ class GarbageCollectionTest {
         } finally {
             used.forEach(rig.cache::unfreeze);
         }
-        rig.files.commitObject(first);
-        rig.files.commitObject(second);
+        rig.writer.commitObject(first);
+        rig.writer.commitObject(second);
         long orphans = stats().orphans();
         assertTrue(orphans > 0, "the test needs chunks that were written twice");
         assertEquals(6 + orphans, physical());
@@ -394,7 +392,7 @@ class GarbageCollectionTest {
         assertEquals(0, s.freed);
         assertEquals(8, physical());
 
-        rig.files.commitObject(staged);                         // the upload was never harmed
+        rig.writer.commitObject(staged);                         // the upload was never harmed
         assertArrayEquals(data, get("x"));
         s = rig.gc.sweep(pool);
         assertEquals(0, s.strays);
@@ -405,7 +403,7 @@ class GarbageCollectionTest {
         assertEquals(12, physical());
         s = rig.gc.sweep(pool);
         assertTrue(s.deferred);
-        rig.files.abortStaged(abandoned);
+        rig.writer.abortStaged(abandoned);
         s = rig.gc.sweep(pool);
         assertFalse(s.deferred);
         assertEquals(4, s.strays);
@@ -436,12 +434,12 @@ class GarbageCollectionTest {
         Thread.sleep(100);
         assertFalse(late.isDone(), "new uploads wait while the gate is being drained");
 
-        rig.files.commitObject(staged);
+        rig.writer.commitObject(staged);
         SweepReport s = sweep.get(10, TimeUnit.SECONDS);
         assertEquals(0, s.freed, "the candidates were committed meanwhile: the in-transaction re-check keeps them");
         assertTrue(s.notStray > 0, "the sweep had seen the in-flight chunks as candidates");
         assertFalse(s.deferred);
-        rig.files.commitObject(late.get(10, TimeUnit.SECONDS));
+        rig.writer.commitObject(late.get(10, TimeUnit.SECONDS));
         assertArrayEquals(data, get("x"));
         assertEquals(6, physical());
     }
@@ -474,9 +472,9 @@ class GarbageCollectionTest {
         assertEquals(4, s.freed, "the hold was too old: revoked, its copies are strays");
         assertEquals(0, physical());
         ChunkRepository.ChunkPlacementException e = assertThrows(ChunkRepository.ChunkPlacementException.class,
-                () -> rig.files.commitObject(staged));
+                () -> rig.writer.commitObject(staged));
         assertEquals(ChunkRepository.ChunkPlacementException.Reason.COLLECTED, e.reason());
-        assertTrue(rig.files.findObject("bkt", "slow").isEmpty());
+        assertTrue(rig.catalog.findObject("bkt", "slow").isEmpty());
         put("slow", data);
         assertArrayEquals(data, get("slow"));
     }
@@ -514,7 +512,7 @@ class GarbageCollectionTest {
     void aReaderThatHoldsAnOldChunkedVersionKeepsReadingItWithinTheGracePeriod() throws Exception {
         byte[] v1 = content(5, 41);
         ManifestEntity old = put("k", v1);
-        ManifestEntity holder = rig.files.findObject("bkt", "k").orElseThrow();   // the reader's snapshot of the manifest
+        ManifestEntity holder = rig.catalog.findObject("bkt", "k").orElseThrow();   // the reader's snapshot of the manifest
         put("k", content(5, 42));                                // overwrite: v1's chunks go to the queue
         assertEquals(5, stats().gcQueue());
 
@@ -531,10 +529,10 @@ class GarbageCollectionTest {
     void smallRecordsAreMarkedDeletedOnlyByTheCollectorAfterTheGracePeriod() throws Exception {
         byte[] v1 = bytes(300, 51);
         put("s", v1);
-        ManifestEntity holder = rig.files.findObject("bkt", "s").orElseThrow();
+        ManifestEntity holder = rig.catalog.findObject("bkt", "s").orElseThrow();
         BlobFileEntity sob = holder.getSmallBlob();
         put("s", bytes(400, 52));                                // overwrite
-        rig.files.deleteObject("bkt", "s");                      // and delete
+        rig.catalog.deleteObject("bkt", "s");                      // and delete
         var st = rig.blobService.getSmallStats(sob);
         assertEquals(2, st.liveRecords(), "nothing is marked DELETED at commit / delete time any more");
         assertEquals(0, st.deadRecords());
@@ -559,8 +557,8 @@ class GarbageCollectionTest {
     void chunkedAndEmptyTombstonesAreRemovedWithoutSideEffects() throws Exception {
         put("e", new byte[0]);
         put("c", content(2, 61));
-        rig.files.deleteObject("bkt", "e");
-        rig.files.deleteObject("bkt", "c");
+        rig.catalog.deleteObject("bkt", "e");
+        rig.catalog.deleteObject("bkt", "c");
         assertEquals(2, rig.manifests.gcQueueSize());
         RunReport r = gc0();
         assertEquals(2, r.tombstones);
@@ -572,7 +570,7 @@ class GarbageCollectionTest {
     void passesAreRepeatableAfterARestart() throws Exception {
         put("a", content(4, 71));
         put("b", content(4, 72));
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         rig.reopen();
         pool = rig.bucket("bkt");
         RunReport r = gc0();
@@ -591,7 +589,7 @@ class GarbageCollectionTest {
         put("b", content(3, 83));
         get("a");
         assertEquals(7, rig.chunkStore.cachedLocations(), "stage and reads fill the hint cache");
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         gc0();
         assertEquals(3, rig.chunkStore.cachedLocations(), "the hints of the freed chunks are dropped, the live ones stay");
         assertArrayEquals(content(3, 83), get("b"));
@@ -629,7 +627,7 @@ class GarbageCollectionTest {
                     String key = "t" + id + "-k" + rnd.nextInt(6);
                     int op = rnd.nextInt(10);
                     if (op < 2 && mine.containsKey(key)) {
-                        rig.files.deleteObject("bkt", key);
+                        rig.catalog.deleteObject("bkt", key);
                         mine.remove(key);
                         continue;
                     }
@@ -683,7 +681,7 @@ class GarbageCollectionTest {
     @Test
     void statusReportsTheQueues() throws Exception {
         put("a", content(4, 81));
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         var st = rig.gc.status();
         assertEquals(4, st.chunkQueue());
         assertEquals(0, st.chunkQueueDue(), "grace period not over");
@@ -697,8 +695,8 @@ class GarbageCollectionTest {
     @Test
     void deletingAPoolWhileItsGarbageWaitsLeavesNothingBehind() throws Exception {
         put("a", content(4, 91));
-        rig.files.deleteObject("bkt", "a");
-        rig.files.deleteObject("bkt", "nothing");
+        rig.catalog.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "nothing");
         for (var x : List.of("a")) assertNotNull(x);
         // an empty bucket can be deleted with its garbage still queued; the collector then finds nothing to do
         rig.poolService.deleteBucket("bkt");

@@ -20,8 +20,6 @@ import org.example.sectoriadb.maintenance.gc.GcReports.CompactionReport;
 import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
@@ -62,7 +60,6 @@ import java.util.concurrent.locks.ReentrantLock;
  * A crash before the swap leaves the old blob authoritative and an unreferenced new file; after the swap the old file is
  * unreferenced. Both are harmless garbage that {@link #deleteUnregisteredFiles} removes.
  */
-@Component
 public class SmallBlobCompactor {
 
     private static final Logger log = LoggerFactory.getLogger(SmallBlobCompactor.class);
@@ -86,7 +83,6 @@ public class SmallBlobCompactor {
 
     private final ConcurrentLinkedQueue<PendingFile> pending = new ConcurrentLinkedQueue<>();
 
-    @Autowired
     public SmallBlobCompactor(BlobFileRepository blobRepo, ManifestRepository manifestRepo, PoolRepository poolRepo,
                               GcRepository gcRepo, BlobService blobs, SmallBlobCache smallCache, ChunkStore chunkStore,
                               StorageProperties props, StorageMetrics metrics) {

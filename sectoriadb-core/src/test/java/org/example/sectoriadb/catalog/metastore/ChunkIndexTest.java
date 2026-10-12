@@ -7,7 +7,6 @@ import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PlacedChunk;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ChunkRepository;
-import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -62,13 +61,13 @@ class ChunkIndexTest {
     }
 
     ManifestEntity put(String key, byte[] data) throws Exception {
-        return rig.files.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
+        return rig.writer.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
     }
 
     byte[] get(String key) throws Exception {
-        ManifestEntity m = rig.files.findObject("bkt", key).orElseThrow();
+        ManifestEntity m = rig.catalog.findObject("bkt", key).orElseThrow();
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        rig.files.streamToOutput(m, out);
+        rig.reader.streamToOutput(m, out);
         return out.toByteArray();
     }
 
@@ -95,12 +94,12 @@ class ChunkIndexTest {
         }
         assertArrayEquals(data, get("same-3"));
 
-        rig.files.deleteObject("bkt", "same-0");
-        rig.files.deleteObject("bkt", "same-1");
+        rig.catalog.deleteObject("bkt", "same-0");
+        rig.catalog.deleteObject("bkt", "same-1");
         assertEquals(9, stats().refs());
         assertEquals(0, stats().gcQueue(), "still referenced: not garbage");
 
-        for (int i = 2; i < 5; i++) rig.files.deleteObject("bkt", "same-" + i);
+        for (int i = 2; i < 5; i++) rig.catalog.deleteObject("bkt", "same-" + i);
         assertEquals(0, stats().refs());
         assertEquals(3, stats().gcQueue(), "all three chunks are now garbage, queued once each");
         assertEquals(3, stats().chunks(), "the index entries and the bytes stay until the collector runs");
@@ -118,7 +117,7 @@ class ChunkIndexTest {
         assertEquals(1, physicalChunks());
         assertEquals(4, rig.chunks.find(pool.getId(), m.chunkKeyArray()[0]).orElseThrow().refcount());
         assertArrayEquals(data, get("rep"));
-        rig.files.deleteObject("bkt", "rep");
+        rig.catalog.deleteObject("bkt", "rep");
         assertEquals(0, stats().refs());
         assertEquals(1, stats().gcQueue());
     }
@@ -145,7 +144,7 @@ class ChunkIndexTest {
     void anUploadThatDeduplicatesAgainstAZeroReferenceChunkRevivesIt() throws Exception {
         byte[] data = content(2, 11);
         put("x", data);
-        rig.files.deleteObject("bkt", "x");
+        rig.catalog.deleteObject("bkt", "x");
         assertEquals(2, stats().gcQueue());
         assertEquals(0, stats().refs());
 
@@ -161,11 +160,11 @@ class ChunkIndexTest {
         byte[] data = content(2, 12);
         put("x", data);
         // the upload finds the chunks in the index (indexed = true) and does not write them
-        ManifestEntity staged = rig.files.stageStream(new ByteArrayInputStream(data), pool, "y", null,
+        ManifestEntity staged = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "y", null,
                 org.example.sectoriadb.checksum.UploadChecksums.none());
         assertTrue(staged.getStagedChunks().stream().allMatch(PlacedChunk::indexed));
         // ... then the object that held them goes away and a (future) collector removes the entries
-        rig.files.deleteObject("bkt", "x");
+        rig.catalog.deleteObject("bkt", "x");
         rig.store.writeVoid(tx -> {
             for (long k : staged.chunkKeyArray()) {
                 ChunkEntry e = Chunks.get(tx, pool.getId(), k).orElseThrow();
@@ -180,9 +179,9 @@ class ChunkIndexTest {
             }
             rows.forEach(gc::delete);
         });
-        var e = assertThrows(ChunkRepository.ChunkPlacementException.class, () -> rig.files.commitObject(staged));
+        var e = assertThrows(ChunkRepository.ChunkPlacementException.class, () -> rig.writer.commitObject(staged));
         assertTrue(e.getMessage().contains("collected meanwhile"), e.getMessage());
-        assertTrue(rig.files.findObject("bkt", "y").isEmpty(), "nothing was committed");
+        assertTrue(rig.catalog.findObject("bkt", "y").isEmpty(), "nothing was committed");
         assertEquals(0, stats().chunks());
     }
 
@@ -195,7 +194,7 @@ class ChunkIndexTest {
         byte[] data = content(6, 21);
 
         // two uploads of the same new content stage concurrently: neither sees the other's chunks in the index
-        ManifestEntity first = rig.files.stageStream(new ByteArrayInputStream(data), pool, "a", null,
+        ManifestEntity first = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "a", null,
                 org.example.sectoriadb.checksum.UploadChecksums.none());
         // the second one is steered to the other blob(s): the blobs the first used are frozen for its placement
         java.util.Set<String> used = new java.util.HashSet<>();
@@ -203,7 +202,7 @@ class ChunkIndexTest {
         used.forEach(rig.cache::freeze);
         ManifestEntity second;
         try {
-            second = rig.files.stageStream(new ByteArrayInputStream(data), pool, "b", null,
+            second = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "b", null,
                     org.example.sectoriadb.checksum.UploadChecksums.none());
         } finally {
             used.forEach(rig.cache::unfreeze);
@@ -216,8 +215,8 @@ class ChunkIndexTest {
         }
         assertTrue(differing > 0, "the test needs chunks that were written twice");
 
-        rig.files.commitObject(first);
-        rig.files.commitObject(second);
+        rig.writer.commitObject(first);
+        rig.writer.commitObject(second);
 
         assertEquals(6, stats().chunks());
         assertEquals(12, stats().refs());
@@ -280,7 +279,7 @@ class ChunkIndexTest {
                 for (int i = 0; i < 40; i++) {
                     String key = "k" + r.nextInt(10);
                     if (r.nextInt(4) == 0) {
-                        rig.files.deleteObject("bkt", key);
+                        rig.catalog.deleteObject("bkt", key);
                     } else {
                         int n = 1 + r.nextInt(4);
                         ByteArrayOutputStream o = new ByteArrayOutputStream();
@@ -297,7 +296,7 @@ class ChunkIndexTest {
         assertTrue(stats().chunks() <= alphabet.length);
         for (var m : rig.manifests.findAllLive()) {
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            rig.files.streamToOutput(m, out);
+            rig.reader.streamToOutput(m, out);
             assertEquals(m.getTotalBytes(), out.size());
         }
     }
@@ -318,8 +317,8 @@ class ChunkIndexTest {
     void deletingTheBucketRemovesItsChunkIndex() throws Exception {
         put("a", content(4, 51));
         put("b", content(4, 52));
-        rig.files.deleteObject("bkt", "a");
-        rig.files.deleteObject("bkt", "b");
+        rig.catalog.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "b");
         assertEquals(8, stats().chunks());
         rig.poolService.deleteBucket("bkt");
         assertEquals(new ChunkRepository.Stats(0, 0, 0, 0), stats());
@@ -340,7 +339,7 @@ class ChunkIndexTest {
             assertTrue(rig.chunks.countByBlob(b.getId()) > 0, "blob " + b.getId() + " holds chunks");
             assertThrows(IllegalStateException.class, () -> rig.blobService.delete(b.getId()));
         }
-        rig.files.deleteObject("bkt", "a");
+        rig.catalog.deleteObject("bkt", "a");
         for (BlobFileEntity b : blobs) rig.blobService.delete(b.getId());
         assertEquals(new ChunkRepository.Stats(0, 0, 0, 0), stats(), "the zero-reference entries went with their blobs");
         assertNotNull(second);

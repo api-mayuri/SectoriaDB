@@ -3,7 +3,6 @@ package org.example.sectoriadb.engine.blob;
 import org.example.sectoriadb.engine.hash.Crc32c;
 import org.example.sectoriadb.engine.error.InvalidBlobHeaderException;
 import org.example.sectoriadb.engine.format.SmallBlobLayout;
-import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

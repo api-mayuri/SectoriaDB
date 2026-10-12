@@ -11,7 +11,6 @@ import org.example.sectoriadb.engine.placement.RendezvousPlacement;
 import org.example.sectoriadb.engine.placement.RendezvousPlacement.Candidate;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.engine.error.ChunkCorruptedException;
-import org.example.sectoriadb.storage.ChunkNotFoundException;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.example.sectoriadb.engine.io.FileChannelStorageIOEngine;
 import org.example.sectoriadb.engine.error.KeyCollisionException;
@@ -20,8 +19,6 @@ import org.example.sectoriadb.engine.hash.BytesHasher;
 import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -57,7 +54,6 @@ import java.util.zip.CRC32C;
  * The blob of a chunk comes from the index, never from probing blobs: one batched index lookup per window of
  * {@value #WINDOW} chunks of the request.
  */
-@Service
 public class ChunkStore {
 
     private static final Logger log = LoggerFactory.getLogger(ChunkStore.class);
@@ -75,22 +71,14 @@ public class ChunkStore {
     private final LocationCache locations;
     private final UploadGate gate = new UploadGate();
 
-    @Autowired
     public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, StorageProperties props) {
-        this(index, blobs, cache, new XxHash64BytesHasher(), props.getPool().getLocationCacheEntries());
+        this(index, blobs, cache, new XxHash64BytesHasher(), props);
     }
 
-    public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache) {
-        this(index, blobs, cache, new XxHash64BytesHasher(), new StorageProperties().getPool().getLocationCacheEntries());
-    }
-
-    /** With a custom hasher (tests force key collisions with it). */
-    public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, BytesHasher hasher) {
-        this(index, blobs, cache, hasher, new StorageProperties().getPool().getLocationCacheEntries());
-    }
-
-    private ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, BytesHasher hasher,
-                       int locationCacheEntries) {
+    /** @param hasher the 64-bit chunk hash (tests force key collisions with a custom one) */
+    public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, BytesHasher hasher,
+                      StorageProperties props) {
+        int locationCacheEntries = props.getPool().getLocationCacheEntries();
         this.index = index;
         this.blobs = blobs;
         this.cache = cache;

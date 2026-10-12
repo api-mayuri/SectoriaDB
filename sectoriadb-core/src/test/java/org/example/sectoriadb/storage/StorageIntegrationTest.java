@@ -3,7 +3,6 @@ package org.example.sectoriadb.storage;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
-import org.example.sectoriadb.storage.ObjectVerificationService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -56,12 +55,12 @@ class StorageIntegrationTest {
     }
 
     private ManifestEntity put(PoolEntity pool, String key, byte[] data) throws Exception {
-        return rig.files.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
+        return rig.writer.storeStream(new ByteArrayInputStream(data), pool, key, "application/octet-stream");
     }
 
     private byte[] get(ManifestEntity m) throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        rig.files.streamToOutput(m, out);
+        rig.reader.streamToOutput(m, out);
         return out.toByteArray();
     }
 
@@ -95,7 +94,7 @@ class StorageIntegrationTest {
         pool16.shutdown();
         assertEquals(threads, committedIds.size());
 
-        ManifestEntity live = rig.files.findObject("race", "same-key").orElseThrow();
+        ManifestEntity live = rig.catalog.findObject("race", "same-key").orElseThrow();
         assertTrue(committedIds.contains(live.getId()));
         byte[] content = get(live);
         int winner = -1;
@@ -112,7 +111,7 @@ class StorageIntegrationTest {
         assertEquals(expected, queued, "the 15 losers are retired exactly once");
         assertEquals(2, rig.manifests.listObjects("race", "", null, null, 100).objects().size(), "no lost index entries");
         assertEquals(1, rig.manifests.countAndSize("race").objects() - 1);
-        assertEquals(1, rig.files.findObject("race", "other").map(m -> 1).orElse(0));
+        assertEquals(1, rig.catalog.findObject("race", "other").map(m -> 1).orElse(0));
         MetaInvariants.check(rig.store);
     }
 
@@ -131,8 +130,8 @@ class StorageIntegrationTest {
 
         PoolEntity again = rig.poolService.findByName("persist").orElseThrow();
         assertEquals(pool.getId(), again.getId());
-        assertArrayEquals(small, get(rig.files.findObject("persist", "dir/small").orElseThrow()));
-        assertArrayEquals(big, get(rig.files.findObject("persist", "dir/big").orElseThrow()));
+        assertArrayEquals(small, get(rig.catalog.findObject("persist", "dir/small").orElseThrow()));
+        assertArrayEquals(big, get(rig.catalog.findObject("persist", "dir/big").orElseThrow()));
         assertEquals(List.of("dir/"), rig.manifests.listObjects("persist", "", "/", null, 10).commonPrefixes());
         assertEquals(queued, rig.manifests.gcQueueSize());
         assertClean();
@@ -145,18 +144,18 @@ class StorageIntegrationTest {
         ManifestEntity before = put(pool, "k", old);
 
         // the data of a replacement reaches the blobs, then "the process dies" before commitObject
-        ManifestEntity staged = rig.files.stageStream(new ByteArrayInputStream(body(6, StorageRig.CHUNK * 2)), pool, "k",
+        ManifestEntity staged = rig.writer.stageStream(new ByteArrayInputStream(body(6, StorageRig.CHUNK * 2)), pool, "k",
                 "application/octet-stream", org.example.sectoriadb.checksum.UploadChecksums.none());
-        ManifestEntity staged2 = rig.files.stageStream(new ByteArrayInputStream(body(7, 500)), pool, "never", "x",
+        ManifestEntity staged2 = rig.writer.stageStream(new ByteArrayInputStream(body(7, 500)), pool, "never", "x",
                 org.example.sectoriadb.checksum.UploadChecksums.none());
         assertNotNull(staged.getId());
         assertNotNull(staged2.getId());
 
         rig.reopen();
 
-        assertEquals(before.getId(), rig.files.findObject("crash", "k").orElseThrow().getId(), "the old version is still current");
-        assertArrayEquals(old, get(rig.files.findObject("crash", "k").orElseThrow()));
-        assertTrue(rig.files.findObject("crash", "never").isEmpty(), "uncommitted object is absent");
+        assertEquals(before.getId(), rig.catalog.findObject("crash", "k").orElseThrow().getId(), "the old version is still current");
+        assertArrayEquals(old, get(rig.catalog.findObject("crash", "k").orElseThrow()));
+        assertTrue(rig.catalog.findObject("crash", "never").isEmpty(), "uncommitted object is absent");
         assertEquals(List.of("k"), rig.manifests.listObjects("crash", "", null, null, 10).objects().stream()
                 .map(ManifestRepository.ObjectSummary::key).toList());
         assertEquals(0, rig.manifests.gcQueueSize(), "nothing was retired");

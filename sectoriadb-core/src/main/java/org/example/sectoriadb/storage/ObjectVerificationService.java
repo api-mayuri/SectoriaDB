@@ -6,9 +6,7 @@ import org.example.sectoriadb.checksum.MultiDigest;
 import org.example.sectoriadb.checksum.MultiDigestOutputStream;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.engine.error.ChunkCorruptedException;
-import org.example.sectoriadb.storage.ChunkNotFoundException;
 import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.OutputStream;
@@ -23,7 +21,6 @@ import java.util.function.Predicate;
  * CRC32C (done by the read path itself), the stored whole-object CRC32C, the client's additional checksum (full-object
  * only; composite values cannot be recomputed without the part boundaries) and the MD5 of non-multipart ETags.
  */
-@Service
 public class ObjectVerificationService {
 
     public enum Status { OK, CORRUPT, MISSING }
@@ -37,10 +34,12 @@ public class ObjectVerificationService {
         public boolean allOk() { return corrupt == 0 && missing == 0; }
     }
 
-    private final FileStorageService fileService;
+    private final ObjectCatalog catalog;
+    private final ObjectReader reader;
 
-    public ObjectVerificationService(FileStorageService fileService) {
-        this.fileService = fileService;
+    public ObjectVerificationService(ObjectCatalog catalog, ObjectReader reader) {
+        this.catalog = catalog;
+        this.reader = reader;
     }
 
     public Result verify(ManifestEntity m) {
@@ -57,7 +56,7 @@ public class ObjectVerificationService {
         MultiDigest digest = new MultiDigest(checkMd5, algs);
 
         try (OutputStream out = new MultiDigestOutputStream(OutputStream.nullOutputStream(), digest)) {
-            fileService.streamToOutput(m, out, false);   // chunk / record CRCs are checked by the read path
+            reader.streamToOutput(m, out, false);   // chunk / record CRCs are checked by the read path
         } catch (ChunkCorruptedException | SmallObjectCorruptedException e) {
             details.add("CORRUPT: " + e.getMessage());
             return new Result(m.getId(), name, Status.CORRUPT, details);
@@ -115,7 +114,7 @@ public class ObjectVerificationService {
     public Summary verifyAll(Predicate<ManifestEntity> filter) {
         int total = 0, ok = 0, corrupt = 0, missing = 0;
         List<Result> problems = new ArrayList<>();
-        for (ManifestEntity m : fileService.listAll()) {
+        for (ManifestEntity m : catalog.listAll()) {
             if (!filter.test(m)) continue;
             total++;
             Result r = verify(m);

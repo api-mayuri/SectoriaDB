@@ -10,7 +10,9 @@ import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.s3.access.AccessControlService;
-import org.example.sectoriadb.storage.FileStorageService;
+import org.example.sectoriadb.storage.ObjectWriter;
+import org.example.sectoriadb.storage.ObjectReader;
+import org.example.sectoriadb.storage.ObjectCatalog;
 import org.example.sectoriadb.engine.error.ChunkCorruptedException;
 import org.example.sectoriadb.storage.ChunkNotFoundException;
 import org.example.sectoriadb.storage.ObjectCorruptedException;
@@ -56,15 +58,21 @@ public class S3ObjectController {
                     .withZone(ZoneOffset.UTC);
 
     private final PoolService poolService;
-    private final FileStorageService fileService;
+    private final ObjectWriter writer;
+    private final ObjectReader reader;
+    private final ObjectCatalog catalog;
     private final S3Lookup lookup;
     private final AccessControlService accessControl;
     private final RequestBodies bodies;
 
-    public S3ObjectController(PoolService poolService, FileStorageService fileService, S3Lookup lookup,
+    public S3ObjectController(PoolService poolService, ObjectWriter writer, ObjectReader reader, ObjectCatalog catalog, S3Lookup lookup,
                                AccessControlService accessControl, RequestBodies bodies) {
         this.poolService   = poolService;
-        this.fileService   = fileService;
+        this.writer = writer;
+
+        this.reader = reader;
+
+        this.catalog = catalog;
         this.lookup        = lookup;
         this.accessControl = accessControl;
         this.bodies        = bodies;
@@ -101,7 +109,7 @@ public class S3ObjectController {
         // Step 1: blob data (not visible yet). Step 2: ONE transaction that saves the complete manifest, points the
         // (bucket, key) index at it and retires the previous version, so concurrent PUTs of a key cannot both win.
         try (InputStream rawIn = bodies.openBody(request, declared)) {
-            ManifestEntity entity = fileService.stageStream(rawIn, pool, objectKey, contentType, declared.checksums());
+            ManifestEntity entity = writer.stageStream(rawIn, pool, objectKey, contentType, declared.checksums());
 
             // Set additional metadata
             if (cacheControl != null) entity.setCacheControl(cacheControl);
@@ -113,9 +121,9 @@ public class S3ObjectController {
 
             try {
                 accessControl.applyObjectAcl(request, new byte[0], entity);
-                entity = fileService.commitObject(entity, precondition);
+                entity = writer.commitObject(entity, precondition);
             } finally {
-                fileService.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
+                writer.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
             }
 
             var ok = ResponseEntity.ok()
@@ -213,10 +221,10 @@ public class S3ObjectController {
         try {
             if (partial) {
                 // Range reads rely on the per-chunk / per-record CRC32C only.
-                fileService.streamRange(entity, out, start, length);
+                reader.streamRange(entity, out, start, length);
             } else {
                 // Verifies the whole-object CRC32C while streaming; the last chunk is held back until it matches.
-                fileService.streamToOutput(entity, out);
+                reader.streamToOutput(entity, out);
             }
         } catch (ClientAbortException e) {
             throw e;
@@ -377,7 +385,7 @@ public class S3ObjectController {
 
         S3Support.requireOnlyQueryParams(request, "x-id", "versionId");
         String objectKey = S3Support.extractKey(request, bucket);
-        fileService.deleteObject(bucket, objectKey);   // idempotent: deleting a missing key is a 204 as in S3
+        catalog.deleteObject(bucket, objectKey);   // idempotent: deleting a missing key is a 204 as in S3
 
         return ResponseEntity.noContent()
                 .header("x-amz-request-id", S3Support.requestId())
@@ -443,16 +451,16 @@ public class S3ObjectController {
                 ? (contentType != null ? contentType : "application/octet-stream")
                 : srcEntity.getContentType();
 
-        Path tmp = Files.createTempFile(fileService.uploadTmpDir(), "sectoriadb-copy-", ".tmp");
+        Path tmp = Files.createTempFile(writer.uploadTmpDir(), "sectoriadb-copy-", ".tmp");
         try {
             try (OutputStream out = Files.newOutputStream(tmp)) {
-                fileService.streamToOutput(srcEntity, out);
+                reader.streamToOutput(srcEntity, out);
             }
             ChecksumAlgorithm destAlg = requestedAlg != null ? requestedAlg
                     : (srcEntity.getChecksumType() == ChecksumType.FULL_OBJECT ? srcEntity.getChecksumAlgorithm() : null);
             ManifestEntity entity;
             try (InputStream in = Files.newInputStream(tmp)) {
-                entity = fileService.stageStream(in, destPool, destKey, newContentType,
+                entity = writer.stageStream(in, destPool, destKey, newContentType,
                         destAlg != null ? UploadChecksums.compute(destAlg) : UploadChecksums.none());
             }
 
@@ -471,9 +479,9 @@ public class S3ObjectController {
             }
             try {
                 accessControl.applyObjectAcl(request, new byte[0], entity);
-                entity = fileService.commitObject(entity);   // one transaction, replaces the previous destination version
+                entity = writer.commitObject(entity);   // one transaction, replaces the previous destination version
             } finally {
-                fileService.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
+                writer.abortStaged(entity);   // no-op after a commit; releases the garbage collector hold on a failure
             }
 
             String xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
