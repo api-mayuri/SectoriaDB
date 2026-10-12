@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
-/** Stage 03: header, per-slot CRC32C, quarantine, collision re-keying, fill factor. */
+/** Header, per-slot CRC32C, quarantine, collision re-keying, fill factor. */
 class ChunkIntegrityTest {
 
     private static final int CHUNK = 64;

@@ -37,7 +37,7 @@ class MetaStoreHardeningTest {
         return MetaStoreOptions.defaults().pageSize(ps).fsync(false);
     }
 
-    // ---------------------------------------------------------------- A1
+    // ── degenerate keys and values ─────────────────────────────────────────
 
     @Test
     void emptyAndTinyValuesWithMaximumKeysDoNotCrash() {
@@ -68,7 +68,7 @@ class MetaStoreHardeningTest {
         }
     }
 
-    // ---------------------------------------------------------------- A2
+    // ── interrupted bodies ─────────────────────────────────────────────────
 
     @Test
     void aBodyThatLeavesTheInterruptFlagSetDoesNotKillGroupedWrites() throws Exception {
@@ -84,7 +84,7 @@ class MetaStoreHardeningTest {
         }
     }
 
-    // ---------------------------------------------------------------- A3
+    // ── metrics sink failures ──────────────────────────────────────────────
 
     @Test
     void aFailingMetricsSinkDoesNotFailOrPoisonDurableCommits() throws Exception {
@@ -105,7 +105,7 @@ class MetaStoreHardeningTest {
         }
     }
 
-    // ---------------------------------------------------------------- A4
+    // ── half-created files ─────────────────────────────────────────────────
 
     @Test
     void aHalfCreatedFileIsReinitialisedOnOpen() throws Exception {
@@ -142,7 +142,7 @@ class MetaStoreHardeningTest {
         assertEquals("this is not a metadata store", Files.readString(f));
     }
 
-    // ---------------------------------------------------------------- A5
+    // ── cursor misuse ──────────────────────────────────────────────────────
 
     @Test
     void cursorKeyAndValueFailAfterAModification() {
@@ -166,7 +166,7 @@ class MetaStoreHardeningTest {
         }
     }
 
-    // ---------------------------------------------------------------- A7
+    // ── nested transactions in a grouped body ──────────────────────────────
 
     @Test
     void beginWriteAndVerifyFromAGroupedBodyFailFastInsteadOfDeadlocking() throws Exception {
@@ -197,7 +197,7 @@ class MetaStoreHardeningTest {
         }
     }
 
-    // ---------------------------------------------------------------- A8
+    // ── closed store ───────────────────────────────────────────────────────
 
     @Test
     void beginReadAfterCloseFailsAndCloseIsIdempotent() {
@@ -267,7 +267,7 @@ class MetaStoreHardeningTest {
         }
     }
 
-    // ---------------------------------------------------------------- A9
+    // ── corrupt page pointers ──────────────────────────────────────────────
 
     @Test
     void corruptPagePointersGiveCorruptedPageException() throws Exception {
@@ -302,7 +302,7 @@ class MetaStoreHardeningTest {
         }
     }
 
-    // ---------------------------------------------------------------- A11
+    // ── missing trees ──────────────────────────────────────────────────────
 
     @Test
     void readingAMissingTreeInAWriteTxnDoesNotCreateOrDirtyIt() {

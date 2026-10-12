@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Cuckoo insert durability without fsync under the table lock (doc 10, part B): a chunk is written without an fsync and
+ * Cuckoo insert durability without fsync under the table lock: a chunk is written without an fsync and
  * forced by a barrier before the commit that references it. These tests show the ordering (nothing is committed before the
  * barrier) and the crash safety (a disk that drops unforced writes never makes a committed object lose data).
  */

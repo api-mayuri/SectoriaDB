@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * The metastore side of garbage collection (doc 10): the exclusive transactions that free chunk slots, drop orphan and
+ * The metastore side of garbage collection: the exclusive transactions that free chunk slots, drop orphan and
  * tombstone rows and swap small-object blobs. Every method that frees something runs ONE exclusive write transaction
  * (the single-writer slot, which excludes every commit, resize commit and other collector step), re-reads what it is
  * about to remove inside it and frees the physical slot through the {@link SlotFreer} callback, which the service layer
@@ -24,7 +24,7 @@ public interface GcRepository {
     List<ChunkRef> dueChunks(String poolId, long queuedBeforeMillis, int limit);
 
     /**
-     * One exclusive transaction for a batch of chunks, each handled by the protocol of doc 09 ("contract for stage 10"):
+     * One exclusive transaction for a batch of chunks, each handled by the garbage-collection protocol (docs/architecture/09-multi-blob-pool.md):
      * <ol>
      *   <li>no index entry: the queue rows are dropped;</li>
      *   <li>reference count not zero (revived): the queue rows are dropped, the entry stays;</li>

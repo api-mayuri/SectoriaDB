@@ -64,7 +64,7 @@ class S3ExceptionHandlerTest {
         assertEquals("RequestTimeout", r.getBody().getCode());
     }
 
-    /** Doc 10: a chunk the upload deduplicated against was collected before its commit; the client simply retries. */
+    /** A chunk the upload deduplicated against was collected before its commit; the client simply retries. */
     @Test
     void aCollectedChunkIsARetryable503() {
         var r = handler.handleChunkPlacement(new ChunkRepository.ChunkPlacementException(
@@ -74,7 +74,7 @@ class S3ExceptionHandlerTest {
         assertEquals("1", r.getHeaders().getFirst("Retry-After"));
     }
 
-    /** Doc 10, part B: the metadata store refuses writes after a failed commit (reads still work): 507 for a full disk, else 503 SlowDown. */
+    /** The metadata store refuses writes after a failed commit (reads still work): 507 for a full disk, else 503 SlowDown. */
     @Test
     void aStoreThatIsRecoveringIsSlowDownAndAFullMetadataDiskIsInsufficientStorage() {
         var full = new CatalogUnavailableException("read-only",

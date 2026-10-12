@@ -20,7 +20,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Transaction-scoped primitives of the chunk index (see doc 09): the {@code chunks}, {@code chunks_by_blob},
+ * Transaction-scoped primitives of the chunk index: the {@code chunks}, {@code chunks_by_blob},
  * {@code chunk_gc} and {@code chunk_orphans} trees and the reference counting that keeps them consistent with the
  * manifests. Every method runs inside the caller's transaction, so "manifest + references" is one atomic commit.
  */

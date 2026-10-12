@@ -11,7 +11,7 @@ import java.util.Random;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-/** C4/C5: full reads and writes, EOF handling, durable engine. */
+/** Full reads and writes, EOF handling, durable engine. */
 class FileChannelStorageIOEngineTest {
 
     @TempDir

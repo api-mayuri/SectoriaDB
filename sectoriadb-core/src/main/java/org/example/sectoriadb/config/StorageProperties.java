@@ -79,7 +79,7 @@ public class StorageProperties {
     public void setS3(S3 v) { this.s3 = v; }
 
     /**
-     * Several cuckoo blobs per pool (bucket): chunks are spread over them by weighted rendezvous hashing, see doc 09.
+     * Several cuckoo blobs per pool (bucket): chunks are spread over them by weighted rendezvous hashing, see docs/architecture/09-multi-blob-pool.md.
      */
     public static class Pool {
         private int initialBlobs = 1;
@@ -108,7 +108,7 @@ public class StorageProperties {
     }
 
     /**
-     * Bounds on what is kept open in memory (doc 10, part B). Both caches evict the least recently used idle entry when
+     * Bounds on what is kept open in memory. Both caches evict the least recently used idle entry when
      * over their limit; an entry that is in use is never closed (the limits are soft while everything is in use).
      */
     public static class Cache {
@@ -143,7 +143,7 @@ public class StorageProperties {
         public void setCheckpointIntervalBytes(long v) { this.checkpointIntervalBytes = v; }
     }
 
-    /** Garbage collection (doc 10): freeing the slots of unreferenced chunks, stray copies, tombstones, small-blob compaction. */
+    /** Garbage collection: freeing the slots of unreferenced chunks, stray copies, tombstones, small-blob compaction. */
     public static class Gc {
         private boolean enabled = false;
         private Duration grace = Duration.ofMinutes(15);
@@ -246,7 +246,7 @@ public class StorageProperties {
     }
 
     /**
-     * The embedded metadata store (doc 06, doc 09): when it is opened, how a failed commit recovers and the group commit
+     * The embedded metadata store (docs/architecture/06-btree-metastore.md): when it is opened, how a failed commit recovers and the group commit
      * limits ({@code sectoriadb.metastore.group.*}).
      */
     public static class Metastore {

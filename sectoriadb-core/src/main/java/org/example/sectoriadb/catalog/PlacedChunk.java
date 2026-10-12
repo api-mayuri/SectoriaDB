@@ -7,7 +7,7 @@ package org.example.sectoriadb.catalog;
  * @param blobId  the cuckoo blob that holds the bytes this upload wrote or verified
  * @param indexed true if the chunk was already in the committed chunk index when the upload looked (nothing was
  *                written for it): if the entry is gone at commit time the data may be gone as well, and the commit
- *                fails instead of trusting a copy nobody protects (see doc 09, "contract for stage 10")
+ *                fails instead of trusting a copy nobody protects (see docs/architecture/09-multi-blob-pool.md)
  */
 public record PlacedChunk(long key, String blobId, int dataLength, int crc32c, boolean indexed) {
 

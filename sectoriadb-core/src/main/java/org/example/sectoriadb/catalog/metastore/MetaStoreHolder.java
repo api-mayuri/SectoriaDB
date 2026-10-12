@@ -17,7 +17,7 @@ import java.nio.file.Path;
  * {@code sectoriadb.fsync}, closed (and its file lock released) by {@link #close()}.
  *
  * <p>Group commit limits (docs/architecture/09-multi-blob-pool.md): {@code sectoriadb.metastore.group.*}. A failed
- * commit makes the store read-only until it recovers in place (doc 10, part B); {@code sectoriadb.metastore.recovery-backoff}
+ * commit makes the store read-only until it recovers in place; {@code sectoriadb.metastore.recovery-backoff}
  * is the pause between attempts.
  *
  * <p>The repositories reach the store through {@link MetaStoreProvider} on every operation, which lets it open lazily:

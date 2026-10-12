@@ -24,7 +24,7 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The reference-counted LRU behind the table cache and the small-blob cache (doc 10, part B). */
+/** The reference-counted LRU behind the table cache and the small-blob cache. */
 class ResidentCacheTest {
 
     /** A resource that fails every use after it was closed (like a closed file channel). */
@@ -209,7 +209,7 @@ class ResidentCacheTest {
         ex.shutdown();
     }
 
-    /** The stage-01 race: threads keep using resources while others force constant eviction; nobody sees a closed one. */
+    /** The eviction race: threads keep using resources while others force constant eviction; nobody sees a closed one. */
     @Test
     void usersNeverSeeAClosedResourceUnderEvictionChurn() throws Exception {
         AtomicInteger loads = new AtomicInteger();

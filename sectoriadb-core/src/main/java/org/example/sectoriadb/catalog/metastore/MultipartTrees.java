@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Trees and key encodings of the multipart state (doc 13):
+ * Trees and key encodings of the multipart state:
  * <ul>
  *   <li>{@code mpu_uploads}: {@code uploadId -> MultipartUpload} (JSON), every state;</li>
  *   <li>{@code mpu_by_bucket}: {@code (bucket, key, initiatedAt u64, uploadId) -> empty}, only OPEN uploads, so ListMultipartUploads

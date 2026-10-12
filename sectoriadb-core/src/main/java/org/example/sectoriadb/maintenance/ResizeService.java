@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Expands one cuckoo blob by migrating it into a new, larger blob, while the pool keeps taking writes and reads
- * (doc 10, part B). The protocol, in order:
+ *. The protocol, in order:
  *
  * <ol>
  *   <li><b>Prepare.</b> Create the new file (not registered anywhere: a crash leaves a leftover that the next start
@@ -56,7 +56,7 @@ public class ResizeService {
 
     private static final Logger log = LoggerFactory.getLogger(ResizeService.class);
 
-    /** Guard: a table reaches >90% fill before an insert fails (doc 03), but insert cost grows steeply near the limit. */
+    /** Guard: a table reaches >90% fill before an insert fails, but insert cost grows steeply near the limit. */
     private static final double MAX_SAFE_FILL = 0.70;
     /** Slots read per lock acquisition of the old table while migrating. */
     private static final int MIGRATION_BATCH_SLOTS = 512;

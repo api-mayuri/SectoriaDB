@@ -41,7 +41,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * free end of the path, so at every instant (including a crash) each stored chunk is present in at least
  * one ACTIVE slot with correct data. See docs/architecture/01-engine-safety.md.
  *
- * <h3>Durability of a new chunk (doc 10, part B)</h3>
+ * <h3>Durability of a new chunk</h3>
  * A chunk that goes into a free slot is written (data, then meta) WITHOUT an fsync and without waiting for one: the table
  * lock is not held across fsyncs, so concurrent writers do not queue behind two fsyncs per chunk. The writer calls
  * {@link #barrier()} before the metastore commit that first references its chunks; one fsync of the file (a leader, with
@@ -426,7 +426,7 @@ public class CuckooHashTable implements AutoCloseable {
     }
 
     /**
-     * Frees the slot that holds {@code chunkKey} (garbage collection, doc 10): ACTIVE becomes DELETED, the change is
+     * Frees the slot that holds {@code chunkKey} (garbage collection): ACTIVE becomes DELETED, the change is
      * forced to disk, the active counter drops (fill statistics and placement weights see the space at once). The data
      * bytes stay where they are and are overwritten by whatever chunk takes the slot next. DELETED slots are free for
      * the insert path (eviction-path search treats them like FREE) and invisible to lookups and reads.

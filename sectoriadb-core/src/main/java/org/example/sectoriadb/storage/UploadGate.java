@@ -8,7 +8,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * The upload gate of the garbage collector (doc 10).
+ * The upload gate of the garbage collector.
  *
  * <p><b>Problem.</b> An upload writes its chunks into blobs <i>before</i> its commit transaction creates the index
  * entries. Between the two a copy exists that nothing points to, and it is indistinguishable from the stray copy of a

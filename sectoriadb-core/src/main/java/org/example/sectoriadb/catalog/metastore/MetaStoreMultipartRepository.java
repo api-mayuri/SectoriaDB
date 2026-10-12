@@ -42,7 +42,7 @@ import java.util.regex.Pattern;
 
 /**
  * {@link MultipartRepository} over the {@code mpu_uploads}, {@code mpu_by_bucket} and {@code mpu_parts} trees and the
- * regular manifest and chunk-index trees (doc 13). Every public method is one atomic group-commit body.
+ * regular manifest and chunk-index trees. Every public method is one atomic group-commit body.
  */
 public class MetaStoreMultipartRepository implements MultipartRepository {
 

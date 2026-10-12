@@ -430,7 +430,7 @@ class S3ApiRegressionTest {
         assertEquals("InvalidBucketName", code(bad));
     }
 
-    /** warp "multipart" reads parts with GET ?partNumber=N; the whole object came back and was mistaken for the part (stage 13: served for real). */
+    /** warp "multipart" reads parts with GET ?partNumber=N; the whole object came back and was mistaken for the part. */
     @Test
     void getWithPartNumberReturnsThatPartOfAMultipartObject() throws Exception {
         mkBucket("partnum");

@@ -112,7 +112,7 @@ public interface StorageMetrics {
      */
     default void cuckooBarrier(long nanos, boolean led, long coveredInserts) { }
 
-    /** A cuckoo table was evicted from memory by the LRU policy of the table cache (doc 10, part B). */
+    /** A cuckoo table was evicted from memory by the LRU policy of the table cache. */
     default void tableEvicted() { }
 
     /** A cuckoo blob was added to a pool (it reached the grow threshold, or no blob accepted a chunk). */
@@ -135,10 +135,10 @@ public interface StorageMetrics {
     /** A grouped write body threw and was rolled back without affecting the rest of its batch. */
     default void metaGroupBodyRollback() { }
 
-    /** The write side of the metadata store tried to recover from a failed commit (doc 10, part B). */
+    /** The write side of the metadata store tried to recover from a failed commit. */
     default void metaRecovery(boolean success) { }
 
-    // ---- garbage collection (doc 10) ----------------------------------------------------------------------------
+    // ---- garbage collection ----------------------------------------------------------------------------
 
     /** Why the collector left something for a later pass. */
     enum GcDeferral {

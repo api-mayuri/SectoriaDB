@@ -27,7 +27,7 @@ import java.time.Duration;
 import java.util.EnumSet;
 
 /**
- * The multipart use cases (doc 13). Parts go through the regular write path ({@link ObjectWriter#stagePart}: chunking,
+ * The multipart use cases. Parts go through the regular write path ({@link ObjectWriter#stagePart}: chunking,
  * deduplication, placement, small-object records) and are committed as hidden part manifests in ONE metastore transaction
  * together with their {@code mpu_parts} row; CompleteMultipartUpload is a single metadata transaction
  * ({@link MultipartRepository#complete}) that moves the parts' chunk references and small records into the object
@@ -104,7 +104,7 @@ public class MultipartService {
      * UploadPartCopy: reads the source (the whole object or a range) through the reader, so every integrity check of a
      * normal read applies, and stages the bytes like an uploaded part. (Chunks of the source are not re-linked even when the
      * range is chunk-aligned: the copy is deduplicated against the source by the regular write path, so it costs the read
-     * and the hashing but writes no new chunk; see doc 13.)
+     * and the hashing but writes no new chunk.)
      *
      * @param range null for the whole source, else {start, length}
      */

@@ -32,7 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Tests for atomic insert (C1), locking (C2), hash functions (C3) and IO ordering (C5). */
+/** Tests for atomic insert, locking, hash functions and IO ordering. */
 class CuckooInsertSafetyTest {
 
     private static final int CHUNK = 64;
@@ -70,7 +70,7 @@ class CuckooInsertSafetyTest {
         }
     }
 
-    // ── C1 ───────────────────────────────────────────────────────────────────
+    // ── atomic insert ──────────────────────────────────────────────────────
 
     @Test
     void tableFull_leavesExistingChunksIntactAndTableUnchanged() throws IOException {
@@ -203,7 +203,7 @@ class CuckooInsertSafetyTest {
         assertTrue(movingInserts >= 3, "scenario must exercise multi-step moves, got " + movingInserts);
     }
 
-    // ── C2 ───────────────────────────────────────────────────────────────────
+    // ── locking ────────────────────────────────────────────────────────────
 
     @Test
     void concurrentInserts_allChunksReadable() throws Exception {
@@ -246,7 +246,7 @@ class CuckooInsertSafetyTest {
         assertStored(reloaded, expected);
     }
 
-    // ── C3 ───────────────────────────────────────────────────────────────────
+    // ── hash functions ─────────────────────────────────────────────────────
 
     @Test
     void extremeKeys_includingLongMinValue_workWithNonPowerOfTwoBuckets() throws IOException {
@@ -275,7 +275,7 @@ class CuckooInsertSafetyTest {
         }
     }
 
-    // ── C5 ───────────────────────────────────────────────────────────────────
+    // ── IO ordering ────────────────────────────────────────────────────────
 
     @Test
     void directInsert_writesDataThenMetaWithoutFsyncAndTheBarrierForces() throws IOException {
@@ -297,7 +297,7 @@ class CuckooInsertSafetyTest {
         };
         CuckooHashTable t = open(p, buckets, 8, recording);
         t.insert(42L, ByteBuffer.wrap(payload(42L)));
-        // doc 10, part B: a new chunk in a free slot costs no fsync under the table lock; the writer's barrier forces
+        // a new chunk in a free slot costs no fsync under the table lock; the writer's barrier forces
         assertEquals(List.of("DATA", "META"), ops);
         assertTrue(t.hasUnforcedWrites());
         t.barrier();

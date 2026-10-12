@@ -41,7 +41,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Safe resize under concurrent writes (ROADMAP C6, doc 10 part B): freeze ordered after the inserts in flight, writes
+ * Safe resize under concurrent writes: freeze ordered after the inserts in flight, writes
  * and dedup reads while the blob is frozen, uploads that straddle the resize, readers of old snapshots, the old file's
  * grace period, crashes at every stage, and a stress run with writers, readers and repeated resizes.
  */

@@ -331,7 +331,7 @@ class S3MetricsTest {
         assertEquals(2 * 256 * 4, sample(text, "sectoriadb_cuckoo_slots_capacity"));
         assertEquals(0, sample(text, "sectoriadb_cuckoo_slots_quarantined"));
         assertTrue(sample(text, "sectoriadb_small_dead_bytes") > 0, "the deleted small object is dead space (marked by the collector)");
-        // garbage collection series (doc 10)
+        // garbage collection series
         assertTrue(sampleOr0(text, "sectoriadb_gc_run_seconds_count", "result=success") >= 1);
         assertFalse(Double.isNaN(sample(text, "sectoriadb_gc_run_seconds_count", "result=failure")));
         assertTrue(sampleOr0(text, "sectoriadb_gc_tombstones_collected_total") >= 1);

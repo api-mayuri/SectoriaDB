@@ -55,7 +55,7 @@ import java.util.Map;
  *   GET    /{bucket}?uploads                             — ListMultipartUploads
  *
  * The HTTP layer only: the state lives in the metadata store and every transaction is {@link MultipartService}
- * (doc 13). Errors of the service ({@code MultipartException}) are mapped by the exception handler.
+ *. Errors of the service ({@code MultipartException}) are mapped by the exception handler.
  */
 @RestController
 public class S3MultipartController {

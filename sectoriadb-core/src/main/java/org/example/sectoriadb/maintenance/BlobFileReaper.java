@@ -20,7 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
- * Removes {@code blob_*.raw} files that nobody needs any more (doc 10, part B).
+ * Removes {@code blob_*.raw} files that nobody needs any more.
  *
  * <ul>
  *   <li><b>Replaced files.</b> After a resize commits, the old file is kept for the grace period like the old file of a

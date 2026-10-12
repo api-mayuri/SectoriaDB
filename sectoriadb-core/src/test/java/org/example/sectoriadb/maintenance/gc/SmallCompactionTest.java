@@ -43,7 +43,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Compaction of small-object blobs (doc 10): live records are copied, manifests repointed in one transaction, the old file kept for readers. */
+/** Compaction of small-object blobs: live records are copied, manifests repointed in one transaction, the old file kept for readers. */
 class SmallCompactionTest {
 
     static final int SIZE = 1000;

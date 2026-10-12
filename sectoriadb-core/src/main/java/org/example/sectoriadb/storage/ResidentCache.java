@@ -20,7 +20,7 @@ import java.util.function.ToLongFunction;
  *
  * <ul>
  *   <li>{@link #acquire} returns a {@link ResidentHandle}; the resource stays open at least until every handle is
- *       closed. A resource is closed only when it is out of the cache AND its count is zero, so the race of stage 01
+ *       closed. A resource is closed only when it is out of the cache AND its count is zero, so the race
  *       (an evicted table closed under a thread that still uses it: {@code ClosedChannelException}) cannot happen.</li>
  *   <li>Eviction is bounded by the number of resident resources and an optional memory budget; the least recently
  *       acquired resource with count zero (and for which {@code evictable} holds) goes first. A cache whose members are

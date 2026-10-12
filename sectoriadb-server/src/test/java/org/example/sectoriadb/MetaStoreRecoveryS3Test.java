@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Doc 10, part B: the metadata store recovers in place. While its disk fails, reads keep answering (200), writes are
+ * The metadata store recovers in place. While its disk fails, reads keep answering (200), writes are
  * refused (503 SlowDown, 507 for a full disk), and once the disk works again the next write succeeds without a restart.
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)

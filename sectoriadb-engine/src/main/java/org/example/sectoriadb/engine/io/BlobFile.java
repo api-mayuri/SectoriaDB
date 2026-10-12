@@ -3,10 +3,11 @@ package org.example.sectoriadb.engine.io;
 import java.nio.file.Path;
 
 /**
- * Модель, представляющая конкретный файл данных .raw внутри пула.
- * @param id Уникальный ID файла (например, UUID или порядковый номер)
- * @param path Полный физический путь к файлу на диске
- * @param size Текущий размер файла в байтах
+ * A concrete {@code .raw} data file inside a pool.
+ *
+ * @param id   unique file id (for example a UUID or a sequence number)
+ * @param path full physical path of the file on disk
+ * @param size current file size in bytes
  */
 public record BlobFile(
         String id,

@@ -12,7 +12,7 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 
 /**
- * Background garbage collection (doc 10), enabled by {@code sectoriadb.gc.enabled=true}:
+ * Background garbage collection, enabled by {@code sectoriadb.gc.enabled=true}:
  * <ul>
  *   <li>every {@code sectoriadb.gc.interval} one pass over the chunk queue, the orphan records and the tombstones
  *       (rate limited by {@code max-chunks-per-run}, honoring the grace period {@code sectoriadb.gc.grace});</li>

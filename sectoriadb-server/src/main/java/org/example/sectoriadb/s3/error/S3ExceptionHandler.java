@@ -181,7 +181,7 @@ public class S3ExceptionHandler {
     /**
      * The chunks of an upload cannot be committed because the garbage collector freed one the upload had found in the
      * index (COLLECTED), or a resize / key collision raced with it. Nothing was written; the client retries the whole
-     * request, which is what S3 clients do on a 503 (doc 09, 10).
+     * request, which is what S3 clients do on a 503.
      */
     @ExceptionHandler(ChunkRepository.ChunkPlacementException.class)
     public ResponseEntity<S3Error> handleChunkPlacement(ChunkRepository.ChunkPlacementException ex) {

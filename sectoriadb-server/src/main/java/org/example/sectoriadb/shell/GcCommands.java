@@ -16,7 +16,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 
-/** Garbage collection from the shell (doc 10): {@code gc status}, {@code gc run}, {@code gc sweep}, {@code gc compact}. */
+/** Garbage collection from the shell: {@code gc status}, {@code gc run}, {@code gc sweep}, {@code gc compact}. */
 @ShellComponent
 public class GcCommands {
 

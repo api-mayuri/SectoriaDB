@@ -6,7 +6,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * Write gate, freeze flag and redirects of blob files: the in-memory state that lets a resize replace one blob of a
- * multi-blob pool while uploads run (doc 09, doc 10). It knows nothing about tables or files; {@link HashTableCache}
+ * multi-blob pool while uploads run. It knows nothing about tables or files; {@link HashTableCache}
  * decides what is resident, this class decides whether a blob may still be written to.
  *
  * <ul>

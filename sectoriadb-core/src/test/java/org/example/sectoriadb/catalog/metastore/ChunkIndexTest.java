@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** The pool-wide chunk index: deduplication, reference counts, retirement, revival, orphans (doc 09). */
+/** The pool-wide chunk index: deduplication, reference counts, retirement, revival, orphans. */
 class ChunkIndexTest {
 
     static final int CHUNK = StorageRig.CHUNK;

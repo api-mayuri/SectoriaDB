@@ -37,7 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Stage 11 server hardening: signature rules, bounded bodies, upload admission, conditional writes, multipart safety. */
+/** Server hardening: signature rules, bounded bodies, upload admission, conditional writes, multipart safety. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class S3HardeningTest {
 

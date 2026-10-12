@@ -101,7 +101,7 @@ public final class RendezvousPlacement {
      *
      * <p>Free capacity alone makes an emptier blob proportionally more likely, which already balances fill. But the
      * cost of a cuckoo insert (length of the eviction path, number of {@code fsync}s) grows sharply near the limit
-     * (the table refuses inserts at about 98 % fill, see doc 03), so above {@link #FULL_WEIGHT_UP_TO} the weight is
+     * (the table refuses inserts at about 98 % fill, see docs/architecture/03-chunk-integrity.md), so above {@link #FULL_WEIGHT_UP_TO} the weight is
      * multiplied by {@code ((0.95 - fill) / 0.25)^2}, reaching zero at {@link #NO_WEIGHT_FROM}: 0.36 at 80 % fill, 0.16 at 85 %,
      * 0.04 at 90 %. A blob with weight zero is only used after every other blob refused the chunk.
      *

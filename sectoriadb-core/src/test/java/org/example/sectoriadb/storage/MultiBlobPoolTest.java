@@ -42,7 +42,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Several cuckoo blobs per pool: placement, growth, restart, resize of one blob (doc 09). */
+/** Several cuckoo blobs per pool: placement, growth, restart, resize of one blob. */
 class MultiBlobPoolTest {
 
     static final int CHUNK = StorageRig.CHUNK;

@@ -47,7 +47,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Multipart state in the metastore (doc 13): parts as hidden manifests, zero-copy Complete, checksums derived from the
+ * Multipart state in the metastore: parts as hidden manifests, zero-copy Complete, checksums derived from the
  * stored part values, abort and expiry. The invariant checker runs after every test.
  */
 class MultipartStorageTest {

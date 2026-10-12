@@ -36,7 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Blob tables are loaded lazily, bounded by {@code sectoriadb.cache.max-resident-tables} and evicted LRU; a table that a
- * thread uses is never closed under it (doc 10, part B).
+ * thread uses is never closed under it.
  */
 class TableResidencyTest {
 

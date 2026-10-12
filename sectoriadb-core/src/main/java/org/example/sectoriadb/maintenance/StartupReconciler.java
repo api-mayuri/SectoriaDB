@@ -14,7 +14,7 @@ import java.util.Comparator;
  * Cleans up what a crash can leave behind, once, when the application context is up and before requests are served: the
  * half-built new blob of a resize that never committed, the old blob of a resize that committed but did not get to delete
  * its file. After a restart no reader and no resize exists, so a {@code blob_*.raw} that no blob record names is garbage
- * (doc 10, part B). Skipped for the lazy admin CLI, which must not open the metadata store of a running server.
+ *. Skipped for the lazy admin CLI, which must not open the metadata store of a running server.
  */
 public class StartupReconciler {
 
@@ -43,8 +43,8 @@ public class StartupReconciler {
     }
 
     /**
-     * Before stage 13 multipart uploads lived in files under {@code <data-dir>/.multipart}. They are not read any more
-     * (the owner decided against a migration): uploads that were in flight at the upgrade are dropped, their directory is
+     * Multipart uploads used to live in files under {@code <data-dir>/.multipart}. They are not read any more
+     * (there is no migration): uploads that were in flight at the upgrade are dropped, their directory is
      * deleted once, with a log line saying how many.
      */
     void removeLegacyMultipartDirectory() {

@@ -8,7 +8,7 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * The state of multipart uploads (doc 13): the uploads, their parts and the hidden part manifests, all in the transactional
+ * The state of multipart uploads: the uploads, their parts and the hidden part manifests, all in the transactional
  * metastore. Every method is one atomic transaction; a part commits together with its references, Complete turns the parts
  * into the object manifest without touching any data.
  */

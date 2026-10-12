@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * In-place recovery of the write side after a failed commit (doc 10, part B): reads keep working on the last committed
+ * In-place recovery of the write side after a failed commit: reads keep working on the last committed
  * snapshot during the failure, writes fail fast, and once the fault is gone writes succeed without a restart; the
  * free-page state is rebuilt from the persisted freelist, so {@code verify()} is exact.
  */

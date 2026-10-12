@@ -40,7 +40,7 @@ import java.util.zip.CRC32C;
 
 /**
  * Pool-wide chunk storage: writes the chunks of an upload into the pool's cuckoo blobs and reads them back through the
- * chunk index (doc 09).
+ * chunk index.
  *
  * <h3>Write ({@link #stage})</h3>
  * For every chunk of the file: hash it (XXH64), look the key up in the committed chunk index (one batched read
@@ -99,7 +99,7 @@ public class ChunkStore {
      * the chunk is content addressed and the table verifies its length and CRC32C, so a hint that points at a blob
      * without the chunk (replaced by a resize, freed by the collector, deleted) just misses and the authoritative
      * index lookup runs; a hint to a blob that still holds a copy returns the right bytes. Resizes are followed through
-     * {@link BlobGate#resolveRedirect}. Stage 10 calls {@link #forget} after freeing a chunk (not required for
+     * {@link BlobGate#resolveRedirect}. The garbage collector calls {@link #forget} after freeing a chunk (not required for
      * correctness, it only frees the slot of the cache).
      */
     static final class LocationCache {

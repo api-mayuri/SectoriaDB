@@ -43,7 +43,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Compaction of small-object blobs (doc 10): a {@code small_*.sob} whose dead bytes exceed a threshold is rewritten
+ * Compaction of small-object blobs: a {@code small_*.sob} whose dead bytes exceed a threshold is rewritten
  * into a new file that holds only the live records, the manifests are repointed in ONE metastore transaction and the
  * old file is deleted after the grace period.
  *

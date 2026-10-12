@@ -49,7 +49,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Garbage collection end to end (doc 10): the chunk queue, grace period, the per-chunk protocol and its crash cases, orphans,
+ * Garbage collection end to end: the chunk queue, grace period, the per-chunk protocol and its crash cases, orphans,
  * stray copies and the upload gate, tombstones and the deferred marking of small records.
  */
 class GarbageCollectionTest {

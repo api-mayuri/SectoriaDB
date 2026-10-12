@@ -28,7 +28,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Stage 13 over HTTP: multipart state in the metadata store (auth disabled). */
+/** Multipart over HTTP: state in the metadata store (auth disabled). */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class S3MultipartMetastoreTest {
 

@@ -29,7 +29,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-/** Garbage collection through the S3 API and the shell (doc 10): space comes back, the shell commands work, a collected chunk is a retryable 503. */
+/** Garbage collection through the S3 API and the shell: space comes back, the shell commands work, a collected chunk is a retryable 503. */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class GarbageCollectionS3Test {
 

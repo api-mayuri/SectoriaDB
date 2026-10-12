@@ -200,7 +200,7 @@ public class BlobService {
         return cache.fillStats(entity);
     }
 
-    // ── Pool growth (doc 09) ──────────────────────────────────────────────────
+    // ── Pool growth ──────────────────────────────────────────────────
 
     /** Aggregate fill of the cuckoo blobs of a pool; {@code usedSlots} counts active and quarantined slots. */
     public record PoolFill(int blobs, long usedSlots, long totalSlots) {
