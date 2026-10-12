@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Locale;
+import org.example.sectoriadb.s3.error.PayloadVerificationException;
 
 /**
  * Computes SHA-256 of everything read and, when the end of the stream is reached, compares it with the

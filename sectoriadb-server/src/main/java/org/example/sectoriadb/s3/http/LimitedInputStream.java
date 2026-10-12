@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.http;
 
 import java.io.FilterInputStream;
 import java.io.IOException;

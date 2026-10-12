@@ -9,7 +9,7 @@ import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import org.example.sectoriadb.security.CredentialEntity;
 import org.example.sectoriadb.observability.ObservabilityAttributes;
-import org.example.sectoriadb.s3.S3Support;
+import org.example.sectoriadb.s3.http.S3Support;
 import org.example.sectoriadb.s3.access.AccessControlService;
 import org.example.sectoriadb.security.CredentialService;
 import org.slf4j.Logger;
@@ -30,6 +30,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
+import org.example.sectoriadb.observability.AuthFailure;
 
 /**
  * Validates AWS Signature Version 4 on every S3 API request.

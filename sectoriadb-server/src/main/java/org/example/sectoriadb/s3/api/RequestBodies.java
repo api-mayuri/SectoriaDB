@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.api;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.s3.auth.AwsChunkedInputStream;
@@ -13,6 +13,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.util.Locale;
+import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.s3.http.LimitedInputStream;
+import org.example.sectoriadb.s3.http.S3Checksums;
 
 /**
  * Every way a controller reads a request body: size-bounded reads of small documents (policy, ACL, XML) and the

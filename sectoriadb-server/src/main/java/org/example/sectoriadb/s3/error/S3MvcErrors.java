@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.error;
 
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;

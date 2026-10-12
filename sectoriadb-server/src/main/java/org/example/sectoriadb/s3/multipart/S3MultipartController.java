@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.multipart;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
@@ -38,6 +38,12 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
+import org.example.sectoriadb.s3.api.RequestBodies;
+import org.example.sectoriadb.s3.api.S3Lookup;
+import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.s3.http.S3Checksums;
+import org.example.sectoriadb.s3.http.S3Support;
+import org.example.sectoriadb.s3.xml.XmlSupport;
 
 /**
  * S3 Multipart Upload API:

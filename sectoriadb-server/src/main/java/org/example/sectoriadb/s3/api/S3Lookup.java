@@ -1,10 +1,11 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.api;
 
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.storage.PoolService;
 import org.springframework.stereotype.Component;
+import org.example.sectoriadb.s3.error.S3Exception;
 
 /**
  * Helper for S3 entity lookups with proper error handling.

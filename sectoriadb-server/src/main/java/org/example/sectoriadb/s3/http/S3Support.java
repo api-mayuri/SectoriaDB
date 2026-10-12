@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.http;
 
 import jakarta.servlet.http.HttpServletRequest;
 
@@ -8,6 +8,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
+import org.example.sectoriadb.s3.error.S3Exception;
 
 /** Small static helpers shared by all S3 controllers. */
 public final class S3Support {

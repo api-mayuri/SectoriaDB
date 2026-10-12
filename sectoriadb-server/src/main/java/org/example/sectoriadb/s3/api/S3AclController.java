@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.api;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.catalog.ManifestEntity;
@@ -14,6 +14,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.util.UUID;
+import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.s3.http.S3Support;
 
 /**
  * S3 ACL and configuration endpoints:

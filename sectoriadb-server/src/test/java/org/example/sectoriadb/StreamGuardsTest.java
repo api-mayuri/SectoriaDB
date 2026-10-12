@@ -1,12 +1,12 @@
 package org.example.sectoriadb;
 
 import org.example.sectoriadb.catalog.ManifestRepository.CommitPrecondition;
-import org.example.sectoriadb.s3.LimitedInputStream;
-import org.example.sectoriadb.s3.MinRateInputStream;
-import org.example.sectoriadb.s3.S3Exception;
-import org.example.sectoriadb.s3.S3Support;
+import org.example.sectoriadb.s3.http.LimitedInputStream;
+import org.example.sectoriadb.s3.http.MinRateInputStream;
+import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.s3.http.S3Support;
 import org.example.sectoriadb.s3.auth.AwsChunkedInputStream;
-import org.example.sectoriadb.s3.auth.PayloadVerificationException;
+import org.example.sectoriadb.s3.error.PayloadVerificationException;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayInputStream;

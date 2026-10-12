@@ -1,6 +1,6 @@
 package org.example.sectoriadb.s3.auth;
 
-import org.example.sectoriadb.s3.S3Support;
+import org.example.sectoriadb.s3.http.S3Support;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;

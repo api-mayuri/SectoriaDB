@@ -1,10 +1,9 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.error;
 
 import org.example.sectoriadb.checksum.ChecksumMismatchException;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.observability.ObservabilityAttributes;
-import org.example.sectoriadb.s3.auth.AuthFailure;
-import org.example.sectoriadb.s3.auth.PayloadVerificationException;
+import org.example.sectoriadb.observability.AuthFailure;
 import org.example.sectoriadb.s3.xml.S3Error;
 import org.apache.catalina.connector.ClientAbortException;
 import org.slf4j.Logger;
@@ -26,6 +25,8 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.example.sectoriadb.s3.http.ResponseAbortedException;
+import org.example.sectoriadb.s3.http.S3Support;
 
 
 @RestControllerAdvice(basePackages = "org.example.sectoriadb.s3")

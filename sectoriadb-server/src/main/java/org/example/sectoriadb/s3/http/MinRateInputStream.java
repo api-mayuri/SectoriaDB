@@ -1,9 +1,10 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.http;
 
 import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.function.LongSupplier;
+import org.example.sectoriadb.s3.error.S3Exception;
 
 /**
  * Slow-body guard: after a grace period the average rate since the stream was opened must stay above a minimum,

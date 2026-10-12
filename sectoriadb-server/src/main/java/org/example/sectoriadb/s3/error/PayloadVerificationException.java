@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3.auth;
+package org.example.sectoriadb.s3.error;
 
 import java.io.IOException;
 

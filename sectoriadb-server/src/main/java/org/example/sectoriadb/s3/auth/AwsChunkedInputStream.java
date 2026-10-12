@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.example.sectoriadb.s3.error.PayloadVerificationException;
 
 /**
  * Strips the aws-chunked transfer encoding framing from an InputStream and, when a

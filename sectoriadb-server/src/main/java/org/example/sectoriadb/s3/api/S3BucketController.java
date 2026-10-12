@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.api;
 
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.catalog.PoolEntity;
@@ -20,6 +20,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.List;
+import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.s3.http.S3Support;
+import org.example.sectoriadb.s3.xml.XmlSupport;
 
 /**
  * S3 bucket-level operations:

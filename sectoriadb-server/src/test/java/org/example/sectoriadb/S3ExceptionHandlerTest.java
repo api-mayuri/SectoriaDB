@@ -1,6 +1,6 @@
 package org.example.sectoriadb;
 
-import org.example.sectoriadb.s3.S3ExceptionHandler;
+import org.example.sectoriadb.s3.error.S3ExceptionHandler;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 

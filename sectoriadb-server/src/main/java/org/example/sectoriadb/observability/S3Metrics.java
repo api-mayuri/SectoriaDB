@@ -4,7 +4,6 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
-import org.example.sectoriadb.s3.auth.AuthFailure;
 import org.springframework.stereotype.Component;
 
 import java.util.EnumMap;

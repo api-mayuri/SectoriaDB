@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3.auth;
+package org.example.sectoriadb.observability;
 
 /**
  * Why SigV4 authentication rejected a request. The {@link #label()} is the value of the {@code reason} label of

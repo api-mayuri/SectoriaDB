@@ -1,4 +1,4 @@
-package org.example.sectoriadb.s3;
+package org.example.sectoriadb.s3.xml;
 
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
