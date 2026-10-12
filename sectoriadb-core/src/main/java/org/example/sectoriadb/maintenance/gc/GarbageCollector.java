@@ -1,5 +1,6 @@
 package org.example.sectoriadb.maintenance.gc;
 
+import org.example.sectoriadb.storage.BlobGate;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.catalog.BlobFileEntity;
@@ -70,6 +71,7 @@ public class GarbageCollector {
     private final PoolRepository poolRepo;
     private final BlobService blobs;
     private final HashTableCache cache;
+    private final BlobGate blobGate;
     private final SmallBlobCache smallCache;
     private final ChunkStore chunkStore;
     private final SmallBlobCompactor compactor;
@@ -85,7 +87,7 @@ public class GarbageCollector {
     private volatile long lastRunEpochMillis;
 
     public GarbageCollector(GcRepository gcRepo, ChunkRepository chunkRepo, ManifestRepository manifestRepo,
-                            BlobFileRepository blobRepo, PoolRepository poolRepo, BlobService blobs, HashTableCache cache,
+                            BlobFileRepository blobRepo, PoolRepository poolRepo, BlobService blobs, HashTableCache cache, BlobGate blobGate,
                             SmallBlobCache smallCache, ChunkStore chunkStore, SmallBlobCompactor compactor,
                             BlobFileReaper reaper, StorageProperties props, StorageMetrics metrics) {
         this.gcRepo = gcRepo;
@@ -95,6 +97,7 @@ public class GarbageCollector {
         this.poolRepo = poolRepo;
         this.blobs = blobs;
         this.cache = cache;
+        this.blobGate = blobGate;
         this.smallCache = smallCache;
         this.chunkStore = chunkStore;
         this.compactor = compactor;
@@ -218,7 +221,7 @@ public class GarbageCollector {
      * under its migration. A frozen or replaced blob is left alone (DEFERRED).
      */
     private SlotFree freeSlot(String poolId, String blobId, long key) throws IOException {
-        if (cache.isFrozen(blobId) || cache.isReplaced(blobId)) return SlotFree.DEFERRED;
+        if (blobGate.isFrozen(blobId) || blobGate.isReplaced(blobId)) return SlotFree.DEFERRED;
         ResidentHandle<CuckooHashTable> handle;
         try {
             handle = blobs.acquireTable(blobId);
@@ -226,10 +229,10 @@ public class GarbageCollector {
             return SlotFree.ABSENT;
         }
         try (handle) {
-            var gate = cache.writerGate(blobId);
+            var gate = blobGate.writerGate(blobId);
             gate.lock();
             try {
-                if (cache.isFrozen(blobId)) return SlotFree.DEFERRED;
+                if (blobGate.isFrozen(blobId)) return SlotFree.DEFERRED;
                 int len = handle.get().freeSlot(key);
                 return len < 0 ? SlotFree.ABSENT : SlotFree.freed(len);
             } catch (ClosedChannelException replaced) {
@@ -323,7 +326,7 @@ public class GarbageCollector {
         rep.startedAtMillis = System.currentTimeMillis();
         try {
             for (BlobFileEntity b : blobs.cuckooBlobsOf(pool)) {
-                if (cache.isFrozen(b.getId()) || cache.isReplaced(b.getId())) {
+                if (blobGate.isFrozen(b.getId()) || blobGate.isReplaced(b.getId())) {
                     metrics.gcDeferred(StorageMetrics.GcDeferral.BLOB_BUSY);
                     continue;
                 }

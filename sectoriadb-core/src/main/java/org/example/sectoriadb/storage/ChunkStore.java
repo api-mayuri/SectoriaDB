@@ -66,22 +66,24 @@ public class ChunkStore {
     private final ChunkRepository index;
     private final BlobService blobs;
     private final HashTableCache cache;
+    private final BlobGate blobGate;
     private final StorageMetrics metrics;
     private final BytesHasher hasher;
     private final LocationCache locations;
     private final UploadGate gate = new UploadGate();
 
-    public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, StorageProperties props) {
-        this(index, blobs, cache, new XxHash64BytesHasher(), props);
+    public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, BlobGate blobGate, StorageProperties props) {
+        this(index, blobs, cache, blobGate, new XxHash64BytesHasher(), props);
     }
 
     /** @param hasher the 64-bit chunk hash (tests force key collisions with a custom one) */
-    public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, BytesHasher hasher,
-                      StorageProperties props) {
+    public ChunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, BlobGate blobGate,
+                      BytesHasher hasher, StorageProperties props) {
         int locationCacheEntries = props.getPool().getLocationCacheEntries();
         this.index = index;
         this.blobs = blobs;
         this.cache = cache;
+        this.blobGate = blobGate;
         this.metrics = cache.metrics();
         this.hasher = hasher;
         this.locations = new LocationCache(locationCacheEntries);
@@ -95,7 +97,7 @@ public class ChunkStore {
      * the chunk is content addressed and the table verifies its length and CRC32C, so a hint that points at a blob
      * without the chunk (replaced by a resize, freed by the collector, deleted) just misses and the authoritative
      * index lookup runs; a hint to a blob that still holds a copy returns the right bytes. Resizes are followed through
-     * {@link HashTableCache#resolveRedirect}. Stage 10 calls {@link #forget} after freeing a chunk (not required for
+     * {@link BlobGate#resolveRedirect}. Stage 10 calls {@link #forget} after freeing a chunk (not required for
      * correctness, it only frees the slot of the cache).
      */
     static final class LocationCache {
@@ -270,7 +272,7 @@ public class ChunkStore {
     private Verdict verifyExisting(String blobId, long key, int recordedLen, int recordedCrc,
                                    byte[] data, int dataCrc) throws IOException {
         if (recordedLen != data.length || recordedCrc != dataCrc) return Verdict.DIFFERENT;
-        String target = cache.resolveRedirect(blobId);   // a resize may have replaced the blob since the index was read
+        String target = blobGate.resolveRedirect(blobId);   // a resize may have replaced the blob since the index was read
         try (ResidentHandle<CuckooHashTable> h = blobs.acquireTable(target)) {
             CuckooHashTable table = h.get();
             try {
@@ -302,12 +304,12 @@ public class ChunkStore {
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(60);
         String target = blobId;
         while (true) {
-            target = cache.resolveRedirect(target);
+            target = blobGate.resolveRedirect(target);
             try (ResidentHandle<CuckooHashTable> h = blobs.acquireTable(target)) {
-                var gate = cache.writerGate(target);
+                var gate = blobGate.writerGate(target);
                 gate.lock();
                 try {
-                    if (!cache.isFrozen(target)) {
+                    if (!blobGate.isFrozen(target)) {
                         h.get().insertPreservingKey(key, ByteBuffer.wrap(data));
                         return Verdict.SAME;
                     }
@@ -352,7 +354,7 @@ public class ChunkStore {
             Map<String, BlobFileEntity> byId = new HashMap<>();
             List<Candidate> candidates = new ArrayList<>();
             for (BlobFileEntity b : pb) {
-                if (cache.isFrozen(b.getId())) continue;
+                if (blobGate.isFrozen(b.getId())) continue;
                 try {
                     candidates.add(Candidate.of(b.getId(), blobs.placementWeight(b)));
                     byId.put(b.getId(), b);
@@ -368,10 +370,10 @@ public class ChunkStore {
                     continue;
                 }
                 try (ResidentHandle<CuckooHashTable> table = cache.acquire(byId.get(c.id()))) {
-                    var gate = cache.writerGate(c.id());
+                    var gate = blobGate.writerGate(c.id());
                     gate.lock();
                     try {
-                        if (cache.isFrozen(c.id())) {
+                        if (blobGate.isFrozen(c.id())) {
                             refused.add(c.id());
                             first = false;
                             continue;
@@ -409,7 +411,7 @@ public class ChunkStore {
      */
     public void barrier(List<PlacedChunk> placed) throws IOException {
         Set<String> blobIds = new java.util.LinkedHashSet<>();
-        for (PlacedChunk p : placed) blobIds.add(cache.resolveRedirect(p.blobId()));
+        for (PlacedChunk p : placed) blobIds.add(blobGate.resolveRedirect(p.blobId()));
         for (String id : blobIds) {
             try (ResidentHandle<CuckooHashTable> h = cache.acquireResident(id)) {
                 if (h != null) h.get().barrier();
@@ -485,7 +487,7 @@ public class ChunkStore {
 
         /** The chunk from this blob (following resizes), or null if the blob is gone or does not hold it. */
         private ByteBuffer tryRead(String blobId, long key, int size) throws IOException {
-            try (ResidentHandle<CuckooHashTable> h = blobs.acquireTable(cache.resolveRedirect(blobId))) {
+            try (ResidentHandle<CuckooHashTable> h = blobs.acquireTable(blobGate.resolveRedirect(blobId))) {
                 return h.get().readChunkByKey(key, size).orElse(null);
             } catch (BlobService.BlobGoneException | ClosedChannelException stale) {
                 return null;

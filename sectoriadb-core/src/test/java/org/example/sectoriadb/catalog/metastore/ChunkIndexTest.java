@@ -199,13 +199,13 @@ class ChunkIndexTest {
         // the second one is steered to the other blob(s): the blobs the first used are frozen for its placement
         java.util.Set<String> used = new java.util.HashSet<>();
         first.getStagedChunks().forEach(p -> used.add(p.blobId()));
-        used.forEach(rig.cache::freeze);
+        used.forEach(rig.blobGate::freeze);
         ManifestEntity second;
         try {
             second = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "b", null,
                     org.example.sectoriadb.checksum.UploadChecksums.none());
         } finally {
-            used.forEach(rig.cache::unfreeze);
+            used.forEach(rig.blobGate::unfreeze);
         }
         // equal content, but the physical copies of the second upload went to a different blob than the first's
         int differing = 0;

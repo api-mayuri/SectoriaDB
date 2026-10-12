@@ -44,17 +44,19 @@ public class ObjectWriter {
     private final ManifestRepository manifestRepo;
     private final BlobService blobService;
     private final HashTableCache cache;
+    private final BlobGate blobGate;
     private final SmallBlobCache smallCache;
     private final ChunkStore chunkStore;
     private final OperationLogService opLog;
     private final StorageProperties props;
 
-    public ObjectWriter(ManifestRepository manifestRepo, BlobService blobService, HashTableCache cache,
+    public ObjectWriter(ManifestRepository manifestRepo, BlobService blobService, HashTableCache cache, BlobGate blobGate,
                         SmallBlobCache smallCache, ChunkStore chunkStore, OperationLogService opLog,
                         StorageProperties props) {
         this.manifestRepo = manifestRepo;
         this.blobService  = blobService;
         this.cache        = cache;
+        this.blobGate     = blobGate;
         this.smallCache   = smallCache;
         this.chunkStore   = chunkStore;
         this.opLog        = opLog;
@@ -349,7 +351,7 @@ public class ObjectWriter {
         if (staged.isEmpty()) return;
         List<PlacedChunk> fixed = new java.util.ArrayList<>(staged.size());
         for (PlacedChunk p : staged) {
-            String now = cache.resolveRedirect(p.blobId());
+            String now = blobGate.resolveRedirect(p.blobId());
             fixed.add(now.equals(p.blobId()) ? p : p.withBlob(now));
         }
         entity.setStagedChunks(fixed);

@@ -115,16 +115,16 @@ class ResizeSafetyTest {
     void theFreezeWaitsForTheInsertsInFlightAndBlocksNewOnes() throws Exception {
         put("seed", bytes(3 * CHUNK, 1));
         String blob = cuckoo().get(0).getId();
-        var gate = rig.cache.writerGate(blob);
+        var gate = rig.blobGate.writerGate(blob);
         gate.lock();                            // an insert that is running
         ExecutorService ex = Executors.newSingleThreadExecutor();
-        Future<?> freezing = ex.submit(() -> rig.cache.freeze(blob));
+        Future<?> freezing = ex.submit(() -> rig.blobGate.freeze(blob));
         Thread.sleep(300);
         assertFalse(freezing.isDone(), "the freeze waits for the insert in flight");
-        assertFalse(rig.cache.isFrozen(blob), "and is not visible before it has the gate");
+        assertFalse(rig.blobGate.isFrozen(blob), "and is not visible before it has the gate");
         gate.unlock();
         freezing.get(10, TimeUnit.SECONDS);
-        assertTrue(rig.cache.isFrozen(blob));
+        assertTrue(rig.blobGate.isFrozen(blob));
         ex.shutdown();
         // an insert that starts now sees the freeze and goes elsewhere
         put("after", bytes(3 * CHUNK, 2));
@@ -159,7 +159,7 @@ class ResizeSafetyTest {
         rig.resizeService.setStageHook(null);
         assertEquals(2, hooks.get());
         assertAllReadable();
-        assertTrue(rig.cache.isReplaced(victim.getId()));
+        assertTrue(rig.blobGate.isReplaced(victim.getId()));
         assertEquals(2, cuckoo().size(), "the replacement and the blob that took the writes of the freeze");
         assertTrue(cuckoo().stream().anyMatch(b -> b.getId().equals(replacement.getId())));
         // the chunks of "new1" / "new2" are in the grown blob, the old content in the replacement
@@ -326,7 +326,7 @@ class ResizeSafetyTest {
         assertEquals(committed ? 1 : 1, cuckoo().size());
         assertEquals(committed, !cuckoo().get(0).getId().equals(victim.getId()), "the metastore names the old or the new blob, whole");
         assertEquals(cuckoo().get(0).getFilePath(), after.get(0).toString());
-        assertFalse(rig.cache.isFrozen(cuckoo().get(0).getId()), "freeze is memory only");
+        assertFalse(rig.blobGate.isFrozen(cuckoo().get(0).getId()), "freeze is memory only");
         assertAllReadable();
         put("after-restart", bytes(6 * CHUNK, 7));
         rig.resizeService.resizeBlobFile(cuckoo().get(0).getId(), BUCKETS * 2);   // and a resize works again
@@ -363,7 +363,7 @@ class ResizeSafetyTest {
         assertThrows(IOException.class, () -> rig.resizeService.resizeBlobFile(victim.getId(), BUCKETS * 2));
         rig.resizeService.setStageHook(null);
         assertEquals(1, rawFiles().size(), "the half-built file was removed");
-        assertFalse(rig.cache.isFrozen(victim.getId()));
+        assertFalse(rig.blobGate.isFrozen(victim.getId()));
         put("still-writable", bytes(4 * CHUNK, 8));
         assertEquals(1, cuckoo().size(), "the old blob takes writes again, no growth needed");
         assertAllReadable();

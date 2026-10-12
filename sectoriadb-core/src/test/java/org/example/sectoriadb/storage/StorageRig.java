@@ -40,6 +40,7 @@ public final class StorageRig implements AutoCloseable {
     public ManifestRepository manifests;
     public org.example.sectoriadb.catalog.ChunkRepository chunks;
     public ChunkStore chunkStore;
+    public BlobGate blobGate;
     public HashTableCache cache;
     public SmallBlobCache smallCache;
     /** IO engine of the cuckoo tables (null: the file channel engine); applied by every {@link #open()} / {@link #reopen()}. */
@@ -86,25 +87,26 @@ public final class StorageRig implements AutoCloseable {
         blobs = new MetaStoreBlobFileRepository(stores);
         manifests = new MetaStoreManifestRepository(stores);
         ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
-        cache = new HashTableCache(props, metrics);
+        blobGate = new BlobGate();
+        cache = new HashTableCache(props, metrics, blobGate);
         if (engineFactory != null) cache.setEngineFactory(engineFactory);
         smallCache = new SmallBlobCache(props, metrics);
         opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
-        blobService = new BlobService(blobs, cache, smallCache, props, opLog);
+        blobService = new BlobService(blobs, cache, blobGate, smallCache, props, opLog);
         poolService = new PoolService(pools, blobs, opLog, props, cache, smallCache, blobService);
         chunks = new MetaStoreChunkRepository(stores);
-        chunkStore = new ChunkStore(chunks, blobService, cache, props);
+        chunkStore = new ChunkStore(chunks, blobService, cache, blobGate, props);
         catalog = new ObjectCatalog(manifests, opLog);
-        writer = new ObjectWriter(manifests, blobService, cache, smallCache, chunkStore, opLog, props);
+        writer = new ObjectWriter(manifests, blobService, cache, blobGate, smallCache, chunkStore, opLog, props);
         reader = new ObjectReader(chunkStore, smallCache, catalog, opLog, metrics);
         reaper = new org.example.sectoriadb.maintenance.BlobFileReaper(blobs, pools, cache);
-        resizeService = new ResizeService(blobs, pools, cache, props, opLog, reaper);
+        resizeService = new ResizeService(blobs, pools, cache, blobGate, props, opLog, reaper);
         verifier = new ObjectVerificationService(catalog, reader);
         gcRepo = new MetaStoreGcRepository(stores);
         compactor = new org.example.sectoriadb.maintenance.gc.SmallBlobCompactor(blobs, manifests, pools, gcRepo, blobService,
                 smallCache, chunkStore, props, metrics);
         gc = new org.example.sectoriadb.maintenance.gc.GarbageCollector(gcRepo, chunks, manifests, blobs, pools, blobService,
-                cache, smallCache, chunkStore, compactor, reaper, props, metrics);
+                cache, blobGate, smallCache, chunkStore, compactor, reaper, props, metrics);
     }
 
     /**

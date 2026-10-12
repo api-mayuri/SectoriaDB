@@ -356,12 +356,12 @@ class GarbageCollectionTest {
         ManifestEntity first = stage("a", data);
         Set<String> used = new HashSet<>();
         first.getStagedChunks().forEach(p -> used.add(p.blobId()));
-        used.forEach(rig.cache::freeze);                       // steer the second upload to the other blob
+        used.forEach(rig.blobGate::freeze);                       // steer the second upload to the other blob
         ManifestEntity second;
         try {
             second = stage("b", data);
         } finally {
-            used.forEach(rig.cache::unfreeze);
+            used.forEach(rig.blobGate::unfreeze);
         }
         rig.writer.commitObject(first);
         rig.writer.commitObject(second);

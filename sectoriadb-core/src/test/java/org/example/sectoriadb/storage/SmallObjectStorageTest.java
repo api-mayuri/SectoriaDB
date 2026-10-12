@@ -48,6 +48,7 @@ class SmallObjectStorageTest {
     BlobFileRepository blobRepo;
     ManifestRepository manifestRepo;
     PoolRepository poolRepo;
+    BlobGate blobGate;
     HashTableCache cache;
     SmallBlobCache smallCache;
     BlobService blobService;
@@ -91,13 +92,14 @@ class SmallObjectStorageTest {
         poolRepo = new MetaStorePoolRepository(stores);
         blobRepo = new MetaStoreBlobFileRepository(stores);
         manifestRepo = new MetaStoreManifestRepository(stores);
-        cache = new HashTableCache(props, StorageMetrics.NOOP);
+        blobGate = new BlobGate();
+        cache = new HashTableCache(props, StorageMetrics.NOOP, blobGate);
         smallCache = new SmallBlobCache(props, StorageMetrics.NOOP);
         OperationLogService opLog = new OperationLogService(new JsonOperationLogRepository(mapper, props), mapper);
-        blobService = new BlobService(blobRepo, cache, smallCache, props, opLog);
-        var chunkStore = new org.example.sectoriadb.storage.ChunkStore(new org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository(stores), blobService, cache, props);
+        blobService = new BlobService(blobRepo, cache, blobGate, smallCache, props, opLog);
+        var chunkStore = new org.example.sectoriadb.storage.ChunkStore(new org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository(stores), blobService, cache, blobGate, props);
         catalog = new ObjectCatalog(manifestRepo, opLog);
-        writer = new ObjectWriter(manifestRepo, blobService, cache, smallCache, chunkStore, opLog, props);
+        writer = new ObjectWriter(manifestRepo, blobService, cache, blobGate, smallCache, chunkStore, opLog, props);
         reader = new ObjectReader(chunkStore, smallCache, catalog, opLog, StorageMetrics.NOOP);
     }
 

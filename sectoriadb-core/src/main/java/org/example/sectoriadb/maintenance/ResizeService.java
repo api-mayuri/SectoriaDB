@@ -1,5 +1,6 @@
 package org.example.sectoriadb.maintenance;
 
+import org.example.sectoriadb.storage.BlobGate;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.engine.format.BlobLayout;
 import org.example.sectoriadb.engine.io.BlobFile;
@@ -68,17 +69,19 @@ public class ResizeService {
     private final BlobFileRepository blobRepo;
     private final PoolRepository poolRepo;
     private final HashTableCache cache;
+    private final BlobGate blobGate;
     private final StorageProperties props;
     private final OperationLogService opLog;
     private final BlobFileReaper reaper;
     private final Set<String> resizing = ConcurrentHashMap.newKeySet();
     private volatile StageHook stageHook;
 
-    public ResizeService(BlobFileRepository blobRepo, PoolRepository poolRepo, HashTableCache cache,
+    public ResizeService(BlobFileRepository blobRepo, PoolRepository poolRepo, HashTableCache cache, BlobGate blobGate,
                          StorageProperties props, OperationLogService opLog, BlobFileReaper reaper) {
         this.blobRepo = blobRepo;
         this.poolRepo = poolRepo;
         this.cache = cache;
+        this.blobGate = blobGate;
         this.props = props;
         this.opLog = opLog;
         this.reaper = reaper;
@@ -181,7 +184,7 @@ public class ResizeService {
             // Stop placing new chunks into the old blob and wait for the inserts in flight: what the migration copies is
             // then everything the blob will ever hold. Writers rank the other blobs meanwhile (a single-blob pool grows by
             // one blob). The blob stays frozen for good once replaced: a stale handle can never write into the dead file.
-            cache.freeze(blobId);
+            blobGate.freeze(blobId);
             frozen = true;
             stage("frozen");
 
@@ -205,7 +208,7 @@ public class ResizeService {
             committed = true;
             stage("committed");
 
-            cache.redirect(blobId, newId);   // uploads that placed chunks into the old blob are re-pointed at commit
+            blobGate.redirect(blobId, newId);   // uploads that placed chunks into the old blob are re-pointed at commit
             cache.install(newEntity, newTable);
             newTable = null;                 // the cache owns it now
             cache.evict(blobId);             // closes when the last reader of the old table lets go
@@ -227,7 +230,7 @@ public class ResizeService {
                     newTable = null;
                 }
                 try { Files.deleteIfExists(newPath); } catch (IOException ignored) { }
-                if (frozen) cache.unfreeze(blobId);
+                if (frozen) blobGate.unfreeze(blobId);
                 frozen = false;
                 opLog.failure("RESIZE", blobId, oldEntity.getFileName(), e instanceof IOException io ? io : new IOException(e),
                         System.currentTimeMillis() - t0);
@@ -236,7 +239,7 @@ public class ResizeService {
         } finally {
             // An Error (a simulated crash in tests) leaves the files as a dying process would; the in-memory state is
             // harmless either way: a blob that was replaced stays frozen, one that was not is released.
-            if (frozen && !committed) cache.unfreeze(blobId);
+            if (frozen && !committed) blobGate.unfreeze(blobId);
             try {
                 building.close();
             } catch (Exception ignored) {

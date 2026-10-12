@@ -29,6 +29,7 @@ public class BlobService {
 
     private final BlobFileRepository blobRepo;
     private final HashTableCache cache;
+    private final BlobGate blobGate;
     private final SmallBlobCache smallCache;
     private final java.util.concurrent.ConcurrentHashMap<String, Object> smallLocks = new java.util.concurrent.ConcurrentHashMap<>();
     /** One lock per pool serialises every decision that adds blobs (first blobs, growth): exactly one creator wins. */
@@ -37,10 +38,11 @@ public class BlobService {
     private final OperationLogService opLog;
 
     public BlobService(BlobFileRepository blobRepo,
-                       HashTableCache cache, SmallBlobCache smallCache,
+                       HashTableCache cache, BlobGate blobGate, SmallBlobCache smallCache,
                        StorageProperties props, OperationLogService opLog) {
         this.blobRepo     = blobRepo;
         this.cache        = cache;
+        this.blobGate     = blobGate;
         this.smallCache   = smallCache;
         this.props        = props;
         this.opLog        = opLog;
@@ -234,7 +236,7 @@ public class BlobService {
     /** The cuckoo blobs of the pool (small-object blobs are not part of chunk placement). */
     public List<BlobFileEntity> cuckooBlobsOf(PoolEntity pool) {
         return blobRepo.findByPoolId(pool.getId()).stream()
-                .filter(b -> b.getKind() == BlobKind.CUCKOO && !cache.isReplaced(b.getId())).toList();
+                .filter(b -> b.getKind() == BlobKind.CUCKOO && !blobGate.isReplaced(b.getId())).toList();
     }
 
     public PoolFill poolFill(PoolEntity pool) throws IOException {
@@ -309,7 +311,7 @@ public class BlobService {
         synchronized (poolLock(pool.getId())) {
             List<BlobFileEntity> blobs = cuckooBlobsOf(pool);
             for (BlobFileEntity b : blobs) {
-                if (refused.contains(b.getId()) || cache.isFrozen(b.getId())) continue;
+                if (refused.contains(b.getId()) || blobGate.isFrozen(b.getId())) continue;
                 CuckooHashTable.FillStats st;
                 try {
                     st = cache.fillStats(b);
@@ -325,7 +327,7 @@ public class BlobService {
             // max-blobs, otherwise a pool at its limit (or a single-blob pool with max-blobs=1) could not take writes
             // while one of its blobs is being resized. The pool exceeds the limit by the number of frozen blobs until
             // the replacements are in.
-            long frozen = blobs.stream().filter(b -> cache.isFrozen(b.getId())).count();
+            long frozen = blobs.stream().filter(b -> blobGate.isFrozen(b.getId())).count();
             if (blobs.size() - frozen >= props.getPool().getMaxBlobs()) {
                 return new Growth(Growth.Kind.AT_MAX, null);
             }
@@ -367,7 +369,7 @@ public class BlobService {
      */
     public double placementWeight(BlobFileEntity b) throws IOException {
         CuckooHashTable.FillStats st = cache.fillStats(b);
-        if (cache.isFrozen(b.getId()) || st.quarantinedSlots() * 20L > st.totalSlots()) return 0;
+        if (blobGate.isFrozen(b.getId()) || st.quarantinedSlots() * 20L > st.totalSlots()) return 0;
         return RendezvousPlacement.weightOf(st.totalSlots(), st.activeSlots() + st.quarantinedSlots(), b.getChunkSize());
     }
 

@@ -26,6 +26,7 @@ import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.security.CredentialRepository;
 import org.example.sectoriadb.security.CredentialService;
 import org.example.sectoriadb.security.JsonCredentialRepository;
+import org.example.sectoriadb.storage.BlobGate;
 import org.example.sectoriadb.storage.BlobService;
 import org.example.sectoriadb.storage.ChunkStore;
 import org.example.sectoriadb.storage.HashTableCache;
@@ -132,8 +133,13 @@ public class CoreConfiguration {
     // ── storage ─────────────────────────────────────────────────────────────────
 
     @Bean
-    public HashTableCache hashTableCache(StorageProperties props, StorageMetrics metrics) {
-        return new HashTableCache(props, metrics);
+    public BlobGate blobGate() {
+        return new BlobGate();
+    }
+
+    @Bean
+    public HashTableCache hashTableCache(StorageProperties props, StorageMetrics metrics, BlobGate blobGate) {
+        return new HashTableCache(props, metrics, blobGate);
     }
 
     @Bean
@@ -142,9 +148,9 @@ public class CoreConfiguration {
     }
 
     @Bean
-    public BlobService blobService(BlobFileRepository blobRepo, HashTableCache cache, SmallBlobCache smallCache,
-                                   StorageProperties props, OperationLogService opLog) {
-        return new BlobService(blobRepo, cache, smallCache, props, opLog);
+    public BlobService blobService(BlobFileRepository blobRepo, HashTableCache cache, BlobGate blobGate,
+                                   SmallBlobCache smallCache, StorageProperties props, OperationLogService opLog) {
+        return new BlobService(blobRepo, cache, blobGate, smallCache, props, opLog);
     }
 
     @Bean
@@ -155,9 +161,9 @@ public class CoreConfiguration {
     }
 
     @Bean
-    public ChunkStore chunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache,
+    public ChunkStore chunkStore(ChunkRepository index, BlobService blobs, HashTableCache cache, BlobGate blobGate,
                                  StorageProperties props) {
-        return new ChunkStore(index, blobs, cache, new XxHash64BytesHasher(), props);
+        return new ChunkStore(index, blobs, cache, blobGate, new XxHash64BytesHasher(), props);
     }
 
     @Bean
@@ -167,9 +173,9 @@ public class CoreConfiguration {
 
     @Bean
     public ObjectWriter objectWriter(ManifestRepository manifestRepo, BlobService blobService, HashTableCache cache,
-                                     SmallBlobCache smallCache, ChunkStore chunkStore, OperationLogService opLog,
-                                     StorageProperties props) {
-        return new ObjectWriter(manifestRepo, blobService, cache, smallCache, chunkStore, opLog, props);
+                                     BlobGate blobGate, SmallBlobCache smallCache, ChunkStore chunkStore,
+                                     OperationLogService opLog, StorageProperties props) {
+        return new ObjectWriter(manifestRepo, blobService, cache, blobGate, smallCache, chunkStore, opLog, props);
     }
 
     @Bean
@@ -192,8 +198,9 @@ public class CoreConfiguration {
 
     @Bean
     public ResizeService resizeService(BlobFileRepository blobRepo, PoolRepository poolRepo, HashTableCache cache,
-                                       StorageProperties props, OperationLogService opLog, BlobFileReaper reaper) {
-        return new ResizeService(blobRepo, poolRepo, cache, props, opLog, reaper);
+                                       BlobGate blobGate, StorageProperties props, OperationLogService opLog,
+                                       BlobFileReaper reaper) {
+        return new ResizeService(blobRepo, poolRepo, cache, blobGate, props, opLog, reaper);
     }
 
     @Bean
@@ -209,10 +216,10 @@ public class CoreConfiguration {
     public GarbageCollector garbageCollector(GcRepository gcRepo, ChunkRepository chunkRepo,
                                              ManifestRepository manifestRepo, BlobFileRepository blobRepo,
                                              PoolRepository poolRepo, BlobService blobs, HashTableCache cache,
-                                             SmallBlobCache smallCache, ChunkStore chunkStore,
+                                             BlobGate blobGate, SmallBlobCache smallCache, ChunkStore chunkStore,
                                              SmallBlobCompactor compactor, BlobFileReaper reaper,
                                              StorageProperties props, StorageMetrics metrics) {
-        return new GarbageCollector(gcRepo, chunkRepo, manifestRepo, blobRepo, poolRepo, blobs, cache, smallCache,
+        return new GarbageCollector(gcRepo, chunkRepo, manifestRepo, blobRepo, poolRepo, blobs, cache, blobGate, smallCache,
                 chunkStore, compactor, reaper, props, metrics);
     }
 

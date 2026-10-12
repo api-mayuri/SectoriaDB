@@ -217,7 +217,7 @@ class MultiBlobPoolTest {
         volatile String favourite;
 
         LyingBlobService(StorageRig r) {
-            super(r.blobs, r.cache, r.smallCache, r.props, r.opLog);
+            super(r.blobs, r.cache, r.blobGate, r.smallCache, r.props, r.opLog);
         }
 
         @Override
@@ -233,7 +233,7 @@ class MultiBlobPoolTest {
         BlobFileEntity other = svc.create(pool, TINY_BUCKETS, CHUNK);
         fill(full);
         svc.favourite = full.getId();
-        ChunkStore store = new ChunkStore(rig.chunks, svc, rig.cache, rig.props);
+        ChunkStore store = new ChunkStore(rig.chunks, svc, rig.cache, rig.blobGate, rig.props);
         ObjectWriter writer = writerOver(store);
         ObjectReader reader = readerOver(store);
         byte[] data = bytes(20 * CHUNK, 88);
@@ -343,11 +343,11 @@ class MultiBlobPoolTest {
     };
 
     private ChunkStore collidingStore() {
-        return new ChunkStore(rig.chunks, rig.blobService, rig.cache, COLLIDING, rig.props);
+        return new ChunkStore(rig.chunks, rig.blobService, rig.cache, rig.blobGate, COLLIDING, rig.props);
     }
 
     private ObjectWriter writerOver(ChunkStore store) {
-        return new ObjectWriter(rig.manifests, rig.blobService, rig.cache, rig.smallCache, store, rig.opLog, rig.props);
+        return new ObjectWriter(rig.manifests, rig.blobService, rig.cache, rig.blobGate, rig.smallCache, store, rig.opLog, rig.props);
     }
 
     private ObjectReader readerOver(ChunkStore store) {
@@ -417,7 +417,7 @@ class MultiBlobPoolTest {
         rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
         rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
         AtomicInteger lookups = new AtomicInteger();
-        ChunkStore store = new ChunkStore(counting(lookups), rig.blobService, rig.cache, rig.props);
+        ChunkStore store = new ChunkStore(counting(lookups), rig.blobService, rig.cache, rig.blobGate, rig.props);
         ObjectWriter writer = writerOver(store);
         ObjectReader reader = readerOver(store);
         byte[] data = bytes(30 * CHUNK, 321);
@@ -443,7 +443,7 @@ class MultiBlobPoolTest {
 
         // a cold process (new store) resolves through the index, one batched lookup per 256 positions
         AtomicInteger cold = new AtomicInteger();
-        ChunkStore coldStore = new ChunkStore(counting(cold), rig.blobService, rig.cache, rig.props);
+        ChunkStore coldStore = new ChunkStore(counting(cold), rig.blobService, rig.cache, rig.blobGate, rig.props);
         ObjectReader coldFiles = readerOver(coldStore);
         ByteArrayOutputStream out2 = new ByteArrayOutputStream();
         coldFiles.streamToOutput(m, out2);
@@ -451,7 +451,7 @@ class MultiBlobPoolTest {
         assertEquals(1, cold.get(), "30 chunks = one window = one lookup");
         // a disabled cache is correct too
         rig.props.getPool().setLocationCacheEntries(0);
-        ChunkStore noCache = new ChunkStore(rig.chunks, rig.blobService, rig.cache, rig.props);
+        ChunkStore noCache = new ChunkStore(rig.chunks, rig.blobService, rig.cache, rig.blobGate, rig.props);
         ObjectReader nf = readerOver(noCache);
         ByteArrayOutputStream out3 = new ByteArrayOutputStream();
         nf.streamToOutput(m, out3);

@@ -16,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.example.sectoriadb.engine.io.StorageIOEngine;
 
 /**
@@ -30,7 +29,8 @@ import org.example.sectoriadb.engine.io.StorageIOEngine;
  * A table with writes that were not forced yet (see {@link CuckooHashTable#barrier()}) is not evicted.
  *
  * <p>The fill statistics of an evicted table are remembered until it is loaded again (nothing else changes a blob), so
- * placement weights and gauges need no reload. Call {@link #evict} before replacing or deleting a blob file.
+ * placement weights and gauges need no reload. Call {@link #evict} before replacing or deleting a blob file. Whether a
+ * blob may still be written to (freeze, redirects) is the business of {@link BlobGate}.
  */
 public class HashTableCache {
 
@@ -42,10 +42,12 @@ public class HashTableCache {
     private final StorageProperties props;
     private final StorageMetrics metrics;
     private final EngineListener engineListener;
+    private final BlobGate gate;
     private volatile java.util.function.Supplier<StorageIOEngine> engineFactory;
 
-    public HashTableCache(StorageProperties props, StorageMetrics metrics) {
+    public HashTableCache(StorageProperties props, StorageMetrics metrics, BlobGate gate) {
         this.props = props;
+        this.gate = gate;
         this.metrics = metrics;
         this.engineListener = new StorageMetricsEngineListener(metrics);
         StorageProperties.Cache c = props.getCache();
@@ -114,68 +116,10 @@ public class HashTableCache {
         CuckooHashTable t = cache.peek(entity.getId());
         if (t != null) return t.getFillStats();
         CuckooHashTable.FillStats memo = evictedStats.get(entity.getId());
-        if (memo != null && !isReplaced(entity.getId())) return memo;
+        if (memo != null && !gate.isReplaced(entity.getId())) return memo;
         try (ResidentHandle<CuckooHashTable> h = acquire(entity)) {
             return h.get().getFillStats();
         }
-    }
-
-    // ── write gate and redirects (resize of one blob of a multi-blob pool, doc 09) ─────────────────────────
-
-    private final ConcurrentHashMap<String, ReentrantReadWriteLock> gates = new ConcurrentHashMap<>();
-    private final java.util.Set<String> frozen = ConcurrentHashMap.newKeySet();
-    private final ConcurrentHashMap<String, String> redirects = new ConcurrentHashMap<>();
-
-    private ReentrantReadWriteLock gate(String blobId) {
-        return gates.computeIfAbsent(blobId, k -> new ReentrantReadWriteLock());
-    }
-
-    /**
-     * Writers hold this read lock around "check {@link #isFrozen}, then insert into the table", so a resize that
-     * froze the blob knows that no insert is in flight and none can start.
-     */
-    public ReentrantReadWriteLock.ReadLock writerGate(String blobId) {
-        return gate(blobId).readLock();
-    }
-
-    public boolean isFrozen(String blobId) {
-        return frozen.contains(blobId);
-    }
-
-    /** Stops new chunks from being placed into the blob and waits for the inserts that are running. */
-    public void freeze(String blobId) {
-        ReentrantReadWriteLock.WriteLock w = gate(blobId).writeLock();
-        w.lock();
-        try {
-            frozen.add(blobId);
-        } finally {
-            w.unlock();
-        }
-    }
-
-    public void unfreeze(String blobId) {
-        frozen.remove(blobId);
-    }
-
-    /** Records that {@code oldBlobId} was replaced by {@code newBlobId}: uploads that placed chunks into the old blob are re-pointed at commit. */
-    public void redirect(String oldBlobId, String newBlobId) {
-        redirects.put(oldBlobId, newBlobId);
-    }
-
-    /** True once a resize has replaced the blob (it must never be loaded again: its file is about to disappear). */
-    public boolean isReplaced(String blobId) {
-        return redirects.containsKey(blobId);
-    }
-
-    /** Follows the replacement chain of a blob id (the id itself if it was never replaced). */
-    public String resolveRedirect(String blobId) {
-        String id = blobId;
-        for (int i = 0; i < 16; i++) {
-            String next = redirects.get(id);
-            if (next == null) return id;
-            id = next;
-        }
-        return id;
     }
 
     /**
@@ -188,7 +132,7 @@ public class HashTableCache {
             throw new IllegalArgumentException("Blob " + entity.getId() + " is a " + entity.getKind()
                     + " blob, not a cuckoo table");
         }
-        if (isReplaced(entity.getId())) {
+        if (gate.isReplaced(entity.getId())) {
             throw new BlobService.BlobGoneException(entity.getId());
         }
         return cache.acquire(entity.getId(), id -> {
@@ -225,8 +169,7 @@ public class HashTableCache {
     /** Removes a blob file from the cache (call before deleting or replacing it); the table closes when its last handle is released. */
     public void evict(String blobId) {
         evictedStats.remove(blobId);
-        gates.remove(blobId);                                  // a stale handle keeps the gate object it already holds
-        if (!redirects.containsKey(blobId)) frozen.remove(blobId);   // a replaced blob stays frozen for good
+        gate.forget(blobId);
         cache.evict(blobId);
         log.info("Evicted table from cache: blobId={}", blobId);
     }

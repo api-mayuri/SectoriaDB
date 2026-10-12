@@ -103,7 +103,7 @@ class CuckooDurabilityTest {
             commits.incrementAndGet();
             if (disk.unforced() != 0) violations.add("commit with " + disk.unforced() + " unforced write(s)");
         });
-        ObjectWriter writer = new ObjectWriter(checking, rig.blobService, rig.cache, rig.smallCache,
+        ObjectWriter writer = new ObjectWriter(checking, rig.blobService, rig.cache, rig.blobGate, rig.smallCache,
                 rig.chunkStore, rig.opLog, rig.props);
         for (int i = 0; i < 25; i++) {
             // new chunks, a repeat of an earlier object (dedup against the index), and an object that repeats itself
@@ -134,7 +134,7 @@ class CuckooDurabilityTest {
         ManifestRepository checking = spy(rig.manifests, () -> {
             if (disk.unforced() != 0) violations.add("B committed with " + disk.unforced() + " unforced write(s)");
         });
-        ObjectWriter writer = new ObjectWriter(checking, rig.blobService, rig.cache, rig.smallCache,
+        ObjectWriter writer = new ObjectWriter(checking, rig.blobService, rig.cache, rig.blobGate, rig.smallCache,
                 rig.chunkStore, rig.opLog, rig.props);
         writer.commitObject(b);
         assertEquals(List.of(), violations);
