@@ -230,29 +230,40 @@ sectoriadb-data/<бакет>/   несколько blob_*.raw (кукушкин�
 старой версии и её постановка в очередь), листинг — диапазонный проход по индексу. Подробности: [`docs/architecture/07-metastore-integration.md`](docs/architecture/07-metastore-integration.md),
 несколько блобов, HRW и индекс чанков: [`docs/architecture/09-multi-blob-pool.md`](docs/architecture/09-multi-blob-pool.md).
 
-Проект состоит из двух Maven-модулей:
+Проект состоит из четырёх Maven-модулей (зависимости направлены строго вниз, подробности и правила — в
+[`docs/architecture/12-modularization.md`](docs/architecture/12-modularization.md)):
 
-| Модуль | Что внутри |
-|---|---|
-| `sectoriadb-core` | движок хранилища: кукушкина хэш-таблица, чанкинг, блоб-файлы, транзакционное хранилище метаданных и репозитории поверх него |
-| `sectoriadb-server` | Spring Boot приложение: S3 API, проверка подписи SigV4, консоль администратора, планировщик |
+```
+sectoriadb-server  ->  sectoriadb-core  ->  sectoriadb-engine
+                                        ->  sectoriadb-metastore
+```
+
+| Модуль | Что внутри | Зависимости |
+|---|---|---|
+| `sectoriadb-metastore` | встроенное транзакционное хранилище: copy-on-write B+-деревья, снимки, групповой коммит, восстановление | только JDK и slf4j |
+| `sectoriadb-engine` | движок блобов: кукушкина хэш-таблица, файлы малых объектов, форматы файлов, ввод-вывод, хэши, размещение (HRW) | только JDK и slf4j |
+| `sectoriadb-core` | каталог (сущности, репозитории поверх метахранилища), слой хранения (чанки, пулы, кэши, чтение и запись объектов), сборка мусора и расширение, ключи доступа, журнал операций, контрольные суммы | движок, метахранилище, Spring (только в `config`), Jackson |
+| `sectoriadb-server` | Spring Boot приложение: S3 API, проверка подписи SigV4, консоль администратора, планировщики, метрики | ядро |
 
 Пакеты (`org.example.sectoriadb`):
 
 | Модуль | Пакет | Назначение |
 |---|---|---|
-| core | `model` | сущности и значения: манифесты, пулы, блобы, ключи доступа, журнал операций |
-| core | `metastore` | встроенное транзакционное хранилище: B+-деревья, снимки, транзакции |
-| core | `repository`, `repository.metastore` | репозитории пулов, блобов и манифестов поверх хранилища, индексы, листинг |
-| core | `service`, `service.impl`, `service.gc` | бизнес-логика, запись и чтение чанков, кукушкина таблица, файлы малых объектов, сборка мусора |
-| core | `format` | форматы файлов на диске: блоб-таблица и файл малых объектов |
-| core | `checksum` | алгоритмы S3-контрольных сумм (CRC32/CRC32C/CRC64NVME/SHA-1/SHA-256), однопроходный расчёт нескольких digest |
-| core | `config`, `tools` | настройки `sectoriadb.*`, хэширование |
-| server | `s3`, `s3.xml` | контроллеры S3 API, XML-ответы, обработка ошибок |
-| server | `s3.auth` | проверка SigV4, декодирование `aws-chunked` |
-| server | `s3.access` | ACL и политики доступа |
-| server | `shell` | команды консоли администратора |
-| server | `scheduler` | автоматический рост пулов, сборка мусора |
+| metastore | `metastore` | хранилище метаданных; наблюдаемость через собственный интерфейс `MetaStoreListener` |
+| engine | `engine.blob` | кукушкина таблица `CuckooHashTable`, журнал малых объектов `SmallObjectBlob` |
+| engine | `engine.io`, `engine.format` | ввод-вывод по смещениям, форматы блоб-файлов на диске |
+| engine | `engine.hash`, `engine.placement` | XXH64, CRC32C, splitmix64; взвешенное rendezvous-размещение |
+| engine | `engine.error`, `engine.metrics` | общий базовый `StorageException`, интерфейс событий `EngineListener` |
+| core | `catalog`, `catalog.metastore` | сущности (манифесты, пулы, блобы) и интерфейсы репозиториев; реализации поверх метахранилища (единственный импортёр модуля `metastore`) |
+| core | `storage` | кэши таблиц и блобов, реестр блобов, пулы, чанки, запись `ObjectWriter`, чтение `ObjectReader`, каталог объектов `ObjectCatalog` |
+| core | `maintenance`, `maintenance.gc` | сборка мусора, уплотнение малых объектов, расширение блобов, чистка файлов |
+| core | `security`, `audit` | ключи доступа, журнал операций |
+| core | `checksum`, `metrics` | S3-контрольные суммы; интерфейс метрик `StorageMetrics` и переходники |
+| core | `config` | настройки `sectoriadb.*` и `CoreConfiguration`, где собраны все бины ядра |
+| server | `s3.api`, `s3.multipart` | контроллеры S3 API; multipart: хранилище загрузок, сборка объекта, очистка |
+| server | `s3.error`, `s3.http`, `s3.xml` | ошибки S3, разбор запросов и заголовки, XML |
+| server | `s3.auth`, `s3.access` | проверка SigV4, декодирование `aws-chunked`; ACL и политики доступа |
+| server | `observability`, `shell`, `scheduler` | метрики Prometheus, консоль администратора, фоновые задания |
 
 ## Сборка мусора
 
@@ -326,9 +337,14 @@ bench/warp/run.sh --mode mixed --size small --conc 50 --duration 5m --influx
 ## Тесты
 
 ```bash
-mvn test             # оба модуля
-mvn -pl sectoriadb-core test   # только движок
+mvn test                                        # все модули
+mvn -pl sectoriadb-engine test                  # один модуль (metastore, engine, core, server)
+mvn -pl sectoriadb-core -am test                # модуль вместе с тем, от чего он зависит
+mvn -DskipTests package                         # исполняемый jar: sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar
 ```
+
+В каждом модуле есть `ModuleDependencyGuardTest`: он читает импорты исходников и проверяет правила зависимостей
+(например, что в `engine` нет Spring, а метахранилище импортирует только `catalog.metastore`).
 
 Интеграционные тесты поднимают сервер на случайном порту и во временных каталогах. Рабочие данные они не трогают.
 Среди них проверки больших файлов, медленных клиентов, `Range`-запросов, публичного доступа и совместимости S3 API.
