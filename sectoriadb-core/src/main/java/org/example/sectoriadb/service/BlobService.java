@@ -60,7 +60,7 @@ public class BlobService {
             }
         }
         String blobId  = UUID.randomUUID().toString();
-        String fileName = "blob_" + blobId.substring(0, 8) + ".raw";
+        String fileName = "blob_" + blobId + ".raw";
         Path filePath   = Path.of(pool.getBasePath()).resolve(fileName);
 
         log.info("Creating blob file: pool={} buckets={} chunkSize={} path={}",
@@ -101,7 +101,7 @@ public class BlobService {
     public BlobFileEntity createSmall(PoolEntity pool, boolean sealed) throws IOException {
         long t0 = System.currentTimeMillis();
         String blobId   = UUID.randomUUID().toString();
-        String fileName = "small_" + blobId.substring(0, 8) + ".sob";
+        String fileName = "small_" + blobId + ".sob";
         Path filePath   = Path.of(pool.getBasePath()).resolve(fileName);
 
         SmallObjectBlob.create(filePath);

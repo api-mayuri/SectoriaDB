@@ -160,8 +160,9 @@ public final class BlobLayout {
             Files.createDirectories(path.getParent());
         }
         long size = requiredSize(numBuckets, chunkSize);
-        try (FileChannel fc = FileChannel.open(path, StandardOpenOption.CREATE, StandardOpenOption.WRITE,
-                StandardOpenOption.READ, StandardOpenOption.TRUNCATE_EXISTING)) {
+        // CREATE_NEW: never truncate a file that already exists (it may be a live blob); a collision fails loudly
+        try (FileChannel fc = FileChannel.open(path, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
+                StandardOpenOption.READ)) {
             fc.position(size - 1);
             fc.write(ByteBuffer.wrap(new byte[]{0}));
             ByteBuffer header = encodeHeader(numBuckets, chunkSize, System.currentTimeMillis());
@@ -169,6 +170,21 @@ public final class BlobLayout {
                 fc.write(header, header.position());
             }
             fc.force(true);
+        }
+        syncDirectory(path);
+    }
+
+    /**
+     * Makes the directory entry of a just-created file durable (the file's own fsync does not cover it), so that a
+     * blob the metastore already names cannot vanish after a power loss. Best effort where directories cannot be synced.
+     */
+    public static void syncDirectory(Path file) {
+        Path dir = file.toAbsolutePath().getParent();
+        if (dir == null) return;
+        try (FileChannel d = FileChannel.open(dir, StandardOpenOption.READ)) {
+            d.force(true);
+        } catch (IOException | RuntimeException ignored) {
+            // not supported on this platform/filesystem
         }
     }
 }

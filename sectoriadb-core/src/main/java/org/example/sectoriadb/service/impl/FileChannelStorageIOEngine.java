@@ -114,6 +114,11 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
     }
 
     @Override
+    public long size(BlobFile blobFile) throws IOException {
+        return withChannel(blobFile, FileChannel::size);
+    }
+
+    @Override
     public void force(BlobFile blobFile) throws IOException {
         if (fsync) {
             long t0 = System.nanoTime();

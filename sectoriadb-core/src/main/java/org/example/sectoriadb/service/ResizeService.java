@@ -164,7 +164,7 @@ public class ResizeService {
 
         int chunkSize = oldEntity.getChunkSize();
         String newId  = UUID.randomUUID().toString();
-        String newName = "blob_" + newId.substring(0, 8) + ".raw";
+        String newName = "blob_" + newId + ".raw";
         Path newPath   = Path.of(poolBase).resolve(newName);
         long newSize   = CuckooHashTable.computeRequiredBlobSize(newNumBuckets, chunkSize);
 

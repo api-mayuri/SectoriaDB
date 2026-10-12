@@ -1,6 +1,7 @@
 package org.example.sectoriadb.service.impl;
 
 import org.example.sectoriadb.format.BlobLayout;
+import org.example.sectoriadb.format.InvalidBlobHeaderException;
 import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.model.BlobFile;
 import org.example.sectoriadb.model.Bucket;
@@ -397,6 +398,13 @@ public class CuckooHashTable implements AutoCloseable {
         try {
             BlobLayout.verifyHeader(ioEngine.readChunk(blobFile, 0, BlobLayout.HEADER_SIZE),
                     numBuckets, chunkSize, blobFile.id());
+            long fileSize = ioEngine.size(blobFile);
+            long required = BlobLayout.requiredSize(numBuckets, chunkSize);
+            if (fileSize >= 0 && fileSize < required) {
+                // a truncated file (interrupted copy or restore) would otherwise fail on an arbitrary later read
+                throw new InvalidBlobHeaderException("Blob " + blobFile.id() + ": file is " + fileSize
+                        + " bytes but its geometry needs " + required + " (truncated?)");
+            }
 
             byte[] entry = new byte[META_ENTRY_BYTES];
             long maxSeq = 0;
@@ -712,47 +720,73 @@ public class CuckooHashTable implements AutoCloseable {
      * most maxEvictions moves exists.
      */
     private int[] findEvictionPath(long newKey) {
-        // node: {tableId, bucket, parentNodeIndex, slotInParentOfMovedChunk, depth}
-        List<int[]> nodes = new ArrayList<>();
-        BitSet visited = new BitSet(2 * numBuckets);
         int bA = bucketA(newKey);
         int bB = bucketB(newKey);
-        nodes.add(new int[]{0, bA, -1, -1, 0});
-        visited.set(bA);
-        nodes.add(new int[]{1, bB, -1, -1, 0});
-        visited.set(numBuckets + bB);
-
-        for (int head = 0; head < nodes.size(); head++) {
-            int[] node = nodes.get(head);
-            int tableId = node[0];
-            int bucket = node[1];
-
-            for (int s = 0; s < SLOTS_PER_BUCKET; s++) {
-                int idx = flatIndex(tableId, bucket, s);
-                if (isFreeSlot(idx)) {
-                    return buildPath(nodes, head, s);
-                }
-            }
-
-            if (node[4] >= maxEvictions) {
-                continue; // cannot move anything out of this bucket within the budget
-            }
-            int other = 1 - tableId;
-            for (int s = 0; s < SLOTS_PER_BUCKET; s++) {
-                int idx = flatIndex(tableId, bucket, s);
-                if (stateMeta[idx] != ACTIVE) {
-                    continue;
-                }
-                long key = chunkIdMeta[idx];
-                int otherBucket = (other == 0) ? bucketA(key) : bucketB(key);
-                int visitId = other * numBuckets + otherBucket;
-                if (!visited.get(visitId)) {
-                    visited.set(visitId);
-                    nodes.add(new int[]{other, otherBucket, head, s, node[4] + 1});
-                }
-            }
+        // a root bucket with room needs no search state at all (the common case)
+        for (int s = 0; s < SLOTS_PER_BUCKET; s++) {
+            int idx = flatIndex(0, bA, s);
+            if (isFreeSlot(idx)) return new int[]{idx};
         }
-        return null;
+        for (int s = 0; s < SLOTS_PER_BUCKET; s++) {
+            int idx = flatIndex(1, bB, s);
+            if (isFreeSlot(idx)) return new int[]{idx};
+        }
+        // node: {tableId, bucket, parentNodeIndex, slotInParentOfMovedChunk, depth}
+        List<int[]> nodes = new ArrayList<>();
+        BitSet visited = visitedScratch();   // the caller holds the write lock: one scratch set per table is safe
+        try {
+            nodes.add(new int[]{0, bA, -1, -1, 0});
+            visited.set(bA);
+            nodes.add(new int[]{1, bB, -1, -1, 0});
+            visited.set(numBuckets + bB);
+
+            for (int head = 0; head < nodes.size(); head++) {
+                int[] node = nodes.get(head);
+                int tableId = node[0];
+                int bucket = node[1];
+
+                for (int s = 0; s < SLOTS_PER_BUCKET; s++) {
+                    int idx = flatIndex(tableId, bucket, s);
+                    if (isFreeSlot(idx)) {
+                        return buildPath(nodes, head, s);
+                    }
+                }
+
+                if (node[4] >= maxEvictions) {
+                    continue; // cannot move anything out of this bucket within the budget
+                }
+                int other = 1 - tableId;
+                for (int s = 0; s < SLOTS_PER_BUCKET; s++) {
+                    int idx = flatIndex(tableId, bucket, s);
+                    if (stateMeta[idx] != ACTIVE) {
+                        continue;
+                    }
+                    long key = chunkIdMeta[idx];
+                    int otherBucket = (other == 0) ? bucketA(key) : bucketB(key);
+                    int visitId = other * numBuckets + otherBucket;
+                    if (!visited.get(visitId)) {
+                        visited.set(visitId);
+                        nodes.add(new int[]{other, otherBucket, head, s, node[4] + 1});
+                    }
+                }
+                // bounded work under the write lock: a nearly full table reports TableFull instead of exploring every bucket
+                if (nodes.size() >= MAX_SEARCH_NODES) {
+                    return null;
+                }
+            }
+            return null;
+        } finally {
+            for (int[] n : nodes) visited.clear(n[0] * numBuckets + n[1]);   // leave the scratch set empty for the next insert
+        }
+    }
+
+    /** Upper bound of buckets visited by one eviction search. */
+    private static final int MAX_SEARCH_NODES = 4096;
+    private BitSet visitedScratch;
+
+    private BitSet visitedScratch() {
+        if (visitedScratch == null) visitedScratch = new BitSet(2 * numBuckets);
+        return visitedScratch;
     }
 
     private int[] buildPath(List<int[]> nodes, int endNode, int freeSlot) {

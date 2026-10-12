@@ -120,6 +120,7 @@ public final class SmallObjectBlob implements AutoCloseable {
             FileChannelWrites.writeFully(fc, header, 0);
             fc.force(true);
         }
+        org.example.sectoriadb.format.BlobLayout.syncDirectory(path);
     }
 
     /** Opens an existing blob and runs recovery. */

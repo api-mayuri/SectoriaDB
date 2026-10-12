@@ -16,6 +16,11 @@ public interface StorageIOEngine extends AutoCloseable {
     /** Writes the whole remaining content of {@code chunk} at {@code offset}. */
     void writeChunk(BlobFile blobFile, long offset, ByteBuffer chunk) throws IOException;
 
+    /** Current size of the blob file in bytes, or -1 if the engine cannot tell (then size checks are skipped). */
+    default long size(BlobFile blobFile) throws IOException {
+        return -1;
+    }
+
     /** Makes all previous writes durable (no-op for engines without durability). */
     default void force(BlobFile blobFile) throws IOException {
     }
