@@ -57,6 +57,53 @@ public interface ManifestRepository {
      */
     CommitResult commitObject(ManifestEntity entity);
 
+    /**
+     * As {@link #commitObject(ManifestEntity)}, with a precondition on the current version of the key that is checked
+     * INSIDE the commit transaction (S3 conditional writes: {@code If-None-Match: *} / {@code If-Match: etag}), so two
+     * racing writers cannot both pass it.
+     *
+     * @throws CommitPreconditionException (nothing is written) if the precondition does not hold
+     */
+    CommitResult commitObject(ManifestEntity entity, CommitPrecondition precondition);
+
+    /**
+     * @param mustNotExist the key must have no current version
+     * @param requiredEtag the current version must have this ETag ({@code "*"} = any current version); null = no condition
+     */
+    record CommitPrecondition(boolean mustNotExist, String requiredEtag) {
+        public static final CommitPrecondition NONE = new CommitPrecondition(false, null);
+
+        public boolean isNone() { return !mustNotExist && requiredEtag == null; }
+
+        /** True when {@code currentEtag} (null = no current version) satisfies the precondition. */
+        public boolean holds(String currentEtag) {
+            if (mustNotExist && currentEtag != null) return false;
+            if (requiredEtag != null) {
+                if (currentEtag == null) return false;
+                return "*".equals(requiredEtag.trim()) || strip(requiredEtag).equals(strip(currentEtag));
+            }
+            return true;
+        }
+
+        private static String strip(String etag) {
+            String t = etag.trim();
+            if (t.startsWith("W/")) t = t.substring(2);
+            return t.replace("\"", "");
+        }
+    }
+
+    /** A {@link CommitPrecondition} did not hold; {@code keyMissing} tells "no current version" from "other ETag". */
+    class CommitPreconditionException extends RuntimeException {
+        private final boolean keyMissing;
+
+        public CommitPreconditionException(boolean keyMissing) {
+            super(keyMissing ? "the key has no current version" : "the current version does not satisfy the precondition");
+            this.keyMissing = keyMissing;
+        }
+
+        public boolean keyMissing() { return keyMissing; }
+    }
+
     /** DeleteObject: unlinks the current version and queues it for GC, in one transaction. Empty if there was none. */
     Optional<ManifestEntity> deleteObject(String bucketName, String objectKey);
 

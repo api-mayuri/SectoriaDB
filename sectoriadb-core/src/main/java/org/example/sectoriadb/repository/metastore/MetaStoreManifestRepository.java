@@ -94,6 +94,11 @@ public class MetaStoreManifestRepository implements ManifestRepository {
 
     @Override
     public CommitResult commitObject(ManifestEntity entity) {
+        return commitObject(entity, CommitPrecondition.NONE);
+    }
+
+    @Override
+    public CommitResult commitObject(ManifestEntity entity, CommitPrecondition precondition) {
         String bucket = entity.getBucketName();
         String key = entity.getObjectKey();
         if (bucket == null || key == null) throw new IllegalArgumentException("bucketName and objectKey are required");
@@ -106,6 +111,12 @@ public class MetaStoreManifestRepository implements ManifestRepository {
             BTree objects = tx.tree(Trees.OBJECTS);
             byte[] objectKey = Trees.objectKey(bucket, key);
             Optional<String> previous = objects.get(objectKey).map(Trees::str);
+            if (!precondition.isNone()) {
+                String currentEtag = previous.flatMap(id -> Trees.manifest(tx, id)).map(ManifestEntity::getEtag).orElse(null);
+                if (!precondition.holds(previous.isPresent() && currentEtag == null ? "" : currentEtag)) {
+                    throw new CommitPreconditionException(previous.isEmpty());
+                }
+            }
             long previousBytes = previous.flatMap(id -> Trees.manifest(tx, id)).map(ManifestEntity::getTotalBytes).orElse(0L);
             entity.setDeleted(false);
             Optional<ManifestEntity> existing = Trees.manifest(tx, entity.getId());

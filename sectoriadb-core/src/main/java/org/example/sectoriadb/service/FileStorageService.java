@@ -331,6 +331,16 @@ public class FileStorageService {
         log.info("Range restored: id={} [{},+{}] → {}", manifestId, startByte, lengthBytes, outputPath);
     }
 
+    /** The directory uploads are spooled to ({@code sectoriadb.upload-tmp-dir}, default {@code <data-dir>/.tmp}); created on demand. */
+    public Path uploadTmpDir() {
+        Path dir = props.uploadTmpPath();
+        try {
+            return Files.createDirectories(dir);
+        } catch (IOException e) {
+            throw new java.io.UncheckedIOException(e);
+        }
+    }
+
     // ── S3 Store (InputStream) ────────────────────────────────────────────────
 
     /**
@@ -359,7 +369,7 @@ public class FileStorageService {
      */
     public ManifestEntity stageStream(InputStream in, PoolEntity pool, String objectKey, String contentType,
                                       UploadChecksums declared) throws IOException {
-        Path tmp = Files.createTempFile("sectoriadb-upload-", ".tmp");
+        Path tmp = Files.createTempFile(uploadTmpDir(), "sectoriadb-upload-", ".tmp");
         try {
             EnumSet<ChecksumAlgorithm> algorithms = EnumSet.of(ChecksumAlgorithm.CRC32C);
             if (declared.algorithm() != null) algorithms.add(declared.algorithm());
@@ -399,8 +409,13 @@ public class FileStorageService {
      *         the chunks were collected meanwhile
      */
     public ManifestEntity commitObject(ManifestEntity entity) {
+        return commitObject(entity, ManifestRepository.CommitPrecondition.NONE);
+    }
+
+    /** As {@link #commitObject(ManifestEntity)} with a precondition checked inside the commit transaction (conditional writes). */
+    public ManifestEntity commitObject(ManifestEntity entity, ManifestRepository.CommitPrecondition precondition) {
         ManifestRepository.CommitResult r = committing(entity,
-                () -> withRedirects(entity, () -> manifestRepo.commitObject(entity)));
+                () -> withRedirects(entity, () -> manifestRepo.commitObject(entity, precondition)));
         logStored(r.current());
         return r.current();
     }

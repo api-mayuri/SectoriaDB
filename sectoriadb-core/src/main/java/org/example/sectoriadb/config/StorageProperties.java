@@ -15,6 +15,8 @@ public class StorageProperties {
     private int maxEvictions = 32;
     /** fsync data and metadata writes (data → force → meta → force). Disable only for tests/benchmarks. */
     private boolean fsync = true;
+    /** Where uploads are spooled before they are written to blobs; empty = {@code <data-dir>/.tmp}. */
+    private String uploadTmpDir = "";
     private AutoResize autoResize = new AutoResize();
     private Pool pool = new Pool();
     private S3 s3 = new S3();
@@ -36,6 +38,14 @@ public class StorageProperties {
 
     public int getMaxEvictions() { return maxEvictions; }
     public void setMaxEvictions(int v) { this.maxEvictions = v; }
+
+    public String getUploadTmpDir() { return uploadTmpDir; }
+    public void setUploadTmpDir(String v) { this.uploadTmpDir = v == null ? "" : v; }
+
+    /** The resolved spool directory for uploads (not created). */
+    public java.nio.file.Path uploadTmpPath() {
+        return uploadTmpDir.isBlank() ? java.nio.file.Path.of(dataDir).resolve(".tmp") : java.nio.file.Path.of(uploadTmpDir);
+    }
 
     public boolean isFsync() { return fsync; }
     public void setFsync(boolean v) { this.fsync = v; }
@@ -195,17 +205,9 @@ public class StorageProperties {
     }
 
     public static class S3 {
-        private String region = "us-east-1";
-        private boolean authEnabled = true;
         private String accessKey;
         private String secretKey;
         private List<String> credentials;
-
-        public String getRegion() { return region; }
-        public void setRegion(String v) { this.region = v; }
-
-        public boolean isAuthEnabled() { return authEnabled; }
-        public void setAuthEnabled(boolean v) { this.authEnabled = v; }
 
         public String getAccessKey() { return accessKey; }
         public void setAccessKey(String v) { this.accessKey = v; }
