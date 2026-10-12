@@ -105,7 +105,8 @@ class MetaStoreModelTest {
                     work.remove(name);
                     continue;
                 }
-                TreeMap<byte[], byte[]> m = work.computeIfAbsent(name, k -> newMap());
+                // a tree comes into existence with its first put; reading or deleting from a missing tree creates nothing
+                TreeMap<byte[], byte[]> m = op < 52 ? work.computeIfAbsent(name, k -> newMap()) : work.getOrDefault(name, newMap());
                 BTree t = tx.tree(name);
                 if (op < 52) {
                     byte[] k = randKey(r), v = randVal(r);

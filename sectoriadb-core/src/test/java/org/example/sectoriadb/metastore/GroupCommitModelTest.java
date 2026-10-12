@@ -132,7 +132,6 @@ class GroupCommitModelTest {
             if (throwAt == ops) throw new Boom();
             if (badKey) {
                 String t = TREES[r.nextInt(TREES.length)];
-                model.trees.computeIfAbsent(t, x -> Model.newTree());
                 byte[] big = new byte[BTree.maxKeySize(PAGE) + 1];
                 assertThrows(IllegalArgumentException.class, () -> tx.tree(t).put(big, new byte[1]));
                 log("  bad key swallowed");
@@ -162,20 +161,18 @@ class GroupCommitModelTest {
             boolean had = m != null && m.containsKey(k);
             boolean got = tx.tree(tn).delete(k);
             assertEquals(had, got, "delete result");
-            if (m == null) model.trees.put(tn, Model.newTree());
-            else m.remove(k);
+            if (m != null) m.remove(k);
         } else if (c < 60) {                                       // get
             byte[] k = key(r.nextInt(70));
             log("  get " + tn + " " + new String(k));
             byte[] got = tx.tree(tn).get(k).orElse(null);
             byte[] exp = m == null ? null : m.get(k);
             assertArrayEqualsOrNull(exp, got, "get " + tn + " " + new String(k));
-            model.trees.computeIfAbsent(tn, x -> Model.newTree());
         } else if (c < 70) {                                       // range scan + size
             int a = r.nextInt(70), b = a + r.nextInt(30);
             log("  scan " + tn + " " + a + ".." + b);
             BTree t = tx.tree(tn);
-            m = model.trees.computeIfAbsent(tn, x -> Model.newTree());
+            m = model.trees.getOrDefault(tn, Model.newTree());
             assertEquals(m.size(), t.size(), "size " + tn);
             var exp = m.subMap(key(a), true, key(b), false).entrySet().iterator();
             try (Cursor cur = t.scan(key(a), key(b))) {
@@ -194,15 +191,14 @@ class GroupCommitModelTest {
             assertEquals(had, tx.dropTree(tn), "dropTree result");
             model.trees.remove(tn);
             if (h != null) assertThrows(IllegalStateException.class, () -> h.put(key(1), new byte[1]));
-        } else if (c < 84) {                                       // create tree only
-            log("  create " + tn);
+        } else if (c < 84) {                                       // open a tree without writing: creates nothing
+            log("  open " + tn);
             tx.tree(tn);
-            model.trees.computeIfAbsent(tn, x -> Model.newTree());
         } else if (c < 90) {                                       // delete a run of keys (merges)
             int a = r.nextInt(70), n = 5 + r.nextInt(25);
             log("  delrun " + tn + " " + a + "+" + n);
             BTree t = tx.tree(tn);
-            m = model.trees.computeIfAbsent(tn, x -> Model.newTree());
+            m = model.trees.getOrDefault(tn, Model.newTree());
             for (int j = a; j < a + n; j++) assertEquals(m.remove(key(j)) != null, t.delete(key(j)));
         } else if (c < 96) {                                       // burst of puts (splits, overflow chains)
             int a = r.nextInt(70), n = 5 + r.nextInt(20);

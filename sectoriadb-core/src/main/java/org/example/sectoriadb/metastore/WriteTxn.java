@@ -39,12 +39,19 @@ public final class WriteTxn extends ReadTxn {
         this.hwm = snap.pageCount();
     }
 
+    /**
+     * A tree that does not exist yet is only created by its first write (BTree.put marks it dirty), so reading a
+     * missing tree neither forces a commit nor makes {@link #hasTree} report it. If it was dropped earlier in this
+     * transaction the drop stays recorded and the catalog entry is deleted at commit before the new one is written.
+     */
     @Override
     BTree missing(String name) {
-        BTree t = new BTree(this, name, 0, 0);
-        t.dirty = true;
-        dropped.remove(name);
-        return t;
+        return new BTree(this, name, 0, 0);
+    }
+
+    @Override
+    long pageLimit() {
+        return hwm;
     }
 
     @Override
@@ -72,7 +79,9 @@ public final class WriteTxn extends ReadTxn {
                 a.getBytes(java.nio.charset.StandardCharsets.UTF_8), b.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
         out.addAll(catalogNames());
         out.removeAll(dropped);
-        out.addAll(handles.keySet());
+        for (Map.Entry<String, BTree> e : handles.entrySet()) {
+            if (e.getValue().dirty) out.add(e.getKey());   // created or changed here; a never-written missing tree does not exist
+        }
         return new ArrayList<>(out);
     }
 
@@ -260,6 +269,7 @@ public final class WriteTxn extends ReadTxn {
 
     /** Writes the value into a fresh overflow chain right away; the pages are unreachable until commit. */
     long writeOverflow(byte[] v) {
+        if (v.length == 0) throw new IllegalArgumentException("an empty value has no overflow chain");
         int per = pager.pageSize - 16;
         int n = (v.length + per - 1) / per;
         long[] ids = new long[n];
@@ -281,6 +291,7 @@ public final class WriteTxn extends ReadTxn {
     void freeOverflow(long head) {
         long id = head;
         while (id != 0) {
+            checkPageId(id, hwm);
             byte[] p = pager.read(id);
             if (p[4] != Pager.T_OVERFLOW) throw new CorruptedPageException(id, "not an overflow page");
             long next = ByteBuffer.wrap(p).getLong(8);

@@ -152,7 +152,8 @@ public final class BTree {
 
     private Node.LeafVal makeVal(WriteTxn w, byte[] key, byte[] v) {
         int cap = (w.pager.pageSize - Pager.HEADER) / 4;
-        if (5 + key.length + v.length <= cap) return Node.LeafVal.inline(v.clone());
+        // an empty value is always inline: an overflow chain needs at least one page
+        if (v.length == 0 || 5 + key.length + v.length <= cap) return Node.LeafVal.inline(v.clone());
         return new Node.LeafVal(null, w.writeOverflow(v), v.length);
     }
 

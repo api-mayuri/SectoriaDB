@@ -1,6 +1,8 @@
 package org.example.sectoriadb.metastore;
 
 import org.example.sectoriadb.metrics.StorageMetrics;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -24,6 +26,7 @@ import java.util.function.Function;
  * attempts the recovery when the next batch begins).
  */
 final class GroupCommitter {
+    private static final Logger log = LoggerFactory.getLogger(GroupCommitter.class);
 
     private static final class Task {
         final Function<WriteTxn, Object> body;
@@ -78,7 +81,8 @@ final class GroupCommitter {
         Task t = new Task((Function<WriteTxn, Object>) (Function<?, ?>) body);
         synchronized (lifecycle) {
             if (closing) return CompletableFuture.failedFuture(closedError());
-            if (thread == null) {
+            if (thread == null || !thread.isAlive()) {   // not started yet, or died unexpectedly: (re)start it
+                terminated = false;
                 thread = new Thread(this::run, "metastore-committer");
                 thread.setDaemon(true);
                 thread.start();
@@ -113,8 +117,9 @@ final class GroupCommitter {
                 }
                 stopping |= runBatch(local, stopping);
             } catch (InterruptedException e) {
-                // nobody interrupts this thread on purpose; treat it as a stop request after finishing the queue
-                stopping = true;
+                // Not a stop request: stop is signalled by the STOP marker. A body that leaves the interrupt flag set
+                // (or any stray interrupt) must not kill grouped writes for the rest of the process lifetime.
+                Thread.interrupted();
             } catch (Throwable t) {
                 // runBatch handles its own failures; this is a last line of defence so the thread never dies silently
                 for (Task x : local) x.future.completeExceptionally(t);
@@ -135,7 +140,7 @@ final class GroupCommitter {
     private boolean runBatch(ArrayDeque<Task> local, boolean alreadyStopping) throws InterruptedException {
         WriteTxn tx;
         try {
-            tx = store.beginWrite();
+            tx = store.beginWriteInternal();
         } catch (Throwable t) {                 // closed, or the store could not recover from a failed commit: fail with that cause
             Throwable cause = t instanceof IllegalStateException ? t : new IllegalStateException(t);
             for (Task x : local) x.future.completeExceptionally(cause);
@@ -151,12 +156,13 @@ final class GroupCommitter {
         }
         tx.managed = true;
         List<Task> taken = new ArrayList<>();
+        int pages;
         try {
             while (!local.isEmpty()) {
                 if (!taken.isEmpty() && (taken.size() >= maxBatchSize || tx.owned.size() >= maxBatchPages)) break;
                 Task t = local.poll();
                 taken.add(t);
-                metrics.metaGroupQueueWait(System.nanoTime() - t.enqueued);
+                queueWaitMetric(System.nanoTime() - t.enqueued);
                 WriteTxn.Savepoint sp = tx.savepoint();
                 try {
                     t.result = t.body.apply(tx);
@@ -164,22 +170,45 @@ final class GroupCommitter {
                 } catch (Throwable e) {
                     tx.rollbackTo(sp);
                     t.error = e;
-                    metrics.metaGroupBodyRollback();
+                    bodyRollbackMetric();
                 }
+                // a body that left the interrupt flag set would make the next channel operation close the store file
+                Thread.interrupted();
             }
-            int pages = tx.owned.size();
+            pages = tx.owned.size();
             tx.commitInternal();                // data fsync, meta page, meta fsync
-            metrics.metaGroupBatch(taken.size(), pages);
         } catch (Throwable commitFailure) {
             tx.abortInternal();
             for (Task t : taken) t.future.completeExceptionally(t.error != null ? t.error : commitFailure);
             return stop;
+        }
+        // durable and published: metrics must not turn this into a failure
+        try {
+            metrics.metaGroupBatch(taken.size(), pages);
+        } catch (RuntimeException | Error e) {
+            log.warn("Metrics callback failed after a successful commit: {}", e.toString());
         }
         for (Task t : taken) {
             if (t.error != null) t.future.completeExceptionally(t.error);
             else t.future.complete(t.result);
         }
         return stop;
+    }
+
+    private void queueWaitMetric(long nanos) {
+        try {
+            metrics.metaGroupQueueWait(nanos);
+        } catch (RuntimeException | Error e) {
+            log.warn("Metrics callback failed: {}", e.toString());
+        }
+    }
+
+    private void bodyRollbackMetric() {
+        try {
+            metrics.metaGroupBodyRollback();
+        } catch (RuntimeException | Error e) {
+            log.warn("Metrics callback failed: {}", e.toString());
+        }
     }
 
     /** Moves queued tasks into {@code local} up to the batch size, waiting at most the configured time. @return true on the stop marker */

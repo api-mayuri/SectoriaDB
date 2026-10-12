@@ -1,6 +1,8 @@
 package org.example.sectoriadb.metastore;
 
 import org.example.sectoriadb.metrics.StorageMetrics;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -11,6 +13,7 @@ import java.util.zip.CRC32C;
 
 /** Fixed-size page I/O with CRC32C. Page layout: crc(4) type(1) flags(1) count(2) payload. */
 final class Pager {
+    private static final Logger log = LoggerFactory.getLogger(Pager.class);
     static final int HEADER = 8;
     static final byte T_LEAF = 1, T_BRANCH = 2, T_OVERFLOW = 3, T_FREELIST = 4;
 
@@ -18,10 +21,6 @@ final class Pager {
     final int pageSize;
     final boolean fsync;
     final StorageMetrics metrics;
-
-    Pager(FileChannel ch, int pageSize, boolean fsync) {
-        this(ch, pageSize, fsync, StorageMetrics.NOOP);
-    }
 
     Pager(FileChannel ch, int pageSize, boolean fsync, StorageMetrics metrics) {
         this.ch = ch;
@@ -51,6 +50,11 @@ final class Pager {
         throw new IOException(faultMessage);
     }
 
+    /** Metrics are observers: a failing sink must never fail (or poison) a page operation that already happened. */
+    private static void metricFailure(Throwable e) {
+        log.warn("Metrics callback failed: {}", e.toString());
+    }
+
     static int crc(byte[] p, int off, int len) {
         CRC32C c = new CRC32C();
         c.update(p, off, len);
@@ -70,10 +74,18 @@ final class Pager {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        metrics.diskRead(StorageMetrics.Target.METASTORE, System.nanoTime() - t0, pageSize);
+        try {
+            metrics.diskRead(StorageMetrics.Target.METASTORE, System.nanoTime() - t0, pageSize);
+        } catch (RuntimeException | Error e) {
+            metricFailure(e);
+        }
         int stored = ByteBuffer.wrap(p).getInt(0);
         if (stored != crc(p, 4, pageSize - 4)) {
-            metrics.crcFailure(StorageMetrics.CrcKind.METASTORE_PAGE);
+            try {
+                metrics.crcFailure(StorageMetrics.CrcKind.METASTORE_PAGE);
+            } catch (RuntimeException | Error e) {
+                metricFailure(e);
+            }
             throw new CorruptedPageException(id, "checksum mismatch");
         }
         return p;
@@ -94,7 +106,11 @@ final class Pager {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        metrics.diskWrite(StorageMetrics.Target.METASTORE, System.nanoTime() - t0, p.length);
+        try {
+            metrics.diskWrite(StorageMetrics.Target.METASTORE, System.nanoTime() - t0, p.length);
+        } catch (RuntimeException | Error e) {
+            metricFailure(e);
+        }
     }
 
     void force() {
@@ -106,7 +122,11 @@ final class Pager {
         } catch (IOException e) {
             throw new UncheckedIOException(e);
         }
-        metrics.fsync(StorageMetrics.Target.METASTORE, System.nanoTime() - t0);
+        try {
+            metrics.fsync(StorageMetrics.Target.METASTORE, System.nanoTime() - t0);
+        } catch (RuntimeException | Error e) {
+            metricFailure(e);
+        }
     }
 
     void ensureSize(long bytes) {

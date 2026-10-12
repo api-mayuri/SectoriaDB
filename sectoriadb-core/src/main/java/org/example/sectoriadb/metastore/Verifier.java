@@ -26,7 +26,7 @@ final class Verifier {
         seen.set(0);
         seen.set(1);
         int trees = 0;
-        long catEntries = walkTree(snap.catalogRoot(), -1, true);
+        long catEntries = walkTree(snap.catalogRoot(), -1);
         BTree cat = tx.catalog();
         if (catEntries != countCatalog(cat)) throw new CorruptedPageException(-1, "catalog entry count mismatch");
         entries = 0;
@@ -35,7 +35,7 @@ final class Verifier {
                 ByteBuffer v = ByteBuffer.wrap(c.value());
                 long root = v.getLong(0);
                 long cnt = v.getLong(8);
-                long actual = walkTree(root, cnt, false);
+                long actual = walkTree(root, cnt);
                 entries += actual;
                 trees++;
             }
@@ -81,20 +81,20 @@ final class Verifier {
         seen.set((int) id);
     }
 
-    private long walkTree(long root, long expected, boolean catalog) {
+    private long walkTree(long root, long expected) {
         if (root == 0) {
             if (expected > 0) throw new CorruptedPageException(-1, "empty tree with non-zero count");
             return 0;
         }
         leafDepth = -1;
-        long n = walk(root, null, null, 0, true, catalog);
+        long n = walk(root, null, null, 0, true);
         if (expected >= 0 && n != expected) {
             throw new CorruptedPageException(root, "entry count " + n + " != recorded " + expected);
         }
         return n;
     }
 
-    private long walk(long id, byte[] lo, byte[] hi, int depth, boolean isRoot, boolean catalog) {
+    private long walk(long id, byte[] lo, byte[] hi, int depth, boolean isRoot) {
         mark(id);
         treePages++;
         Node n = tx.node(id);
@@ -122,7 +122,7 @@ final class Verifier {
         for (int i = 0; i < n.children.size(); i++) {
             byte[] clo = i == 0 ? lo : n.keys.get(i - 1);
             byte[] chi = i == n.keys.size() ? hi : n.keys.get(i);
-            sum += walk(n.children.get(i), clo, chi, depth + 1, false, catalog);
+            sum += walk(n.children.get(i), clo, chi, depth + 1, false);
         }
         return sum;
     }

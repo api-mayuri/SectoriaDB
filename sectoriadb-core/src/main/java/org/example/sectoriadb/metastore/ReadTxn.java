@@ -84,7 +84,18 @@ public class ReadTxn implements AutoCloseable {
     }
 
     Node node(long id) {
+        checkPageId(id, snap.pageCount());
         return Node.decode(id, pager.read(id));
+    }
+
+    /** Pages 0 and 1 are the meta pages; anything outside the file's page range is a corrupt pointer, not an I/O error. */
+    static void checkPageId(long id, long pageCount) {
+        if (id < 2 || id >= pageCount) throw new CorruptedPageException(id, "page id out of range");
+    }
+
+    /** Exclusive upper bound of the page ids a value chain of this transaction may use. */
+    long pageLimit() {
+        return snap.pageCount();
     }
 
     long modCount() {
@@ -94,12 +105,13 @@ public class ReadTxn implements AutoCloseable {
     byte[] readValue(Node.LeafVal v) {
         if (v.inline() != null) return v.inline().clone();
         long len = v.ovLen();
-        if (len > Integer.MAX_VALUE) throw new CorruptedPageException(v.ovHead(), "value too large");
+        if (len < 0 || len > BTree.MAX_VALUE_SIZE) throw new CorruptedPageException(v.ovHead(), "bad value length " + len);
         byte[] out = new byte[(int) len];
         int off = 0;
         long id = v.ovHead();
         while (off < len) {
             if (id == 0) throw new CorruptedPageException(-1, "overflow chain too short");
+            checkPageId(id, pageLimit());
             byte[] p = pager.read(id);
             if (p[4] != Pager.T_OVERFLOW) throw new CorruptedPageException(id, "not an overflow page");
             ByteBuffer b = ByteBuffer.wrap(p);
