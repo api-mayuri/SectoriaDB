@@ -69,7 +69,8 @@ public final class SmallObjectBlob implements AutoCloseable {
     private final boolean fsync;
     private final long maxFileBytes;
     private final long checkpointInterval;
-    private final FileChannel channel;
+    /** Replaced by {@link #reopenAfterInterrupt} when a thread interrupt closed it under us. */
+    private volatile FileChannel channel;
     private final StorageMetrics metrics;
     private final ReentrantLock lock = new ReentrantLock();
 
@@ -86,6 +87,7 @@ public final class SmallObjectBlob implements AutoCloseable {
 
     // guarded by lock
     private boolean forcing;                // a leader is inside channel.force()
+    private boolean checkpointing;          // a leader writes a recovery checkpoint (no longer holds up the next group)
     private int recordsSinceForce;          // records written since the leader last took its target
     private long pendingRecords;            // records written but not yet durable
     private long failureGeneration;         // bumped when a force fails: every record beyond tail is dropped
@@ -244,11 +246,11 @@ public final class SmallObjectBlob implements AutoCloseable {
             System.arraycopy(data, 0, rec, RECORD_HEADER_SIZE, data.length);
             try {
                 long w0 = System.nanoTime();
-                FileChannelWrites.writeFully(channel, ByteBuffer.wrap(rec), at);
+                writeAt(ByteBuffer.wrap(rec), at);
                 metrics.diskWrite(StorageMetrics.Target.SMALL, System.nanoTime() - w0, rec.length);
             } catch (IOException e) {
                 // nobody reserved anything after `at` (reserve and write are one critical section): cut it off
-                try { channel.truncate(at); } catch (IOException ignored) { }
+                try { onChannel(ch -> ch.truncate(at)); } catch (IOException ignored) { }
                 throw e;
             }
             nextSequence++;
@@ -315,25 +317,31 @@ public final class SmallObjectBlob implements AutoCloseable {
                 hook.run(target);
             }
             long f0 = System.nanoTime();
-            channel.force(false);
+            onChannel(ch -> { ch.force(false); return null; });
             metrics.fsync(StorageMetrics.Target.SMALL, System.nanoTime() - f0);
         } catch (IOException | RuntimeException e) {
             failure = e instanceof IOException io ? io : new IOException(e);
         }
         boolean checkpoint = false;
+        boolean released = false;
         lock.lock();
         try {
             if (failure == null) {
                 tail = target;                             // publish: every record below target is durable
                 pendingRecords -= records;
                 metrics.smallGroupFsync(records);
-                checkpoint = tail - checkpointTail >= checkpointInterval && writable;
+                checkpoint = tail - checkpointTail >= checkpointInterval && writable && !checkpointing;
             } else {
                 failForce(failure);
             }
-            durableChanged.signalAll();                    // release the followers before the (rare) checkpoint
+            // The group is done: the followers are released and the next group may start its force while the (rare)
+            // checkpoint is written; checkpoints are serialised by their own flag.
+            forcing = false;
+            released = true;
+            durableChanged.signalAll();
             if (checkpoint) {
                 long cpTail = target;
+                checkpointing = true;
                 lock.unlock();
                 try {
                     writeCheckpoint(cpTail);
@@ -342,11 +350,15 @@ public final class SmallObjectBlob implements AutoCloseable {
                             id, e.getMessage());
                 } finally {
                     lock.lock();
+                    checkpointing = false;
+                    durableChanged.signalAll();
                 }
             }
         } finally {
-            forcing = false;
-            durableChanged.signalAll();
+            if (!released) {
+                forcing = false;
+                durableChanged.signalAll();
+            }
         }
     }
 
@@ -363,7 +375,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         recordsSinceForce = 0;
         writeEnd = durable;
         try {
-            channel.truncate(durable);
+            onChannel(ch -> ch.truncate(durable));
         } catch (IOException e) {
             log.warn("Small blob {}: could not truncate the unforced tail: {}", id, e.getMessage());
         }
@@ -430,7 +442,7 @@ public final class SmallObjectBlob implements AutoCloseable {
             if (h.state() == STATE_DELETED) {
                 return false;
             }
-            FileChannelWrites.writeFully(channel, ByteBuffer.wrap(new byte[]{STATE_DELETED}), offset + STATE_OFFSET);
+            writeAt(ByteBuffer.wrap(new byte[]{STATE_DELETED}), offset + STATE_OFFSET);
             long span = h.span();
             liveRecords--;
             deadRecords++;
@@ -458,7 +470,7 @@ public final class SmallObjectBlob implements AutoCloseable {
     public void close() throws IOException {
         lock.lock();
         try {
-            while (forcing) {
+            while (forcing || checkpointing) {
                 durableChanged.awaitUninterruptibly();
             }
             if (closed) {
@@ -481,7 +493,7 @@ public final class SmallObjectBlob implements AutoCloseable {
     private void forceTimed() throws IOException {
         if (fsync) {
             long t0 = System.nanoTime();
-            channel.force(false);
+            onChannel(ch -> { ch.force(false); return null; });
             metrics.fsync(StorageMetrics.Target.SMALL, System.nanoTime() - t0);
         }
     }
@@ -492,7 +504,7 @@ public final class SmallObjectBlob implements AutoCloseable {
     private void writeCheckpoint(long durableTail) throws IOException {
         long gen = checkpointGeneration + 1;
         int slot = (gen % 2 == 1) ? CHECKPOINT_SLOT_A : CHECKPOINT_SLOT_B;
-        FileChannelWrites.writeFully(channel, ByteBuffer.wrap(encodeCheckpoint(durableTail, gen)), slot);
+        writeAt(ByteBuffer.wrap(encodeCheckpoint(durableTail, gen)), slot);
         forceTimed();
         checkpointGeneration = gen;
         checkpointTail = durableTail;
@@ -506,7 +518,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         Checkpoint a = decodeCheckpoint(header, CHECKPOINT_SLOT_A);
         Checkpoint b = decodeCheckpoint(header, CHECKPOINT_SLOT_B);
         Checkpoint best = a == null ? b : (b == null ? a : (a.generation() >= b.generation() ? a : b));
-        long fileSize = channel.size();
+        long fileSize = onChannel(FileChannel::size);
         long cp = DATA_START;
         if (best != null) {
             checkpointGeneration = best.generation();
@@ -532,9 +544,9 @@ public final class SmallObjectBlob implements AutoCloseable {
                     id, s.damagedRegions, s.problems);
         } else if (s.tail < fileSize) {
             log.warn("Small blob {}: dropping torn tail of {} byte(s) at offset {}", id, fileSize - s.tail, s.tail);
-            channel.truncate(s.tail);
+            onChannel(ch -> ch.truncate(s.tail));
             if (fsync) {
-                channel.force(true);
+                onChannel(ch -> { ch.force(true); return null; });
             }
         }
         if (s.badData > 0) {
@@ -655,6 +667,56 @@ public final class SmallObjectBlob implements AutoCloseable {
 
     // ── IO helpers ─────────────────────────────────────────────────────────────
 
+    private interface ChannelOp<T> {
+        T run(FileChannel ch) throws IOException;
+    }
+
+    /**
+     * Runs a channel operation. An interrupted thread closes the shared channel; if the blob itself is not closed the
+     * file is reopened and the operation repeated once (all operations are positional and idempotent), with the
+     * interrupt flag cleared meanwhile and restored afterwards.
+     */
+    private <T> T onChannel(ChannelOp<T> op) throws IOException {
+        FileChannel ch = channel;
+        try {
+            return op.run(ch);
+        } catch (java.nio.channels.ClosedChannelException e) {
+            if (closed) throw e;
+            boolean interrupted = Thread.interrupted();
+            try {
+                return op.run(reopenAfterInterrupt(ch));
+            } finally {
+                if (interrupted) Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private synchronized FileChannel reopenAfterInterrupt(FileChannel broken) throws IOException {
+        if (channel == broken) {
+            if (closed) throw new java.nio.channels.ClosedChannelException();
+            try {
+                broken.close();
+            } catch (IOException ignored) {
+                // already closed
+            }
+            channel = FileChannel.open(path, StandardOpenOption.READ, StandardOpenOption.WRITE);
+        }
+        return channel;
+    }
+
+    private void writeAt(ByteBuffer src, long position) throws IOException {
+        int start = src.position();
+        onChannel(ch -> {
+            src.position(start);
+            FileChannelWrites.writeFully(ch, src, position);
+            return null;
+        });
+    }
+
+    private int readAt(ByteBuffer dst, long position) throws IOException {
+        return onChannel(ch -> ch.read(dst, position));
+    }
+
     private void ensureOpen() throws IOException {
         if (closed) {
             throw new java.nio.channels.ClosedChannelException();
@@ -675,7 +737,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         ByteBuffer b = ByteBuffer.wrap(out);
         long p = pos;
         while (b.hasRemaining()) {
-            int n = channel.read(b, p);
+            int n = readAt(b, p);
             if (n < 0) {
                 throw new IOException("Unexpected end of file in " + path + " at offset " + p);
             }
@@ -690,7 +752,7 @@ public final class SmallObjectBlob implements AutoCloseable {
         ByteBuffer b = ByteBuffer.wrap(out);
         long p = pos;
         while (b.hasRemaining()) {
-            int n = channel.read(b, p);
+            int n = readAt(b, p);
             if (n < 0) {
                 break;
             }

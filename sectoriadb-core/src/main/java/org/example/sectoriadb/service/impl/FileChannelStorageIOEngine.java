@@ -23,8 +23,10 @@ import java.nio.file.StandardOpenOption;
  * zeros inside their size), so EOF means the file was truncated or the offset is out of range, and silently
  * zero-filling would hide corruption.
  *
- * Note: interrupting a thread that is blocked in channel IO closes the shared channel (JDK behaviour,
- * {@link java.nio.channels.ClosedByInterruptException}); later calls on this engine then fail.
+ * Interrupting a thread that is inside channel IO closes the shared channel (JDK behaviour,
+ * {@link java.nio.channels.ClosedByInterruptException}). The engine survives that: when an operation finds the channel
+ * closed although the engine is not, it reopens the file and repeats the operation once (with the interrupt flag
+ * cleared for the retry and restored afterwards, so the caller still sees its interrupt).
  */
 public class FileChannelStorageIOEngine implements StorageIOEngine {
 
@@ -85,10 +87,14 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
 
     @Override
     public ByteBuffer readChunk(BlobFile blobFile, long offset, int length) throws IOException {
+        if (length < 0) throw new IllegalArgumentException("negative length: " + length);
         ByteBuffer buffer = ByteBuffer.allocate(length);
-        FileChannel ch = channel(blobFile);
         long t0 = System.nanoTime();
-        readFully(ch::read, buffer, offset);
+        withChannel(blobFile, ch -> {
+            buffer.clear();                 // a retry starts from scratch
+            readFully(ch::read, buffer, offset);
+            return null;
+        });
         metrics.diskRead(StorageMetrics.Target.CUCKOO, System.nanoTime() - t0, length);
         buffer.flip();
         return buffer;
@@ -96,19 +102,25 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
 
     @Override
     public void writeChunk(BlobFile blobFile, long offset, ByteBuffer chunk) throws IOException {
-        FileChannel ch = channel(blobFile);
         int bytes = chunk.remaining();
+        int start = chunk.position();
         long t0 = System.nanoTime();
-        writeFully(ch::write, chunk, offset);
+        withChannel(blobFile, ch -> {
+            chunk.position(start);          // a retry rewrites the whole chunk (positional writes are idempotent)
+            writeFully(ch::write, chunk, offset);
+            return null;
+        });
         metrics.diskWrite(StorageMetrics.Target.CUCKOO, System.nanoTime() - t0, bytes);
     }
 
     @Override
     public void force(BlobFile blobFile) throws IOException {
         if (fsync) {
-            FileChannel ch = channel(blobFile);
             long t0 = System.nanoTime();
-            ch.force(false);
+            withChannel(blobFile, ch -> {
+                ch.force(false);
+                return null;
+            });
             metrics.fsync(StorageMetrics.Target.CUCKOO, System.nanoTime() - t0);
         }
     }
@@ -121,6 +133,40 @@ public class FileChannelStorageIOEngine implements StorageIOEngine {
             channel = null;
             ch.close();
         }
+    }
+
+    private interface ChannelOp<T> {
+        T run(FileChannel ch) throws IOException;
+    }
+
+    private <T> T withChannel(BlobFile blobFile, ChannelOp<T> op) throws IOException {
+        FileChannel ch = channel(blobFile);
+        try {
+            return op.run(ch);
+        } catch (ClosedChannelException e) {
+            synchronized (this) {
+                if (closed) throw e;                    // closed on purpose
+            }
+            boolean interrupted = Thread.interrupted(); // the flag would close the new channel at once
+            try {
+                return op.run(reopen(blobFile, ch));
+            } finally {
+                if (interrupted) Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    /** Replaces the channel that was found closed (unless another thread already did). */
+    private synchronized FileChannel reopen(BlobFile blobFile, FileChannel broken) throws IOException {
+        if (channel == broken) {
+            channel = null;
+            try {
+                broken.close();
+            } catch (IOException ignored) {
+                // already closed
+            }
+        }
+        return channel(blobFile);
     }
 
     private synchronized FileChannel channel(BlobFile blobFile) throws IOException {
