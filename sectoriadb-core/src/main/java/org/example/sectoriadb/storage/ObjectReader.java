@@ -3,6 +3,7 @@ package org.example.sectoriadb.storage;
 import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.PartSegment;
 import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.engine.blob.SmallObjectBlob;
 import org.example.sectoriadb.catalog.ManifestEntity;
@@ -15,6 +16,7 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.zip.CRC32C;
 import org.example.sectoriadb.audit.OperationLogService;
@@ -202,6 +204,10 @@ public class ObjectReader {
             out.write(data);
             return;
         }
+        if (entity.getStorageKind() == StorageKind.MULTIPART) {
+            streamMultipart(entity, out, verifyWholeObject);
+            return;
+        }
         long[] keys = entity.chunkKeyArray();
         if (keys.length == 0) {
             // Empty file, nothing to stream
@@ -259,6 +265,14 @@ public class ObjectReader {
             out.write(readSmall(entity), (int) startByte, (int) lengthBytes);   // a slice of the one record
             return;
         }
+        if (entity.getStorageKind() == StorageKind.MULTIPART) {
+            if (startByte < 0 || lengthBytes < 0 || startByte + lengthBytes > entity.getTotalBytes()) {
+                throw new IllegalArgumentException("Range [" + startByte + ", +" + lengthBytes
+                        + "] exceeds object size " + entity.getTotalBytes());
+            }
+            streamMultipartRange(entity, out, startByte, lengthBytes);
+            return;
+        }
         if (entity.chunkKeyArray().length == 0) {
             // Empty file, can't stream any range
             return;
@@ -270,25 +284,129 @@ public class ObjectReader {
         if (lengthBytes == 0) {
             return;
         }
+        streamChunkRange(readerOf(entity), entity.getChunkSize(), startByte, lengthBytes, out);
+    }
 
-        int chunkSize       = entity.getChunkSize();
-        int totalChunks     = entity.getTotalChunks();
-        int firstIdx        = (int)(startByte / chunkSize);
-        int lastIdx         = (int)((startByte + lengthBytes - 1) / chunkSize);
-        ChunkStore.Reader chunks = readerOf(entity);
-
+    /** Bytes {@code [start, start+length)} of a run of chunks (all of {@code chunkSize} but the last), length &gt; 0. */
+    private static void streamChunkRange(ChunkStore.Reader chunks, int chunkSize, long start, long length, OutputStream out)
+            throws IOException {
+        int firstIdx = (int) (start / chunkSize);
+        int lastIdx = (int) ((start + length - 1) / chunkSize);
         long written = 0;
         for (int idx = firstIdx; idx <= lastIdx; idx++) {
-            boolean isFileLast = (idx == totalChunks - 1);
-            int actualSize = isFileLast ? entity.getLastChunkSize() : chunkSize;
-
+            int actualSize = chunks.sizeOf(idx);
             ByteBuffer chunk = chunks.read(idx);
-            int trimStart = (idx == firstIdx) ? (int)(startByte % chunkSize) : 0;
-            long remaining = lengthBytes - written;
-            int trimLen    = (int) Math.min(actualSize - trimStart, remaining);
+            int trimStart = (idx == firstIdx) ? (int) (start % chunkSize) : 0;
+            long remaining = length - written;
+            int trimLen = (int) Math.min(actualSize - trimStart, remaining);
 
             out.write(chunk.array(), chunk.arrayOffset() + chunk.position() + trimStart, trimLen);
             written += trimLen;
+        }
+    }
+
+    // ── Multipart objects ─────────────────────────────────────────────────────
+
+    /**
+     * Streams the bytes of part {@code partNumber} of a MULTIPART object (the part boundaries are in the manifest).
+     * The per-chunk / per-record CRCs are checked; the whole-object CRC cannot be, as only a piece is read.
+     *
+     * @return false if the object has no such part
+     */
+    public boolean streamPart(ManifestEntity entity, int partNumber, OutputStream out) throws IOException {
+        var extent = entity.partExtent(partNumber);
+        if (extent.isEmpty()) return false;
+        streamRange(entity, out, extent.get().start(), extent.get().length());
+        return true;
+    }
+
+    private void streamMultipart(ManifestEntity entity, OutputStream out, boolean verifyWholeObject) throws IOException {
+        long[] keys = entity.chunkKeyArray();
+        int pieces = 0;
+        for (PartSegment sg : entity.getSegments()) {
+            pieces += sg.kind() == StorageKind.CHUNKED ? sg.chunkCount() : sg.kind() == StorageKind.SMALL ? 1 : 0;
+        }
+        CRC32C crc = new CRC32C();
+        if (pieces == 0) {
+            if (verifyWholeObject) checkWholeObjectCrc(entity, crc);
+            return;
+        }
+        int piece = 0;
+        int keyBase = 0;
+        for (PartSegment sg : entity.getSegments()) {
+            if (sg.kind() == StorageKind.CHUNKED) {
+                ChunkStore.Reader chunks = segmentReader(entity, keys, keyBase, sg);
+                for (int i = 0; i < sg.chunkCount(); i++) {
+                    ByteBuffer chunk = chunks.read(i);
+                    byte[] arr = chunk.array();
+                    int off = chunk.arrayOffset() + chunk.position();
+                    int len = chunk.remaining();
+                    if (verifyWholeObject) {
+                        crc.update(arr, off, len);
+                        if (piece == pieces - 1) checkWholeObjectCrc(entity, crc);   // before the final bytes leave
+                    }
+                    out.write(arr, off, len);
+                    piece++;
+                }
+                keyBase += sg.chunkCount();
+            } else if (sg.kind() == StorageKind.SMALL) {
+                byte[] data = readSegmentRecord(entity, sg);
+                if (verifyWholeObject) {
+                    crc.update(data, 0, data.length);
+                    if (piece == pieces - 1) checkWholeObjectCrc(entity, crc);
+                }
+                out.write(data);
+                piece++;
+            }
+        }
+    }
+
+    private void streamMultipartRange(ManifestEntity entity, OutputStream out, long start, long length) throws IOException {
+        if (length == 0) return;
+        long[] keys = entity.chunkKeyArray();
+        long end = start + length;
+        long pos = 0;
+        int keyBase = 0;
+        for (PartSegment sg : entity.getSegments()) {
+            long segStart = pos;
+            long segEnd = pos + sg.length();
+            pos = segEnd;
+            int ownKeys = sg.kind() == StorageKind.CHUNKED ? sg.chunkCount() : 0;
+            if (segEnd <= start || sg.length() == 0) {
+                keyBase += ownKeys;
+                continue;
+            }
+            if (segStart >= end) break;
+            long from = Math.max(start, segStart) - segStart;
+            long len = Math.min(end, segEnd) - segStart - from;
+            if (sg.kind() == StorageKind.CHUNKED) {
+                streamChunkRange(segmentReader(entity, keys, keyBase, sg), sg.chunkSize(), from, len, out);
+            } else if (sg.kind() == StorageKind.SMALL) {
+                out.write(readSegmentRecord(entity, sg), (int) from, (int) len);
+            }
+            keyBase += ownKeys;
+        }
+    }
+
+    private ChunkStore.Reader segmentReader(ManifestEntity entity, long[] keys, int keyBase, PartSegment sg) {
+        if (entity.getPoolId() == null) {
+            throw new IllegalStateException("Manifest " + entity.getId() + " has no pool: its chunks cannot be located");
+        }
+        if (keyBase + sg.chunkCount() > keys.length) {
+            throw new IllegalStateException("Manifest " + entity.getId() + ": its part " + sg.partNumber()
+                    + " needs more chunks than the manifest lists");
+        }
+        return chunkStore.reader(entity.getPoolId(), Arrays.copyOfRange(keys, keyBase, keyBase + sg.chunkCount()),
+                sg.chunkSize(), sg.lastChunkSize());
+    }
+
+    private byte[] readSegmentRecord(ManifestEntity entity, PartSegment sg) throws IOException {
+        BlobFileEntity blob = entity.getSegmentBlobs().get(sg.smallBlobId());
+        if (blob == null) {
+            throw new IOException("Small-object blob not found: " + sg.smallBlobId());
+        }
+        try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(blob)) {
+            return h.get().read(sg.smallOffset(), sg.smallLength(), sg.smallCrc32c());
         }
     }
 

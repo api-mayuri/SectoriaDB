@@ -98,6 +98,8 @@ public class MetaStorePoolRepository implements PoolRepository {
                 throw new IllegalStateException("BucketNotEmpty: bucket '" + pool.getName() + "' still has "
                         + objects + " object(s).");
             }
+            // uploads still in progress are discarded with their parts (their data lives in this pool)
+            MultipartTrees.purgeBucket(tx, pool.getName());
             List<String> blobIds = Trees.blobIdsOfPool(tx, poolId);
             List<BlobFileEntity> removed = new ArrayList<>();
             for (String id : blobIds) {

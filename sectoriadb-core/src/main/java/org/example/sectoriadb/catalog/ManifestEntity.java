@@ -98,6 +98,27 @@ public class ManifestEntity {
     @JsonIgnore
     private BlobFileEntity smallBlob;
 
+    /**
+     * MULTIPART objects: the parts in object order (stored as a binary section of the record, not in JSON). Empty for every
+     * other kind. A retired MULTIPART manifest keeps only its SMALL segments: the collector needs them to mark the records
+     * DELETED; the chunks of the others were released with the references.
+     */
+    @JsonIgnore
+    private List<PartSegment> segments = List.of();
+
+    /** Resolved blobs of the SMALL segments by blob id; never stored. */
+    @JsonIgnore
+    private Map<String, BlobFileEntity> segmentBlobs = Map.of();
+
+    /**
+     * Set on the hidden manifest of an uploaded part of a multipart upload that is not completed yet: the upload and the
+     * part number. Such a manifest is no S3 object (no bucket, no key); it only holds the part's data and references
+     * until Complete moves them to the object manifest or Abort / replacement retires it.
+     */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private String multipartUploadId;
+    private int partNumber;
+
     public ManifestEntity() {}
 
     /**
@@ -141,6 +162,63 @@ public class ManifestEntity {
     @JsonIgnore
     public void setChunkKeyArray(long[] keys) {
         this.chunkKeys = keys == null ? new long[0] : keys;
+    }
+
+    // ── Multipart ────────────────────────────────────────────────────────────
+
+    @JsonIgnore
+    public List<PartSegment> getSegments() { return segments; }
+
+    @JsonIgnore
+    public void setSegments(List<PartSegment> segments) { this.segments = segments == null ? List.of() : List.copyOf(segments); }
+
+    @JsonIgnore
+    public Map<String, BlobFileEntity> getSegmentBlobs() { return segmentBlobs; }
+
+    @JsonIgnore
+    public void setSegmentBlobs(Map<String, BlobFileEntity> blobs) { this.segmentBlobs = blobs == null ? Map.of() : blobs; }
+
+    /** Blob ids named by SMALL segments (and by a SMALL manifest itself), without duplicates. */
+    @JsonIgnore
+    public java.util.Set<String> smallBlobIds() {
+        java.util.Set<String> ids = new java.util.LinkedHashSet<>();
+        if (smallBlobId != null) ids.add(smallBlobId);
+        for (PartSegment s : segments) if (s.kind() == StorageKind.SMALL) ids.add(s.smallBlobId());
+        return ids;
+    }
+
+    public String getMultipartUploadId() { return multipartUploadId; }
+    public void setMultipartUploadId(String id) { this.multipartUploadId = id; }
+
+    public int getPartNumber() { return partNumber; }
+    public void setPartNumber(int partNumber) { this.partNumber = partNumber; }
+
+    /** True for the hidden manifest of an uploaded part (see {@link #getMultipartUploadId()}). */
+    @JsonIgnore
+    public boolean isMultipartPart() { return multipartUploadId != null; }
+
+    /** Where a part lies within the object: {@code start} offset and {@code length}. */
+    public record Extent(long start, long length) {
+    }
+
+    /** Byte extent of the part the client uploaded as {@code partNumber}; empty if this is no multipart object or has no such part. */
+    public java.util.Optional<Extent> partExtent(int partNumber) {
+        long pos = 0;
+        for (PartSegment s : segments) {
+            if (s.partNumber() == partNumber) return java.util.Optional.of(new Extent(pos, s.length()));
+            pos += s.length();
+        }
+        return java.util.Optional.empty();
+    }
+
+    /** Index into the chunk key list where the chunks of segment {@code segmentIndex} start. */
+    @JsonIgnore
+    public int firstChunkOfSegment(int segmentIndex) {
+        int first = 0;
+        for (int i = 0; i < segmentIndex; i++) {
+            if (segments.get(i).kind() == StorageKind.CHUNKED) first += segments.get(i).chunkCount();
+        }
+        return first;
     }
 
     // ── Getters / Setters ────────────────────────────────────────────────────

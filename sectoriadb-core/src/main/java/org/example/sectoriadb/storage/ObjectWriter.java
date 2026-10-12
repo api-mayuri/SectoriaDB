@@ -235,30 +235,78 @@ public class ObjectWriter {
                                       UploadChecksums declared) throws IOException {
         Path tmp = Files.createTempFile(uploadTmpDir(), "sectoriadb-upload-", ".tmp");
         try {
-            EnumSet<ChecksumAlgorithm> algorithms = EnumSet.of(ChecksumAlgorithm.CRC32C);
-            if (declared.algorithm() != null) algorithms.add(declared.algorithm());
-            MultiDigest digest = new MultiDigest(true, algorithms);
-            try (MultiDigestInputStream dis = new MultiDigestInputStream(in, digest)) {
-                Files.copy(dis, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            }
-            digest.finish();
-            declared.verify(digest);   // throws ChecksumMismatchException: nothing has been written anywhere yet
-
-            String etag = "\"" + HexFormat.of().formatHex(digest.md5()) + "\"";
-            ManifestEntity entity = stage(tmp, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
+            MultiDigest digest = spool(in, tmp, declared);
+            ManifestEntity entity = stageDigested(tmp, pool, digest, declared.algorithm());
             entity.setObjectKey(objectKey);
             entity.setBucketName(pool.getName());
             entity.setContentType(contentType != null ? contentType : "application/octet-stream");
-            entity.setEtag(etag);
-            if (declared.algorithm() != null) {
-                entity.setChecksumAlgorithm(declared.algorithm());
-                entity.setChecksumValue(digest.encoded(declared.algorithm()));
-                entity.setChecksumType(ChecksumType.FULL_OBJECT);
-            }
             return entity;
         } finally {
             Files.deleteIfExists(tmp);
         }
+    }
+
+    /**
+     * Copies the stream to {@code tmp} while computing MD5, the always-on CRC32C and the client's additional checksum, and
+     * verifies what the client declared, BEFORE anything is written to a blob.
+     */
+    private MultiDigest spool(InputStream in, Path tmp, UploadChecksums declared) throws IOException {
+        EnumSet<ChecksumAlgorithm> algorithms = EnumSet.of(ChecksumAlgorithm.CRC32C);
+        if (declared.algorithm() != null) algorithms.add(declared.algorithm());
+        MultiDigest digest = new MultiDigest(true, algorithms);
+        try (MultiDigestInputStream dis = new MultiDigestInputStream(in, digest)) {
+            Files.copy(dis, tmp, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        }
+        digest.finish();
+        declared.verify(digest);   // throws ChecksumMismatchException: nothing has been written anywhere yet
+        return digest;
+    }
+
+    /** Stores the spooled file and fills in ETag, CRC32C and the additional checksum from the finished digest. */
+    private ManifestEntity stageDigested(Path tmp, PoolEntity pool, MultiDigest digest, ChecksumAlgorithm additional)
+            throws IOException {
+        ManifestEntity entity = stage(tmp, pool, digest.encoded(ChecksumAlgorithm.CRC32C));
+        entity.setEtag("\"" + HexFormat.of().formatHex(digest.md5()) + "\"");
+        if (additional != null) {
+            entity.setChecksumAlgorithm(additional);
+            entity.setChecksumValue(digest.encoded(additional));
+            entity.setChecksumType(ChecksumType.FULL_OBJECT);
+        }
+        return entity;
+    }
+
+    // ── Multipart parts ───────────────────────────────────────────────────────
+
+    /**
+     * Stages the body of an UploadPart like an object body (same chunking, deduplication, placement and small-object
+     * rules) but as a hidden part manifest: no bucket and no key, so it can never be listed or read as an object. The
+     * caller sets the upload id and part number and commits it with {@link #commitStaged}; the part is visible only then.
+     */
+    public ManifestEntity stagePart(InputStream in, PoolEntity pool, UploadChecksums declared) throws IOException {
+        Path tmp = Files.createTempFile(uploadTmpDir(), "sectoriadb-part-", ".tmp");
+        try {
+            return stageDigested(tmp, pool, spool(in, tmp, declared), declared.algorithm());
+        } finally {
+            Files.deleteIfExists(tmp);
+        }
+    }
+
+    /**
+     * As {@link #stagePart} for a part whose bytes are already in {@code file} (UploadPartCopy), with the digest the caller
+     * computed while writing it (finished, MD5 and CRC32C included).
+     */
+    public ManifestEntity stagePartFile(Path file, PoolEntity pool, MultiDigest digest, ChecksumAlgorithm additional)
+            throws IOException {
+        return stageDigested(file, pool, digest.finish(), additional);
+    }
+
+    /**
+     * Runs a commit transaction for a staged manifest with the write path's guards: the garbage collector hold is checked
+     * and released around it, the chunks are forced before the transaction, placements are re-pointed after a resize.
+     * {@code commit} must read {@link ManifestEntity#getStagedChunks()} (and the entity) lazily, at call time.
+     */
+    public <T> T commitStaged(ManifestEntity entity, java.util.function.Supplier<T> commit) {
+        return committing(entity, () -> withRedirects(entity, commit));
     }
 
     /**

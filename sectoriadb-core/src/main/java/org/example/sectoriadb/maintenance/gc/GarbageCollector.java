@@ -6,6 +6,7 @@ import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PartSegment;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.BlobFileRepository;
@@ -411,7 +412,8 @@ public class GarbageCollector {
             for (Tombstone t : part) {
                 Optional<ManifestEntity> m = manifestRepo.findById(t.manifestId());
                 if (m.isPresent() && poolId != null && !poolId.equals(m.get().getPoolId())) continue;
-                if (m.isPresent() && m.get().isDeleted() && m.get().getStorageKind() == StorageKind.SMALL) {
+                if (m.isPresent() && m.get().isDeleted()
+                        && (m.get().getStorageKind() == StorageKind.SMALL || m.get().getStorageKind() == StorageKind.MULTIPART)) {
                     switch (markSmallDeleted(m.get())) {
                         case MARKED -> r.smallRecordsMarked++;
                         case NOTHING_TO_DO -> { }
@@ -443,19 +445,33 @@ public class GarbageCollector {
      * crash in between repeats the (idempotent) flip, never leaves an ACTIVE record with no manifest to find it.
      */
     private Marked markSmallDeleted(ManifestEntity m) {
-        BlobFileEntity blob = m.getSmallBlob();
+        if (m.getStorageKind() != StorageKind.MULTIPART) {
+            return markRecordDeleted(m.getId(), m.getSmallBlob(), m.getSmallOffset());
+        }
+        // a retired multipart object: every SMALL segment is a record of its own
+        Marked result = Marked.NOTHING_TO_DO;
+        for (PartSegment sg : m.getSegments()) {
+            if (sg.kind() != StorageKind.SMALL) continue;
+            Marked one = markRecordDeleted(m.getId(), m.getSegmentBlobs().get(sg.smallBlobId()), sg.smallOffset());
+            if (one == Marked.RETRY_LATER) return one;
+            if (one == Marked.MARKED) result = Marked.MARKED;
+        }
+        return result;
+    }
+
+    private Marked markRecordDeleted(String manifestId, BlobFileEntity blob, long offset) {
         if (blob == null) return Marked.NOTHING_TO_DO;   // the blob is gone (compacted away, bucket deleted)
         try {
             try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(blob)) {
-                return h.get().markDeleted(m.getSmallOffset()) ? Marked.MARKED : Marked.NOTHING_TO_DO;
+                return h.get().markDeleted(offset) ? Marked.MARKED : Marked.NOTHING_TO_DO;
             }
         } catch (SmallObjectCorruptedException e) {
-            log.error("Small-object record of retired manifest {} is damaged and cannot be marked DELETED: {}", m.getId(), e.getMessage());
+            log.error("Small-object record of retired manifest {} is damaged and cannot be marked DELETED: {}", manifestId, e.getMessage());
             return Marked.NOTHING_TO_DO;   // nothing readable lives there; compaction skips it
         } catch (IOException | RuntimeException e) {
             // closed file after a compaction swapped the blob out: nothing to mark; any other failure is retried
             if (blobRepo.findById(blob.getId()).isEmpty()) return Marked.NOTHING_TO_DO;
-            log.warn("Could not mark the record of {} DELETED: {}", m.getId(), e.toString());
+            log.warn("Could not mark the record of {} DELETED: {}", manifestId, e.toString());
             return Marked.RETRY_LATER;
         }
     }

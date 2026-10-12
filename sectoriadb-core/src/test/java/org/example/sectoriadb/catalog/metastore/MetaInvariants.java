@@ -6,7 +6,11 @@ import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.ReadTxn;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.MultipartPart;
+import org.example.sectoriadb.catalog.MultipartUpload;
+import org.example.sectoriadb.catalog.PartSegment;
 import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.catalog.StorageKind;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -57,13 +61,13 @@ public final class MetaInvariants {
 
             // manifests <-> manifests_by_blob, gc queue
             int blobRefs = 0;
+            Map<String, ManifestEntity> hiddenParts = new HashMap<>();
             Set<String> deleted = new HashSet<>();
             Set<String> liveS3 = new HashSet<>();
             try (Cursor c = tx.tree(Trees.MANIFESTS).scan()) {
                 while (c.next()) {
                     ManifestEntity m = ManifestCodec.decode(c.value());
-                    for (String b : new String[]{m.getSmallBlobId()}) {
-                        if (b == null) continue;
+                    for (String b : m.smallBlobIds()) {
                         blobRefs++;
                         assertTrue(tx.tree(Trees.MANIFESTS_BY_BLOB).containsKey(Trees.pairKey(b, m.getId())),
                                 "manifests_by_blob entry of " + m.getId());
@@ -71,6 +75,12 @@ public final class MetaInvariants {
                     }
                     if (m.isDeleted()) deleted.add(m.getId());
                     else if (m.getBucketName() != null) liveS3.add(m.getId());
+                    if (m.getStorageKind() == StorageKind.MULTIPART && !m.isDeleted()) checkMultipartLayout(m);
+                    if (m.getStorageKind() == StorageKind.MULTIPART && m.isDeleted()) {
+                        assertTrue(m.getSegments().stream().allMatch(sg -> sg.kind() == StorageKind.SMALL),
+                                "a retired multipart manifest keeps only its small segments: " + m.getId());
+                    }
+                    if (m.isMultipartPart()) hiddenParts.put(m.getId(), m);
                 }
             }
             assertEquals(blobRefs, tx.tree(Trees.MANIFESTS_BY_BLOB).size(), "manifests_by_blob has no stray entries");
@@ -104,7 +114,74 @@ public final class MetaInvariants {
                 }
             }
             assertEquals(liveS3, pointedAt, "every live S3 manifest is the current version of its key");
+
+            checkMultipart(tx, hiddenParts);
         }
         ChunkInvariants.check(store);
+    }
+
+    /** Segments describe exactly the bytes and chunks of the manifest. */
+    private static void checkMultipartLayout(ManifestEntity m) {
+        long bytes = 0;
+        int chunks = 0;
+        for (PartSegment sg : m.getSegments()) {
+            bytes += sg.length();
+            if (sg.kind() == StorageKind.CHUNKED) {
+                chunks += sg.chunkCount();
+                assertTrue(sg.chunkCount() > 0 && sg.lastChunkSize() > 0 && sg.lastChunkSize() <= sg.chunkSize(),
+                        "chunked segment of part " + sg.partNumber());
+                assertEquals(sg.length(), (long) (sg.chunkCount() - 1) * sg.chunkSize() + sg.lastChunkSize(),
+                        "chunk sizes add up to the length of part " + sg.partNumber() + " of " + m.getId());
+            }
+        }
+        assertEquals(m.getTotalBytes(), bytes, "segment lengths add up to the object size: " + m.getId());
+        assertEquals(m.chunkKeyArray().length, chunks, "segment chunk counts add up to the key list: " + m.getId());
+    }
+
+    /**
+     * Multipart state: rows, hidden part manifests and the open-upload index agree. Every part row points at a live hidden
+     * manifest of its upload and number; every live hidden manifest has its row; the bucket index holds exactly the OPEN uploads.
+     */
+    private static void checkMultipart(ReadTxn tx, Map<String, ManifestEntity> hiddenParts) {
+        Map<String, MultipartUpload> uploads = new HashMap<>();
+        Set<String> expectedIndex = new HashSet<>();
+        try (Cursor c = tx.tree(MultipartTrees.UPLOADS).scan()) {
+            while (c.next()) {
+                MultipartUpload u = JsonValues.read(c.value(), 0, c.value().length, MultipartUpload.class);
+                uploads.put(u.getUploadId(), u);
+                if (u.getState() == MultipartUpload.State.OPEN) {
+                    assertTrue(tx.tree(Trees.POOLS).containsKey(Trees.idKey(u.getPoolId())), "pool of upload " + u.getUploadId());
+                    assertTrue(tx.tree(Trees.POOLS_BY_NAME).containsKey(Keys.of(u.getBucket())), "bucket of upload " + u.getUploadId());
+                    expectedIndex.add(Trees.str(MultipartTrees.byBucketKey(u)));
+                }
+            }
+        }
+        Set<String> indexed = new HashSet<>();
+        try (Cursor c = tx.tree(MultipartTrees.BY_BUCKET).scan()) {
+            while (c.next()) indexed.add(Trees.str(c.key()));
+        }
+        assertEquals(expectedIndex, indexed, "mpu_by_bucket == OPEN uploads");
+
+        Set<String> rowManifests = new HashSet<>();
+        try (Cursor c = tx.tree(MultipartTrees.PARTS).scan()) {
+            while (c.next()) {
+                MultipartPart p = MultipartTrees.decodePart(c.value());
+                Keys.Reader r = new Keys.Reader(c.key());
+                String uploadId = r.string();
+                assertEquals(p.partNumber(), (int) r.longUnsigned(), "part row key");
+                MultipartUpload u = uploads.get(uploadId);
+                assertNotNull(u, "upload of part row " + uploadId + "/" + p.partNumber());
+                assertEquals(MultipartUpload.State.OPEN, u.getState(), "only OPEN uploads keep part rows");
+                ManifestEntity m = hiddenParts.get(p.manifestId());
+                assertNotNull(m, "hidden manifest of part " + p.partNumber());
+                assertTrue(!m.isDeleted(), "a part row points at a live manifest: " + p.manifestId());
+                assertEquals(uploadId, m.getMultipartUploadId());
+                assertEquals(p.partNumber(), m.getPartNumber());
+                assertEquals(p.size(), m.getTotalBytes());
+                assertTrue(rowManifests.add(p.manifestId()), "one row per hidden manifest");
+            }
+        }
+        assertEquals(hiddenParts.keySet().stream().filter(id -> !hiddenParts.get(id).isDeleted()).collect(java.util.stream.Collectors.toSet()),
+                rowManifests, "every live hidden part manifest has its row");
     }
 }

@@ -5,6 +5,7 @@ import org.example.sectoriadb.metastore.Cursor;
 import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.ReadTxn;
+import org.example.sectoriadb.metastore.WriteTxn;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.ManifestRepository;
@@ -101,37 +102,45 @@ public class MetaStoreManifestRepository implements ManifestRepository {
         String key = entity.getObjectKey();
         if (bucket == null || key == null) throw new IllegalArgumentException("bucketName and objectKey are required");
         if (entity.getPoolId() == null) throw new IllegalArgumentException("poolId is required");
-        return store().writeGrouped(tx -> {
-            if (!tx.tree(Trees.POOLS).containsKey(Trees.idKey(entity.getPoolId()))) {
-                throw new PoolNotFoundException(entity.getPoolId());
+        return store().writeGrouped(tx -> commitInTxn(tx, entity, precondition));
+    }
+
+    /**
+     * The commit of an object manifest inside the caller's transaction (also used by CompleteMultipartUpload, whose
+     * MULTIPART manifest takes over the references of the part manifests instead of adding new ones).
+     */
+    static CommitResult commitInTxn(WriteTxn tx, ManifestEntity entity, CommitPrecondition precondition) {
+        String bucket = entity.getBucketName();
+        String key = entity.getObjectKey();
+        if (!tx.tree(Trees.POOLS).containsKey(Trees.idKey(entity.getPoolId()))) {
+            throw new PoolNotFoundException(entity.getPoolId());
+        }
+        Trees.ensureTotals(tx);
+        BTree objects = tx.tree(Trees.OBJECTS);
+        byte[] objectKey = Trees.objectKey(bucket, key);
+        Optional<String> previous = objects.get(objectKey).map(Trees::str);
+        if (!precondition.isNone()) {
+            String currentEtag = previous.flatMap(id -> Trees.manifest(tx, id)).map(ManifestEntity::getEtag).orElse(null);
+            if (!precondition.holds(previous.isPresent() && currentEtag == null ? "" : currentEtag)) {
+                throw new CommitPreconditionException(previous.isEmpty());
             }
-            Trees.ensureTotals(tx);
-            BTree objects = tx.tree(Trees.OBJECTS);
-            byte[] objectKey = Trees.objectKey(bucket, key);
-            Optional<String> previous = objects.get(objectKey).map(Trees::str);
-            if (!precondition.isNone()) {
-                String currentEtag = previous.flatMap(id -> Trees.manifest(tx, id)).map(ManifestEntity::getEtag).orElse(null);
-                if (!precondition.holds(previous.isPresent() && currentEtag == null ? "" : currentEtag)) {
-                    throw new CommitPreconditionException(previous.isEmpty());
-                }
-            }
-            long previousBytes = previous.flatMap(id -> Trees.manifest(tx, id)).map(ManifestEntity::getTotalBytes).orElse(0L);
-            entity.setDeleted(false);
-            Optional<ManifestEntity> existing = Trees.manifest(tx, entity.getId());
-            if (entity.getStorageKind() == StorageKind.CHUNKED && (existing.isEmpty() || existing.get().isDeleted())) {
-                // references first, retirement of the replaced version after: a chunk both versions share never
-                // passes through zero and is never queued for collection
-                Chunks.addRefs(tx, entity.getPoolId(), entity.chunkKeyArray(), entity.getStagedChunks());
-            }
-            Trees.putManifest(tx, entity);
-            objects.put(objectKey, Trees.bytes(entity.getId()));
-            Trees.adjustTotals(tx, previous.isPresent() ? 0 : 1, entity.getTotalBytes() - previousBytes);
-            Optional<ManifestEntity> superseded = Optional.empty();
-            if (previous.isPresent() && !previous.get().equals(entity.getId())) {
-                superseded = Trees.retire(tx, previous.get());
-            }
-            return new CommitResult(entity, superseded);
-        });
+        }
+        long previousBytes = previous.flatMap(id -> Trees.manifest(tx, id)).map(ManifestEntity::getTotalBytes).orElse(0L);
+        entity.setDeleted(false);
+        Optional<ManifestEntity> existing = Trees.manifest(tx, entity.getId());
+        if (entity.getStorageKind() == StorageKind.CHUNKED && (existing.isEmpty() || existing.get().isDeleted())) {
+            // references first, retirement of the replaced version after: a chunk both versions share never
+            // passes through zero and is never queued for collection
+            Chunks.addRefs(tx, entity.getPoolId(), entity.chunkKeyArray(), entity.getStagedChunks());
+        }
+        Trees.putManifest(tx, entity);
+        objects.put(objectKey, Trees.bytes(entity.getId()));
+        Trees.adjustTotals(tx, previous.isPresent() ? 0 : 1, entity.getTotalBytes() - previousBytes);
+        Optional<ManifestEntity> superseded = Optional.empty();
+        if (previous.isPresent() && !previous.get().equals(entity.getId())) {
+            superseded = Trees.retire(tx, previous.get());
+        }
+        return new CommitResult(entity, superseded);
     }
 
     @Override
@@ -340,7 +349,14 @@ public class MetaStoreManifestRepository implements ManifestRepository {
         return store().read(tx -> {
             long n = 0;
             for (String id : Trees.manifestIdsOfBlob(tx, blobId)) {
-                if (Trees.manifest(tx, id).map(m -> !m.isDeleted()).orElse(false)) n++;
+                ManifestEntity m = Trees.manifest(tx, id).orElse(null);
+                if (m == null || m.isDeleted()) continue;
+                if (m.getStorageKind() == StorageKind.MULTIPART) {
+                    n += m.getSegments().stream()
+                            .filter(sg -> sg.kind() == StorageKind.SMALL && blobId.equals(sg.smallBlobId())).count();
+                } else {
+                    n++;
+                }
             }
             return n;
         });

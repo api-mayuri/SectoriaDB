@@ -17,7 +17,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Cross-tree invariants of the chunk index: the reference count of every chunk is exactly the number of positions
- * in live CHUNKED manifests that hold its key; zero-reference chunks are exactly the queued ones; the by-blob index
+ * in live CHUNKED manifests (objects, shell files, hidden parts of open multipart uploads) and live MULTIPART manifests
+ * that hold its key; zero-reference chunks are exactly the queued ones; the by-blob index
  * and the orphan records agree with the entries and the blobs.
  */
 public final class ChunkInvariants {
@@ -45,7 +46,7 @@ public final class ChunkInvariants {
             try (Cursor c = tx.tree(Trees.MANIFESTS).scan()) {
                 while (c.next()) {
                     ManifestEntity m = ManifestCodec.decode(c.value());
-                    if (m.getStorageKind() != StorageKind.CHUNKED) continue;
+                    if (m.getStorageKind() != StorageKind.CHUNKED && m.getStorageKind() != StorageKind.MULTIPART) continue;
                     if (m.isDeleted()) {
                         assertEquals(0, m.chunkKeyArray().length, "a retired manifest is a tombstone without chunk list: " + m.getId());
                         continue;

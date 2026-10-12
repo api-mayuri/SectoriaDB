@@ -168,14 +168,20 @@ final class Trees {
     /** Fills in {@code smallBlob} (and its pool) from the blobs tree. */
     static ManifestEntity resolve(ReadTxn tx, ManifestEntity m) {
         if (m.getSmallBlobId() != null) blob(tx, m.getSmallBlobId(), true).ifPresent(m::setSmallBlob);
+        if (!m.getSegments().isEmpty()) {
+            java.util.Map<String, BlobFileEntity> blobs = new java.util.HashMap<>();
+            for (String id : m.smallBlobIds()) blob(tx, id, true).ifPresent(b -> blobs.put(id, b));
+            m.setSegmentBlobs(blobs);
+        }
         return m;
     }
 
-    /** Blobs a manifest is indexed under in {@code manifests_by_blob}: only the small-object blob of a SMALL object. */
+    /**
+     * Blobs a manifest is indexed under in {@code manifests_by_blob}: the small-object blob of a SMALL object, the blobs
+     * of the SMALL segments of a MULTIPART object.
+     */
     private static Set<String> blobsOf(ManifestEntity m) {
-        Set<String> s = new HashSet<>(1);
-        if (m.getSmallBlobId() != null) s.add(m.getSmallBlobId());
-        return s;
+        return new HashSet<>(m.smallBlobIds());
     }
 
     /** Upsert of the manifest record and of its {@code manifests_by_blob} entries. Does not touch {@code objects}. */
@@ -222,9 +228,14 @@ final class Trees {
         if (found.isEmpty() || found.get().isDeleted()) return Optional.empty();
         ManifestEntity m = found.get();
         m.setDeleted(true);
-        if (m.getStorageKind() == StorageKind.CHUNKED && m.getPoolId() != null && m.chunkKeyArray().length > 0) {
+        if ((m.getStorageKind() == StorageKind.CHUNKED || m.getStorageKind() == StorageKind.MULTIPART)
+                && m.getPoolId() != null && m.chunkKeyArray().length > 0) {
             Chunks.releaseRefs(tx, m.getPoolId(), m.chunkKeyArray());
             m.setChunkKeyArray(new long[0]);
+        }
+        if (m.getStorageKind() == StorageKind.MULTIPART) {
+            // the tombstone keeps the small records (the collector marks them DELETED), not the chunk segments
+            m.setSegments(m.getSegments().stream().filter(s -> s.kind() == StorageKind.SMALL).toList());
         }
         putManifest(tx, m);
         enqueueDeleted(tx, manifestId);

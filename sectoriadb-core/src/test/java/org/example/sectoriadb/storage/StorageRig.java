@@ -61,6 +61,8 @@ public final class StorageRig implements AutoCloseable {
     public ObjectReader reader;
     public ObjectCatalog catalog;
     public ObjectVerificationService verifier;
+    public org.example.sectoriadb.catalog.MultipartRepository multipartRepo;
+    public org.example.sectoriadb.storage.multipart.MultipartService multipart;
     public org.example.sectoriadb.catalog.GcRepository gcRepo;
     public org.example.sectoriadb.maintenance.gc.SmallBlobCompactor compactor;
     public org.example.sectoriadb.maintenance.gc.GarbageCollector gc;
@@ -102,6 +104,8 @@ public final class StorageRig implements AutoCloseable {
         reaper = new org.example.sectoriadb.maintenance.BlobFileReaper(blobs, pools, cache);
         resizeService = new ResizeService(blobs, pools, cache, blobGate, props, opLog, reaper);
         verifier = new ObjectVerificationService(catalog, reader);
+        multipartRepo = new org.example.sectoriadb.catalog.metastore.MetaStoreMultipartRepository(stores);
+        multipart = new org.example.sectoriadb.storage.multipart.MultipartService(multipartRepo, pools, writer, reader);
         gcRepo = new MetaStoreGcRepository(stores);
         compactor = new org.example.sectoriadb.maintenance.gc.SmallBlobCompactor(blobs, manifests, pools, gcRepo, blobService,
                 smallCache, chunkStore, props, metrics);

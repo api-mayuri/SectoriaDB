@@ -5,6 +5,8 @@ import org.example.sectoriadb.metrics.StorageMetrics;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.BlobKind;
 import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PartSegment;
+import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.BlobFileRepository;
 import org.example.sectoriadb.catalog.GcRepository;
@@ -208,8 +210,7 @@ public class SmallBlobCompactor {
             gate.close();   // sealed: nothing new can be appended, new uploads may go to other blobs
 
             // 2. the live records: after the drain this set is final
-            List<ManifestEntity> live = new ArrayList<>(manifestRepo.findByBlobId(old.getId(), true));
-            live.sort(Comparator.comparingLong(ManifestEntity::getSmallOffset));
+            List<LiveRecord> live = liveRecords(old.getId());
 
             // 3. copy into a new, sealed blob
             target = blobs.createSmall(pool, true);
@@ -230,11 +231,11 @@ public class SmallBlobCompactor {
                 // 5. release
                 long bytesAfter = targetBlob.tail();
                 targetBlob.unseal();
-                for (String id : swap.retired()) {
+                for (String key : swap.retired()) {
                     try {
-                        targetBlob.markDeleted(moves.get(id).newOffset());
+                        targetBlob.markDeleted(moves.get(key).newOffset());
                     } catch (IOException e) {
-                        log.warn("Could not mark the copy of retired manifest {} DELETED: {}", id, e.getMessage());
+                        log.warn("Could not mark the copy of retired record {} DELETED: {}", key, e.getMessage());
                     }
                 }
                 pending.add(new PendingFile(old.getId(), Path.of(old.getFilePath()),
@@ -254,7 +255,30 @@ public class SmallBlobCompactor {
         }
     }
 
-    private Map<String, SmallMove> copy(SmallObjectBlob from, SmallObjectBlob to, List<ManifestEntity> live) throws IOException {
+    /** One small record of a live manifest (a SMALL object, or one SMALL segment of a MULTIPART object). */
+    private record LiveRecord(String moveKey, String manifestId, long offset, int length, int crc32c) {
+    }
+
+    private List<LiveRecord> liveRecords(String blobId) {
+        List<LiveRecord> out = new ArrayList<>();
+        for (ManifestEntity m : manifestRepo.findByBlobId(blobId, true)) {
+            if (m.getStorageKind() == StorageKind.MULTIPART) {
+                for (int i = 0; i < m.getSegments().size(); i++) {
+                    PartSegment sg = m.getSegments().get(i);
+                    if (sg.kind() == StorageKind.SMALL && blobId.equals(sg.smallBlobId())) {
+                        out.add(new LiveRecord(GcRepository.moveKey(m.getId(), i), m.getId(), sg.smallOffset(),
+                                sg.smallLength(), sg.smallCrc32c()));
+                    }
+                }
+            } else {
+                out.add(new LiveRecord(m.getId(), m.getId(), m.getSmallOffset(), m.getSmallLength(), m.getSmallCrc32c()));
+            }
+        }
+        out.sort(Comparator.comparingLong(LiveRecord::offset));
+        return out;
+    }
+
+    private Map<String, SmallMove> copy(SmallObjectBlob from, SmallObjectBlob to, List<LiveRecord> live) throws IOException {
         Map<String, SmallMove> moves = new LinkedHashMap<>();
         ExecutorService pool = Executors.newFixedThreadPool(Math.min(COPY_THREADS, Math.max(1, live.size())), r -> {
             Thread t = new Thread(r, "small-compaction-copy");
@@ -263,21 +287,21 @@ public class SmallBlobCompactor {
         });
         try {
             List<Future<SmallMove>> futures = new ArrayList<>(live.size());
-            for (ManifestEntity m : live) {
+            for (LiveRecord m : live) {
                 futures.add(pool.submit(() -> {
-                    byte[] data = from.read(m.getSmallOffset(), m.getSmallLength(), m.getSmallCrc32c());   // CRC verified
-                    SmallObjectBlob.Location loc = to.appendWhileSealed(data, m.getId().hashCode());
+                    byte[] data = from.read(m.offset(), m.length(), m.crc32c());   // CRC verified
+                    SmallObjectBlob.Location loc = to.appendWhileSealed(data, m.manifestId().hashCode());
                     if (loc == null) throw new IOException("the compaction target is full");
-                    if (loc.crc32c() != m.getSmallCrc32c() || loc.length() != m.getSmallLength()) {
-                        throw new IOException("copy of manifest " + m.getId() + " does not match the original");
+                    if (loc.crc32c() != m.crc32c() || loc.length() != m.length()) {
+                        throw new IOException("copy of manifest " + m.manifestId() + " does not match the original");
                     }
-                    return new SmallMove(m.getSmallOffset(), loc.offset(), loc.length(), loc.crc32c());
+                    return new SmallMove(m.offset(), loc.offset(), loc.length(), loc.crc32c());
                 }));
             }
             IOException failure = null;
             for (int i = 0; i < live.size(); i++) {
                 try {
-                    moves.put(live.get(i).getId(), futures.get(i).get());
+                    moves.put(live.get(i).moveKey(), futures.get(i).get());
                 } catch (java.util.concurrent.ExecutionException e) {
                     if (failure == null) {
                         failure = e.getCause() instanceof IOException io ? io : new IOException(e.getCause());

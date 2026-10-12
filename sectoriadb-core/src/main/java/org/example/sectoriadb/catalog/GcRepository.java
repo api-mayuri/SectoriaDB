@@ -91,6 +91,14 @@ public interface GcRepository {
 
     // ---- small-object compaction ------------------------------------------------------------------------------
 
+    /**
+     * Key of a small record in the {@code moves} of a compaction: the manifest id for a SMALL object, and
+     * {@code manifestId#segmentIndex} for a SMALL segment of a MULTIPART object.
+     */
+    static String moveKey(String manifestId, int segmentIndex) {
+        return segmentIndex < 0 ? manifestId : manifestId + "#" + segmentIndex;
+    }
+
     /** Where the record of a live small object was copied to. */
     record SmallMove(long oldOffset, long newOffset, int length, int crc32c) {
     }
@@ -106,8 +114,8 @@ public interface GcRepository {
 
     /**
      * @param swapped   false if nothing was changed ({@code reason} says why)
-     * @param repointed manifests now at the new blob
-     * @param retired   manifest ids that were retired by the time of the swap: their copy in the new blob is dead
+     * @param repointed records now at the new blob (a MULTIPART object counts one per segment)
+     * @param retired   move keys of records whose manifest was retired by the time of the swap: their copy in the new blob is dead
      */
     record CompactionSwap(boolean swapped, String reason, int repointed, List<String> retired) {
     }

@@ -8,6 +8,8 @@ import org.example.sectoriadb.metastore.WriteTxn;
 import org.example.sectoriadb.catalog.BlobFileEntity;
 import org.example.sectoriadb.catalog.ChunkEntry;
 import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PartSegment;
+import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.GcRepository;
 
@@ -16,6 +18,7 @@ import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -283,34 +286,85 @@ public class MetaStoreGcRepository implements GcRepository {
             if (oldBlob.isEmpty()) return new CompactionSwap(false, "the old blob no longer exists", 0, List.of());
             if (newBlob.isEmpty()) return new CompactionSwap(false, "the new blob does not exist", 0, List.of());
             Map<String, ManifestEntity> live = new LinkedHashMap<>();
-            Set<String> retired = new HashSet<>();
+            List<ManifestEntity> dead = new ArrayList<>();
+            Set<String> retired = new LinkedHashSet<>();
             for (String id : Trees.manifestIdsOfBlob(tx, oldBlobId)) {
                 Optional<ManifestEntity> m = Trees.manifest(tx, id);
                 if (m.isEmpty()) continue;
                 if (m.get().isDeleted()) {
-                    if (moves.containsKey(id)) retired.add(id);
+                    for (String key : recordKeys(m.get(), oldBlobId)) if (moves.containsKey(key)) retired.add(key);
+                    dead.add(m.get());
                     continue;
                 }
-                SmallMove mv = moves.get(id);
-                if (mv == null) {
-                    return new CompactionSwap(false, "live manifest " + id + " was not part of the copy", 0, List.of());
-                }
-                if (m.get().getSmallOffset() != mv.oldOffset() || m.get().getSmallLength() != mv.length()
-                        || m.get().getSmallCrc32c() != mv.crc32c()) {
-                    return new CompactionSwap(false, "manifest " + id + " changed during the copy", 0, List.of());
+                for (Map.Entry<String, SmallRecord> rec : recordsIn(m.get(), oldBlobId).entrySet()) {
+                    SmallMove mv = moves.get(rec.getKey());
+                    if (mv == null) {
+                        return new CompactionSwap(false, "live manifest " + id + " was not part of the copy", 0, List.of());
+                    }
+                    SmallRecord r = rec.getValue();
+                    if (r.offset() != mv.oldOffset() || r.length() != mv.length() || r.crc32c() != mv.crc32c()) {
+                        return new CompactionSwap(false, "manifest " + id + " changed during the copy", 0, List.of());
+                    }
                 }
                 live.put(id, m.get());
             }
+            int records = 0;
             for (Map.Entry<String, ManifestEntity> e : live.entrySet()) {
                 ManifestEntity m = e.getValue();
-                m.setSmallBlobId(newBlobId);
-                m.setSmallOffset(moves.get(e.getKey()).newOffset());
+                if (m.getStorageKind() == StorageKind.MULTIPART) {
+                    List<PartSegment> segments = new ArrayList<>(m.getSegments());
+                    for (int i = 0; i < segments.size(); i++) {
+                        PartSegment seg = segments.get(i);
+                        if (seg.kind() == StorageKind.SMALL && oldBlobId.equals(seg.smallBlobId())) {
+                            segments.set(i, seg.movedTo(newBlobId, moves.get(GcRepository.moveKey(m.getId(), i)).newOffset()));
+                            records++;
+                        }
+                    }
+                    m.setSegments(segments);
+                } else {
+                    m.setSmallBlobId(newBlobId);
+                    m.setSmallOffset(moves.get(e.getKey()).newOffset());
+                    records++;
+                }
                 Trees.putManifest(tx, m);                                  // manifests_by_blob follows
+            }
+            for (ManifestEntity m : dead) {
+                // a retired multipart manifest may also name records of other blobs: keep it for them
+                if (m.getStorageKind() != StorageKind.MULTIPART) continue;
+                List<PartSegment> rest = m.getSegments().stream()
+                        .filter(sg -> !(sg.kind() == StorageKind.SMALL && oldBlobId.equals(sg.smallBlobId()))).toList();
+                if (!rest.isEmpty()) {
+                    m.setSegments(rest);
+                    Trees.putManifest(tx, m);
+                }
             }
             Trees.purgeManifests(tx, List.of(oldBlobId), null);            // tombstones that still name the old blob
             Trees.deleteBlobRecord(tx, oldBlob.get());
             tx.commit();
-            return new CompactionSwap(true, null, live.size(), new ArrayList<>(retired));
+            return new CompactionSwap(true, null, records, new ArrayList<>(retired));
         }
+    }
+
+    private record SmallRecord(long offset, int length, int crc32c) {
+    }
+
+    /** The small records a manifest keeps in {@code blobId}, by move key. */
+    private static Map<String, SmallRecord> recordsIn(ManifestEntity m, String blobId) {
+        Map<String, SmallRecord> out = new LinkedHashMap<>();
+        if (m.getStorageKind() == StorageKind.MULTIPART) {
+            for (int i = 0; i < m.getSegments().size(); i++) {
+                PartSegment s = m.getSegments().get(i);
+                if (s.kind() == StorageKind.SMALL && blobId.equals(s.smallBlobId())) {
+                    out.put(GcRepository.moveKey(m.getId(), i), new SmallRecord(s.smallOffset(), s.smallLength(), s.smallCrc32c()));
+                }
+            }
+        } else if (blobId.equals(m.getSmallBlobId())) {
+            out.put(m.getId(), new SmallRecord(m.getSmallOffset(), m.getSmallLength(), m.getSmallCrc32c()));
+        }
+        return out;
+    }
+
+    private static Set<String> recordKeys(ManifestEntity m, String blobId) {
+        return recordsIn(m, blobId).keySet();
     }
 }

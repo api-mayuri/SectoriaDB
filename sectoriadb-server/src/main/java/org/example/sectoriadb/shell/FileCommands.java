@@ -80,7 +80,8 @@ public class FileCommands {
                 : poolService.listAll().stream().filter(p -> p.getId().equals(m.getPoolId()))
                         .map(PoolEntity::getName).findFirst().orElse(m.getPoolId());
         String blobs = phys != null ? phys.getId() : "-";
-        if (m.getStorageKind() == org.example.sectoriadb.catalog.StorageKind.CHUNKED && m.getPoolId() != null) {
+        if ((m.getStorageKind() == org.example.sectoriadb.catalog.StorageKind.CHUNKED
+                || m.getStorageKind() == org.example.sectoriadb.catalog.StorageKind.MULTIPART) && m.getPoolId() != null) {
             // the chunks of an object are spread over the pool's blobs: the chunk index says where
             var entries = chunkRepo.findAll(m.getPoolId(), m.chunkKeyArray());
             var distinct = new java.util.TreeSet<String>();
@@ -93,6 +94,9 @@ public class FileCommands {
                     m.getSmallOffset(), m.getSmallLength());
             case CHUNKED -> String.format("%d × %s  (last chunk: %s)", m.getTotalChunks(),
                     ShellTable.humanSize(m.getChunkSize()), ShellTable.humanSize(m.getLastChunkSize()));
+            case MULTIPART -> String.format("%d part(s), %d chunk(s) and %d small record(s) in object order",
+                    m.getSegments().size(), m.chunkKeyArray().length,
+                    m.getSegments().stream().filter(sg -> sg.kind() == org.example.sectoriadb.catalog.StorageKind.SMALL).count());
         };
         return String.format(
                 "File: %s%n" +

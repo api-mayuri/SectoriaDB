@@ -7,5 +7,10 @@ public enum StorageKind {
     /** Stored whole as one record of a small-object blob. */
     SMALL,
     /** Zero-length object: nothing is stored anywhere. */
-    EMPTY
+    EMPTY,
+    /**
+     * Concatenation of the parts of a completed multipart upload, in object order ({@link PartSegment}). The chunks of
+     * its CHUNKED segments are in the manifest's chunk key list, the small records are named by the segments.
+     */
+    MULTIPART
 }

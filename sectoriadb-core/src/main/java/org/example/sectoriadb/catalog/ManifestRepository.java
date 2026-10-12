@@ -149,6 +149,7 @@ public interface ManifestRepository {
     /** Manifests referencing the blob (cuckoo or small-object), via the {@code manifests_by_blob} index. */
     List<ManifestEntity> findByBlobId(String blobId, boolean liveOnly);
 
+    /** Small records of live manifests in the blob (a SMALL object is one, each SMALL segment of a MULTIPART object is one). */
     long countLiveByBlobId(String blobId);
 
     // ---- garbage queue ------------------------------------------------------------------------------------

@@ -8,12 +8,14 @@ import org.example.sectoriadb.catalog.BlobFileRepository;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.GcRepository;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.MultipartRepository;
 import org.example.sectoriadb.catalog.PoolRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreBlobFileRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreChunkRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreGcRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreHolder;
 import org.example.sectoriadb.catalog.metastore.MetaStoreManifestRepository;
+import org.example.sectoriadb.catalog.metastore.MetaStoreMultipartRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStorePoolRepository;
 import org.example.sectoriadb.catalog.metastore.MetaStoreProvider;
 import org.example.sectoriadb.engine.hash.XxHash64BytesHasher;
@@ -36,6 +38,7 @@ import org.example.sectoriadb.storage.ObjectVerificationService;
 import org.example.sectoriadb.storage.ObjectWriter;
 import org.example.sectoriadb.storage.PoolService;
 import org.example.sectoriadb.storage.SmallBlobCache;
+import org.example.sectoriadb.storage.multipart.MultipartService;
 import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -101,6 +104,11 @@ public class CoreConfiguration {
     @Bean
     public PoolRepository poolRepository(MetaStoreProvider stores) {
         return new MetaStorePoolRepository(stores);
+    }
+
+    @Bean
+    public MultipartRepository multipartRepository(MetaStoreProvider stores) {
+        return new MetaStoreMultipartRepository(stores);
     }
 
     @Bean
@@ -182,6 +190,12 @@ public class CoreConfiguration {
     public ObjectReader objectReader(ChunkStore chunkStore, SmallBlobCache smallCache, ObjectCatalog catalog,
                                      OperationLogService opLog, StorageMetrics metrics) {
         return new ObjectReader(chunkStore, smallCache, catalog, opLog, metrics);
+    }
+
+    @Bean
+    public MultipartService multipartService(MultipartRepository repo, PoolRepository pools, ObjectWriter writer,
+                                             ObjectReader reader) {
+        return new MultipartService(repo, pools, writer, reader);
     }
 
     @Bean
