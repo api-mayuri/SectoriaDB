@@ -18,7 +18,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
-import org.example.sectoriadb.metrics.StorageMetrics;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
@@ -88,12 +87,12 @@ class MetaStoreHardeningTest {
 
     @Test
     void aFailingMetricsSinkDoesNotFailOrPoisonDurableCommits() throws Exception {
-        StorageMetrics bad = (StorageMetrics) Proxy.newProxyInstance(StorageMetrics.class.getClassLoader(),
-                new Class<?>[]{StorageMetrics.class}, (p, m, a) -> {
+        MetaStoreListener bad = (MetaStoreListener) Proxy.newProxyInstance(MetaStoreListener.class.getClassLoader(),
+                new Class<?>[]{MetaStoreListener.class}, (p, m, a) -> {
                     if (m.getName().equals("toString")) return "bad";
                     throw new IllegalStateException("metrics down: " + m.getName());
                 });
-        try (MetaStore s = MetaStore.open(dir.resolve("a3.db"), opts(512).metrics(bad))) {
+        try (MetaStore s = MetaStore.open(dir.resolve("a3.db"), opts(512).listener(bad))) {
             s.writeVoid(tx -> tx.tree("t").put(k("direct"), k("1")));
             s.writeGroupedVoid(tx -> tx.tree("t").put(k("grouped"), k("2")));
             assertFalse(s.isReadOnly());

@@ -1,7 +1,5 @@
 package org.example.sectoriadb.metastore;
 
-import org.example.sectoriadb.metrics.StorageMetrics;
-
 /** Immutable options for {@link MetaStore#open}. */
 public final class MetaStoreOptions {
     public static final int DEFAULT_PAGE_SIZE = 4096;
@@ -15,14 +13,14 @@ public final class MetaStoreOptions {
 
     private final int pageSize;
     private final boolean fsync;
-    private final StorageMetrics metrics;
+    private final MetaStoreListener listener;
     private final int maxBatchSize;
     private final int maxBatchPages;
     private final long maxBatchWaitMicros;
     private final int queueCapacity;
     private final long recoveryBackoffMillis;
 
-    private MetaStoreOptions(int pageSize, boolean fsync, StorageMetrics metrics,
+    private MetaStoreOptions(int pageSize, boolean fsync, MetaStoreListener listener,
                              int maxBatchSize, int maxBatchPages, long maxBatchWaitMicros, int queueCapacity,
                              long recoveryBackoffMillis) {
         this.recoveryBackoffMillis = Math.max(0, recoveryBackoffMillis);
@@ -39,27 +37,27 @@ public final class MetaStoreOptions {
         }
         this.pageSize = pageSize;
         this.fsync = fsync;
-        this.metrics = metrics;
+        this.listener = listener;
     }
 
     public static MetaStoreOptions defaults() {
-        return new MetaStoreOptions(DEFAULT_PAGE_SIZE, true, StorageMetrics.NOOP,
+        return new MetaStoreOptions(DEFAULT_PAGE_SIZE, true, MetaStoreListener.NOOP,
                 DEFAULT_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_PAGES, 0, DEFAULT_QUEUE_CAPACITY, DEFAULT_RECOVERY_BACKOFF_MILLIS);
     }
 
     /** Page size used when the file is created. For an existing file the size stored in its header wins. */
     public MetaStoreOptions pageSize(int pageSize) {
-        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis);
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis);
     }
 
     /** If false, commits do not call force(); durability is then up to the OS (tests, bulk loads). */
     public MetaStoreOptions fsync(boolean fsync) {
-        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis);
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis);
     }
 
     /** Receiver of lock-wait, commit, fsync and checksum-failure events (default: none). */
-    public MetaStoreOptions metrics(StorageMetrics metrics) {
-        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis);
+    public MetaStoreOptions listener(MetaStoreListener listener) {
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis);
     }
 
     /**
@@ -70,7 +68,7 @@ public final class MetaStoreOptions {
      * block when it is full.
      */
     public MetaStoreOptions groupCommit(int maxBatchSize, int maxBatchPages, long maxWaitMicros, int queueCapacity) {
-        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxWaitMicros, queueCapacity, recoveryBackoffMillis);
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxWaitMicros, queueCapacity, recoveryBackoffMillis);
     }
 
     /**
@@ -78,7 +76,7 @@ public final class MetaStoreOptions {
      * the recovery fails, or the commit failed less than this long ago, writes fail fast without touching the disk.
      */
     public MetaStoreOptions recoveryBackoff(long millis) {
-        return new MetaStoreOptions(pageSize, fsync, metrics, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, millis);
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, millis);
     }
 
     public long recoveryBackoffMillis() {
@@ -101,8 +99,8 @@ public final class MetaStoreOptions {
         return queueCapacity;
     }
 
-    public StorageMetrics metrics() {
-        return metrics;
+    public MetaStoreListener listener() {
+        return listener;
     }
 
     public int pageSize() {

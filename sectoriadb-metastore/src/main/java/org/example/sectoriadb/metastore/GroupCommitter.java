@@ -1,6 +1,5 @@
 package org.example.sectoriadb.metastore;
 
-import org.example.sectoriadb.metrics.StorageMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -43,7 +42,7 @@ final class GroupCommitter {
     private static final Task STOP = new Task(tx -> null);
 
     private final MetaStore store;
-    private final StorageMetrics metrics;
+    private final MetaStoreListener listener;
     private final int maxBatchSize;
     private final int maxBatchPages;
     private final long maxWaitNanos;
@@ -55,7 +54,7 @@ final class GroupCommitter {
 
     GroupCommitter(MetaStore store, MetaStoreOptions opts) {
         this.store = store;
-        this.metrics = opts.metrics();
+        this.listener = opts.listener();
         this.maxBatchSize = opts.maxBatchSize();
         this.maxBatchPages = opts.maxBatchPages();
         this.maxWaitNanos = TimeUnit.MICROSECONDS.toNanos(opts.maxBatchWaitMicros());
@@ -184,7 +183,7 @@ final class GroupCommitter {
         }
         // durable and published: metrics must not turn this into a failure
         try {
-            metrics.metaGroupBatch(taken.size(), pages);
+            listener.onGroupBatch(taken.size(), pages);
         } catch (RuntimeException | Error e) {
             log.warn("Metrics callback failed after a successful commit: {}", e.toString());
         }
@@ -197,7 +196,7 @@ final class GroupCommitter {
 
     private void queueWaitMetric(long nanos) {
         try {
-            metrics.metaGroupQueueWait(nanos);
+            listener.onGroupQueueWait(nanos);
         } catch (RuntimeException | Error e) {
             log.warn("Metrics callback failed: {}", e.toString());
         }
@@ -205,7 +204,7 @@ final class GroupCommitter {
 
     private void bodyRollbackMetric() {
         try {
-            metrics.metaGroupBodyRollback();
+            listener.onGroupBodyRollback();
         } catch (RuntimeException | Error e) {
             log.warn("Metrics callback failed: {}", e.toString());
         }

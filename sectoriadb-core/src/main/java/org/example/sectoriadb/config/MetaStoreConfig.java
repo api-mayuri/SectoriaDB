@@ -54,7 +54,7 @@ public class MetaStoreConfig {
         }
         Path file = dir.resolve(FILE_NAME);
         try {
-            MetaStore store = MetaStore.open(file, MetaStoreOptions.defaults().fsync(props.isFsync()).metrics(metrics)
+            MetaStore store = MetaStore.open(file, MetaStoreOptions.defaults().fsync(props.isFsync()).listener(new StorageMetricsMetaStoreListener(metrics))
                     .groupCommit(maxBatchSize, maxBatchPages, maxWaitMicros, queueCapacity)
                     .recoveryBackoff(recoveryBackoff.toMillis()));
             log.info("Metadata store opened: {} (fsync={})", file.toAbsolutePath(), props.isFsync());

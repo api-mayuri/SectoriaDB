@@ -69,7 +69,7 @@ class MetaStoreRecoveryS3Test {
         assertEquals(200, put("/rec-bkt/before", data).statusCode());
 
         MetaStore store = stores.get();
-        store.injectFaultsForTesting(Integer.MAX_VALUE, 0, "No space left on device");
+        org.example.sectoriadb.metastore.MetaStoreFaults.failDisk(store, Integer.MAX_VALUE, 0, "No space left on device");
         HttpResponse<byte[]> first = put("/rec-bkt/during", data);        // fails in its own commit
         assertTrue(first.statusCode() >= 500, "status " + first.statusCode());
         HttpResponse<byte[]> refused = put("/rec-bkt/during2", data);     // refused by the read-only store
@@ -81,12 +81,12 @@ class MetaStoreRecoveryS3Test {
         assertArrayEquals(data, read.body());
         assertEquals(404, get("/rec-bkt/during").statusCode());
 
-        store.injectFaultsForTesting(Integer.MAX_VALUE, 0, "Input/output error");
+        org.example.sectoriadb.metastore.MetaStoreFaults.failDisk(store, Integer.MAX_VALUE, 0, "Input/output error");
         HttpResponse<byte[]> other = put("/rec-bkt/during3", data);
         assertEquals(503, other.statusCode());
         assertTrue(new String(other.body()).contains("SlowDown"), new String(other.body()));
 
-        store.injectFaultsForTesting(0, 0, "");                           // the disk works again: no restart
+        org.example.sectoriadb.metastore.MetaStoreFaults.failDisk(store, 0, 0, "");                           // the disk works again: no restart
         assertEquals(200, put("/rec-bkt/after", data).statusCode());
         assertArrayEquals(data, get("/rec-bkt/after").body());
         assertArrayEquals(data, get("/rec-bkt/before").body());

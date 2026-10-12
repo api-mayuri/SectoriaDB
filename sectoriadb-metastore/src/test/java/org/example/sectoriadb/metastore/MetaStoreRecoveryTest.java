@@ -63,7 +63,7 @@ class MetaStoreRecoveryTest {
             final int n = i;
             s.writeVoid(tx -> tx.tree("t").put(k("k" + n), k("v" + n)));
         }
-        s.injectFaultsForTesting(Integer.MAX_VALUE, 0, ENOSPC);
+        s.faults().failDisk(Integer.MAX_VALUE, 0, ENOSPC);
         MetaStoreUnavailableException first = assertThrows(MetaStoreUnavailableException.class,
                 () -> s.writeVoid(tx -> tx.tree("t").put(k("lost"), k("x"))));   // the commit's own failure
         assertTrue(hasMessageInChain(first, ENOSPC));
@@ -91,12 +91,12 @@ class MetaStoreRecoveryTest {
             s.writeVoid(tx -> tx.tree("t").delete(k("k" + n)));
         }
         long freeBefore = s.stats().freePages();
-        s.injectFaultsForTesting(3, 0, "injected");
+        s.faults().failDisk(3, 0, "injected");
         assertThrows(RuntimeException.class, () -> s.writeVoid(tx -> {
             for (int i = 0; i < 50; i++) tx.tree("t").put(k("big" + i), new byte[100]);
         }));
         assertTrue(s.isReadOnly());
-        s.injectFaultsForTesting(0, 0, "");
+        s.faults().failDisk(0, 0, "");
         s.writeVoid(tx -> tx.tree("t").put(k("after"), k("ok")));   // recovers by itself
         assertFalse(s.isReadOnly());
         assertEquals("ok", get(s, "after"));
@@ -134,11 +134,11 @@ class MetaStoreRecoveryTest {
                 final int n = i;
                 s.writeVoid(tx -> tx.tree("t").put(k("k" + n), k("new" + n)));   // pages freed while the reader lives
             }
-            s.injectFaultsForTesting(2, 0, "injected");
+            s.faults().failDisk(2, 0, "injected");
             assertThrows(RuntimeException.class, () -> s.writeVoid(tx -> {
                 for (int i = 0; i < 100; i++) tx.tree("t").put(k("k" + i), k("failed" + i));
             }));
-            s.injectFaultsForTesting(0, 0, "");
+            s.faults().failDisk(0, 0, "");
             for (int round = 0; round < 40; round++) {   // plenty of writes after the recovery: they must not reuse the reader's pages
                 final int n = round;
                 s.writeVoid(tx -> {
@@ -155,11 +155,11 @@ class MetaStoreRecoveryTest {
     void theGroupCommitterRecoversByItself() throws Exception {
         MetaStore s = open(OPTS);
         s.writeGroupedVoid(tx -> tx.tree("t").put(k("a"), k("1")));
-        s.injectFaultsForTesting(1, 0, "injected");
+        s.faults().failDisk(1, 0, "injected");
         ExecutionException ex = assertThrows(ExecutionException.class,
                 () -> s.submit(tx -> { tx.tree("t").put(k("b"), k("2")); return null; }).get(10, TimeUnit.SECONDS));
         assertNotNull(ex.getCause());
-        s.injectFaultsForTesting(0, 0, "");
+        s.faults().failDisk(0, 0, "");
         for (int i = 0; i < 50; i++) {
             final int n = i;
             s.writeGroupedVoid(tx -> tx.tree("t").put(k("g" + n), k("v")));
@@ -177,11 +177,11 @@ class MetaStoreRecoveryTest {
         s.writeVoid(tx -> tx.tree("t").put(k("a"), k("1")));
         // the meta page of the failed commit reaches the file, its fsync fails: the recovery has to erase that page,
         // which needs a working disk
-        s.commitHook = stage -> {
-            if (stage.equals("after-data")) s.injectFaultsForTesting(0, Integer.MAX_VALUE, ENOSPC);
+        s.faults().commitHook = stage -> {
+            if (stage == CommitStage.AFTER_DATA) s.faults().failDisk(0, Integer.MAX_VALUE, ENOSPC);
         };
         assertThrows(RuntimeException.class, () -> s.writeVoid(tx -> tx.tree("t").put(k("b"), k("2"))));
-        s.commitHook = null;
+        s.faults().commitHook = null;
         for (int i = 0; i < 3; i++) {
             MetaStoreUnavailableException e = assertThrows(MetaStoreUnavailableException.class,
                     () -> s.writeVoid(tx -> tx.tree("t").put(k("c"), k("3"))));
@@ -189,7 +189,7 @@ class MetaStoreRecoveryTest {
             assertThrows(MetaStoreUnavailableException.class, () -> s.writeGroupedVoid(tx -> tx.tree("t").put(k("c"), k("3"))));
         }
         assertEquals("1", get(s, "a"), "reads are fine");
-        s.injectFaultsForTesting(0, 0, "");
+        s.faults().failDisk(0, 0, "");
         s.writeVoid(tx -> tx.tree("t").put(k("d"), k("4")));
         assertEquals(null, get(s, "b"), "a transaction whose callers were told it failed never appears");
         s.verify();
@@ -206,21 +206,21 @@ class MetaStoreRecoveryTest {
     void theMetaPageOfAFailedCommitDoesNotComeBackAfterACrashFollowingTheRecovery() {
         MetaStore s = open(OPTS);
         s.writeVoid(tx -> tx.tree("t").put(k("a"), k("1")));
-        s.commitHook = stage -> {
-            if (stage.equals("after-data")) s.injectFaultsForTesting(0, 1, "injected");   // the meta fsync fails
+        s.faults().commitHook = stage -> {
+            if (stage == CommitStage.AFTER_DATA) s.faults().failDisk(0, 1, "injected");   // the meta fsync fails
         };
         assertThrows(RuntimeException.class, () -> s.writeVoid(tx -> tx.tree("t").put(k("ghost"), k("x"))));
-        s.commitHook = null;
-        s.injectFaultsForTesting(0, 0, "");
+        s.faults().commitHook = null;
+        s.faults().failDisk(0, 0, "");
         // recovery erases the stray meta page; the next transaction reuses the pages the failed one wrote, then "crashes"
         // between its data and its meta page: the store must come back at the last good state, not at the ghost
-        s.commitHook = stage -> {
-            if (stage.equals("after-data")) throw new IllegalStateException("simulated crash");
+        s.faults().commitHook = stage -> {
+            if (stage == CommitStage.AFTER_DATA) throw new IllegalStateException("simulated crash");
         };
         assertThrows(RuntimeException.class, () -> s.writeVoid(tx -> {
             for (int i = 0; i < 20; i++) tx.tree("t").put(k("n" + i), new byte[300]);
         }));
-        s.commitHook = null;
+        s.faults().commitHook = null;
         s.close();
         store = null;
         try (MetaStore r = MetaStore.open(dir.resolve("r.db"), OPTS)) {
@@ -270,13 +270,13 @@ class MetaStoreRecoveryTest {
         fs.add(ex.submit(() -> {   // the "disk": breaks and heals
             Random r = new Random(7);
             while (!stop.get()) {
-                s.injectFaultsForTesting(r.nextInt(4) == 0 ? Integer.MAX_VALUE : 1 + r.nextInt(3), r.nextInt(5) == 0 ? 1 : 0, "injected");
+                s.faults().failDisk(r.nextInt(4) == 0 ? Integer.MAX_VALUE : 1 + r.nextInt(3), r.nextInt(5) == 0 ? 1 : 0, "injected");
                 try {
                     Thread.sleep(1 + r.nextInt(4));
                 } catch (InterruptedException e) {
                     return;
                 }
-                s.injectFaultsForTesting(0, 0, "");
+                s.faults().failDisk(0, 0, "");
                 try {
                     Thread.sleep(1 + r.nextInt(6));
                 } catch (InterruptedException e) {
@@ -288,7 +288,7 @@ class MetaStoreRecoveryTest {
         stop.set(true);
         for (Future<?> f : fs) f.get(30, TimeUnit.SECONDS);
         ex.shutdown();
-        s.injectFaultsForTesting(0, 0, "");
+        s.faults().failDisk(0, 0, "");
         s.writeVoid(tx -> tx.tree("t").put(k("final"), k("ok")));   // recovers if the last failure was the last word
         assertEquals(0, readFailures.get(), "reads never failed");
         assertTrue(!acknowledged.isEmpty() && !refused.isEmpty(), "both outcomes happened: " + acknowledged.size() + "/" + refused.size());

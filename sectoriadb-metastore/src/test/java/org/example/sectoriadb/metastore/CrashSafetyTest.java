@@ -115,8 +115,8 @@ class CrashSafetyTest {
         Path f = dir.resolve("e.db");
         MetaStore s = MetaStore.open(f, OPTS);
         put(s, "v1");
-        s.commitHook = stage -> {
-            if (stage.equals("after-data")) throw new IllegalStateException("simulated crash");
+        s.faults().commitHook = stage -> {
+            if (stage == CommitStage.AFTER_DATA) throw new IllegalStateException("simulated crash");
         };
         assertThrows(IllegalStateException.class, () -> put(s, "v2"));
         assertThrows(MetaStoreUnavailableException.class, s::beginWrite);   // writes are refused until the store recovers
@@ -133,8 +133,8 @@ class CrashSafetyTest {
         Path f = dir.resolve("f.db");
         MetaStore s = MetaStore.open(f, OPTS);
         put(s, "v1");
-        s.commitHook = stage -> {
-            if (stage.equals("after-meta")) throw new IllegalStateException("simulated crash");
+        s.faults().commitHook = stage -> {
+            if (stage == CommitStage.AFTER_META) throw new IllegalStateException("simulated crash");
         };
         assertThrows(IllegalStateException.class, () -> put(s, "v2"));
         s.close();
@@ -166,9 +166,9 @@ class CrashSafetyTest {
                     boolean crash = rnd.nextInt(5) == 0;
                     TreeMap<Integer, byte[]> work = new TreeMap<>(model);
                     if (crash) {
-                        String stage = rnd.nextBoolean() ? "after-data" : "before-commit";
-                        s.commitHook = st -> {
-                            if (st.equals(stage)) throw new IllegalStateException("crash");
+                        CommitStage stage = rnd.nextBoolean() ? CommitStage.AFTER_DATA : CommitStage.BEFORE_COMMIT;
+                        s.faults().commitHook = st -> {
+                            if (st == stage) throw new IllegalStateException("crash");
                         };
                     }
                     try {

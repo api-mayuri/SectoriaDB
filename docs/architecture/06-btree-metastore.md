@@ -1,8 +1,12 @@
 # 06. Транзакционное хранилище метаданных (B+-дерево, copy-on-write)
 
-Пакет `org.example.sectoriadb.metastore` (модуль `sectoriadb-core`). Встраиваемое key-value хранилище в
+Пакет `org.example.sectoriadb.metastore` (отдельный модуль `sectoriadb-metastore`, с этапа 12). Встраиваемое key-value хранилище в
 одном файле: именованные B+-деревья, ACID-транзакции, снимки (MVCC). Предназначено для замены хрупких
-JSON-файлов; интеграция с репозиториями — этап `07-metastore-integration`. Зависимостей, кроме JDK, нет.
+JSON-файлов; интеграция с репозиториями — этап `07-metastore-integration`. Зависимости модуля: только JDK и `slf4j-api` (для тестов ещё JUnit). Spring, Jackson и остальные модули
+SectoriaDB ему неизвестны; события наблюдаемости он отдаёт через собственный интерфейс `MetaStoreListener`
+(`MetaStoreOptions.listener(...)`), а ядро подключает метрики адаптером `StorageMetricsMetaStoreListener`.
+Тестовые хуки (`FaultInjector`, `CommitStage`) пакетно-приватны; другим модулям они доступны только через test-jar
+(`MetaStoreFaults`).
 
 ## 1. Файл
 

@@ -160,7 +160,7 @@ class EngineMetricsTest {
 
     @Test
     void metastoreReportsWriterWaitCommitAndFsync() {
-        MetaStore store = MetaStore.open(tmp.resolve("meta.db"), MetaStoreOptions.defaults().fsync(true).metrics(m));
+        MetaStore store = MetaStore.open(tmp.resolve("meta.db"), MetaStoreOptions.defaults().fsync(true).listener(new org.example.sectoriadb.config.StorageMetricsMetaStoreListener(m)));
         try {
             store.writeVoid(tx -> tx.tree("t").put(new byte[]{1}, new byte[]{2}));
             assertEquals(1, m.metaWriterLockWaits.get());
@@ -176,7 +176,7 @@ class EngineMetricsTest {
 
     @Test
     void groupCommitReportsBatchQueueWaitAndRollbacks() {
-        MetaStore store = MetaStore.open(tmp.resolve("group.db"), MetaStoreOptions.defaults().fsync(false).metrics(m));
+        MetaStore store = MetaStore.open(tmp.resolve("group.db"), MetaStoreOptions.defaults().fsync(false).listener(new org.example.sectoriadb.config.StorageMetricsMetaStoreListener(m)));
         try {
             store.writeGrouped(tx -> {
                 tx.tree("t").put(new byte[]{1}, new byte[]{2});

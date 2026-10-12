@@ -280,7 +280,7 @@ class GroupCommitTest {
         MetaStore s = open(OPTS);
         List<String> events = new CopyOnWriteArrayList<>();
         AtomicReference<CompletableFuture<?>> fut = new AtomicReference<>();
-        s.commitHook = stage -> {
+        s.faults().commitHook = stage -> {
             events.add(stage + ":done=" + fut.get().isDone());
         };
         // hold the writer so that the future is registered before the commit runs
@@ -294,7 +294,7 @@ class GroupCommitTest {
         }
         assertEquals(42, f.get(10, TimeUnit.SECONDS));
         assertTrue(f.isDone());
-        assertEquals(List.of("before-commit:done=false", "after-data:done=false", "after-meta:done=false"), events);
+        assertEquals(List.of("BEFORE_COMMIT:done=false", "AFTER_DATA:done=false", "AFTER_META:done=false"), events);
         assertEquals("1", new String(s.read(tx -> tx.tree("t").get(k("a"))).orElseThrow()));
     }
 
@@ -302,8 +302,8 @@ class GroupCommitTest {
     void crashBeforeTheMetaPageLeavesNoneOfTheBatchAfterReopen() throws Exception {
         MetaStore s = open(OPTS);
         s.writeVoid(tx -> tx.tree("t").put(k("pre"), k("p")));
-        s.commitHook = stage -> {
-            if (stage.equals("after-data")) throw new IllegalStateException("simulated crash");
+        s.faults().commitHook = stage -> {
+            if (stage == CommitStage.AFTER_DATA) throw new IllegalStateException("simulated crash");
         };
         List<java.util.function.Function<WriteTxn, Object>> bodies = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
@@ -329,13 +329,13 @@ class GroupCommitTest {
     @Test
     void poisonedStoreFailsLaterSubmitsFastAndTheCommitterSurvivesUntilClose() throws Exception {
         MetaStore s = open(OPTS);
-        s.commitHook = stage -> {
-            if (stage.equals("after-data")) throw new IllegalStateException("disk gone");
+        s.faults().commitHook = stage -> {
+            if (stage == CommitStage.AFTER_DATA) throw new IllegalStateException("disk gone");
         };
         ExecutionException first = assertThrows(ExecutionException.class,
                 () -> s.submit(tx -> { tx.tree("t").put(k("a"), k("1")); return null; }).get(10, TimeUnit.SECONDS));
         assertEquals("disk gone", first.getCause().getMessage());
-        s.commitHook = null;
+        s.faults().commitHook = null;
         CompletableFuture<Object> late = s.submit(tx -> null);
         assertTrue(late.isCompletedExceptionally(), "fails fast, without queueing");
         ExecutionException e = assertThrows(ExecutionException.class, late::get);
@@ -351,8 +351,8 @@ class GroupCommitTest {
     @Test
     void submitsQueuedBeforePoisoningFailWithTheCause() throws Exception {
         MetaStore s = open(OPTS);
-        s.commitHook = stage -> {
-            if (stage.equals("after-data")) throw new IllegalStateException("disk gone");
+        s.faults().commitHook = stage -> {
+            if (stage == CommitStage.AFTER_DATA) throw new IllegalStateException("disk gone");
         };
         List<java.util.function.Function<WriteTxn, Object>> bodies = new ArrayList<>();
         for (int i = 0; i < 5; i++) bodies.add(tx -> {

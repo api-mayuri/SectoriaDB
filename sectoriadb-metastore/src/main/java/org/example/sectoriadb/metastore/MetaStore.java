@@ -1,6 +1,5 @@
 package org.example.sectoriadb.metastore;
 
-import org.example.sectoriadb.metrics.StorageMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,16 +49,11 @@ public final class MetaStore implements AutoCloseable {
                                long freelistPages, long freePages) {
     }
 
-    /** Test hook invoked at named points of a commit; throwing simulates a crash at that point. */
-    interface CommitHook {
-        void at(String stage);
-    }
-
     final Pager pager;
     private final FileChannel channel;
     private final FileLock fileLock;
     private final Semaphore writer = new Semaphore(1, true);   // fair: the committer re-acquiring in a loop must not starve direct writers
-    private final StorageMetrics metrics;
+    private final MetaStoreListener listener;
     private final GroupCommitter committer;
     private final Object stateLock = new Object();
     private final Object closeMonitor = new Object();
@@ -88,10 +82,8 @@ public final class MetaStore implements AutoCloseable {
      */
     final TreeMap<Long, long[]> chainPending = new TreeMap<>();
 
-    volatile CommitHook commitHook;
-
     private MetaStore(FileChannel channel, FileLock lock, Pager pager, Snapshot snap, MetaStoreOptions opts) {
-        this.metrics = opts.metrics();
+        this.listener = opts.listener();
         this.recoveryBackoffNanos = TimeUnit.MILLISECONDS.toNanos(opts.recoveryBackoffMillis());
         this.committer = new GroupCommitter(this, opts);
         this.channel = channel;
@@ -119,7 +111,7 @@ public final class MetaStore implements AutoCloseable {
                 // cannot hold a commit): write both meta slots in ONE write so that a crash leaves either nothing
                 // usable (re-initialised on the next open) or a complete file.
                 ch.truncate(0);
-                pager = new Pager(ch, opts.pageSize(), opts.fsync(), opts.metrics());
+                pager = new Pager(ch, opts.pageSize(), opts.fsync(), opts.listener());
                 snap = new Snapshot(0, 0, 0, 2);
                 byte[] both = new byte[2 * pager.pageSize];
                 System.arraycopy(encodeMeta(pager.pageSize, snap), 0, both, 0, pager.pageSize);
@@ -128,7 +120,7 @@ public final class MetaStore implements AutoCloseable {
                 if (opts.fsync()) syncParentDirectory(file);
             } else {
                 Object[] r = chooseMeta(ch, size);
-                pager = new Pager(ch, (Integer) r[0], opts.fsync(), opts.metrics());
+                pager = new Pager(ch, (Integer) r[0], opts.fsync(), opts.listener());
                 snap = (Snapshot) r[1];
             }
             MetaStore s = new MetaStore(ch, lock, pager, snap, opts);
@@ -335,7 +327,7 @@ public final class MetaStore implements AutoCloseable {
 
     private void waitMetric(long nanos) {
         try {
-            metrics.metaWriterLockWait(nanos);
+            listener.onWriterLockWait(nanos);
         } catch (RuntimeException | Error e) {
             log.warn("Metrics callback failed: {}", e.toString());
         }
@@ -469,11 +461,6 @@ public final class MetaStore implements AutoCloseable {
 
     // ---------------------------------------------------------------- commit
 
-    private void hook(String stage) {
-        CommitHook h = commitHook;
-        if (h != null) h.at(stage);
-    }
-
     void commit(WriteTxn w) {
         long t0 = System.nanoTime();
         try {
@@ -493,7 +480,7 @@ public final class MetaStore implements AutoCloseable {
         }
         // the commit is durable and published: a failing metrics sink must not make it look failed
         try {
-            metrics.metaCommit(System.nanoTime() - t0);
+            listener.onCommit(System.nanoTime() - t0);
         } catch (RuntimeException | Error e) {
             log.warn("Metrics callback failed after a successful commit: {}", e.toString());
         }
@@ -502,7 +489,7 @@ public final class MetaStore implements AutoCloseable {
     private void doCommit(WriteTxn w) {
         final long t = w.newTxId;
         final int ps = pager.pageSize;
-        hook("before-commit");
+        pager.faults.commitStage(CommitStage.BEFORE_COMMIT);
 
         // 1. fold tree roots into the catalog
         BTree cat = new BTree(w, null, w.snap.catalogRoot(), 0);
@@ -555,12 +542,12 @@ public final class MetaStore implements AutoCloseable {
         for (Node node : w.dirty.values()) pager.write(node.id, node.encode(ps));
         pager.ensureSize(w.hwm * ps);
         pager.force();
-        hook("after-data");
+        pager.faults.commitStage(CommitStage.AFTER_DATA);
         Snapshot ns = new Snapshot(t, cat.root, n == 0 ? 0 : chain[0], w.hwm);
         dirtyMetaSlot = (int) (t % 2);   // from here the slot may hold a valid page of a commit that then fails
         writeMeta(ns);
         pager.force();
-        hook("after-meta");
+        pager.faults.commitStage(CommitStage.AFTER_META);
 
         // 5. publish
         chainPages = chain;
@@ -624,13 +611,9 @@ public final class MetaStore implements AutoCloseable {
         if (closed) throw new IllegalStateException("store is closed");
     }
 
-    /**
-     * Test hook: the next {@code writes} page writes and {@code forces} fsyncs of the store file fail with an
-     * {@code IOException(message)}, like a full or failing disk. Pass {@link Integer#MAX_VALUE} for "until cleared"
-     * and 0, 0 to clear.
-     */
-    public void injectFaultsForTesting(int writes, int forces, String message) {
-        pager.injectFaults(writes, forces, message);
+    /** Internal test support: disk faults and crashes at commit stages. */
+    FaultInjector faults() {
+        return pager.faults;
     }
 
     /** True while the last commit failed and the write side has not recovered (reads still work). */
@@ -680,7 +663,7 @@ public final class MetaStore implements AutoCloseable {
 
     private void recoveryMetric(boolean ok) {
         try {
-            metrics.metaRecovery(ok);
+            listener.onRecovery(ok);
         } catch (RuntimeException | Error e) {
             log.warn("Metrics callback failed: {}", e.toString());
         }

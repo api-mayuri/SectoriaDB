@@ -15,6 +15,11 @@
     <description>Storage engine: Cuckoo hash table, chunking, blob files and JSON metadata repositories</description>
 
     <dependencies>
+        <dependency>
+            <groupId>org.example</groupId>
+            <artifactId>sectoriadb-metastore</artifactId>
+        </dependency>
+
         <!-- Spring context, @ConfigurationProperties, logging -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

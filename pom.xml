@@ -20,6 +20,7 @@
     <description>S3-compatible object storage built on a Cuckoo hash table blob store</description>
 
     <modules>
+        <module>sectoriadb-metastore</module>
         <module>sectoriadb-core</module>
         <module>sectoriadb-server</module>
     </modules>
@@ -31,6 +32,18 @@
 
     <dependencyManagement>
         <dependencies>
+            <dependency>
+                <groupId>org.example</groupId>
+                <artifactId>sectoriadb-metastore</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.example</groupId>
+                <artifactId>sectoriadb-metastore</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
+                <scope>test</scope>
+            </dependency>
             <dependency>
                 <groupId>org.example</groupId>
                 <artifactId>sectoriadb-core</artifactId>
