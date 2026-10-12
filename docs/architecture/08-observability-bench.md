@@ -692,8 +692,8 @@ checksum-режимы AWS, SigV2. Из 886 собранных тестов за�
 
 | Проблема | Свидетельство | Этап |
 |---|---|---|
-| Повторный `CompleteMultipartUpload` не идемпотентен: второй вызов получает `NoSuchUpload` (S3 вернёт тот же результат). SDK повторяет `Complete` при обрыве ответа и получит ошибку, хотя объект создан | `test_multipart_upload`, `test_multipart_upload_small` | 10 |
-| `partNumber` для multipart-объектов не поддерживается (границы частей не сохраняются в манифесте), режим `warp multipart` не работает | warp: 204 ошибки `unexpected download size`; `test_multipart_get_part` | 09 |
+| ~~Повторный `CompleteMultipartUpload` не идемпотентен: второй вызов получает `NoSuchUpload` (S3 вернёт тот же результат). SDK повторяет `Complete` при обрыве ответа и получит ошибку, хотя объект создан~~ исправлено в `11-review-fixes` (хранимая отметка на 24 ч) и перенесено в метахранилище в `13-multipart-metastore`: результат хранится в записи загрузки, повтор в той же транзакции | `test_multipart_upload`, `test_multipart_upload_small` | 10, 13 |
+| ~~`partNumber` для multipart-объектов не поддерживается (границы частей не сохраняются в манифесте), режим `warp multipart` не работает~~ исправлено в `13-multipart-metastore`: границы частей в раскладке `MULTIPART`, `GET`/`HEAD ?partNumber` отдают `206` с байтами части; `warp multipart` и `multipart-put` идут без ошибок (doc 13, п. 17) | warp: 204 ошибки `unexpected download size`; `test_multipart_get_part` | 13 |
 | Нет модели владельца и ACL: `ListBuckets` и доступ видят все ключи, канонические ACL (`public-read`, `authenticated-read`, `bucket-owner-*`) и гранты не соответствуют S3; бакет «чужого» аккаунта доступен | 41 тест ACL, раздел «Отказы и безопасность» | 02 (дополнение) |
 | Версионирование, блокировки объектов, CORS, public access block, ownership controls, `GetObjectAttributes`, условные записи (`If-Match` / `If-None-Match` в PUT и Copy), POST-форма | 37 + 38 + 12 + 16 + 7 + 5 + 3 + 25 тестов | вне плана |
 | `EntityTooSmall` не проверяется (часть меньше 5 МиБ, не последняя, принимается); в `ListMultipartUploads` нет `Initiator` / `Owner`; метаданные больше 2 КБ принимаются | `test_multipart_upload_size_too_small`, `test_list_multipart_upload_owner` | |
@@ -1009,7 +1009,7 @@ and float` (задержка, TTFB, таблица итогов); исправл
 | # | Найдено | Чем | Исправление |
 |---|---|---|---|
 | 1 | `DELETE /bucket?tagging` (и другие подресурсы) **удалял пустой бакет**; `DELETE /bucket/key?retention` удалял объект; `PUT ...?retention` / `?uploadId` без `partNumber` перезаписывал объект | mint (minio-java) | `501 NotImplemented` для запросов с неизвестным подресурсом; допустимы `x-id` и `X-Amz-*` |
-| 2 | `GET ?partNumber=N` для multipart-объекта отдавал весь объект | warp `multipart` | `501`; для обычного объекта только `partNumber=1` |
+| 2 | `GET ?partNumber=N` для multipart-объекта отдавал весь объект | warp `multipart` | `501` (этап 08); с этапа 13 — `206` с байтами части; для обычного объекта только `partNumber=1` |
 | 3 | `GET ?object-lock`, `?retention`, `?attributes` и т. п. отвечали листингом или байтами объекта | s3-tests | `501 NotImplemented` |
 | 4 | Ключ из пробелов в `DeleteObjects` обрезался и не удалялся; `Quiet`; лимит 1000 | s3-tests | исправлено |
 | 5 | `ListObjectVersions` пуст для бакета без версионирования (очистка бакета SDK не работала) | s3-tests | объекты как версия `null` |
@@ -1037,8 +1037,8 @@ and float` (задержка, TTFB, таблица итогов); исправл
 | ~~**Запись малых объектов теперь упирается в блокировку добавления `small_*.sob`**~~ исправлено в `09` (групповой `fsync`); следующее узкое место, блокировка записи кукушки с двумя `fsync` на чанк, снято в `10` (часть B, барьер долговечности); исходное описание: (добавление + `fsync` на файл, p50 ожидания 62 мс при 50 потоках) | раздел 21.1 | 09/10 |
 | ~~Удаление объектов не возвращает место; чанки, записанные до обрыва PUT, остаются мусором~~ исправлено в `10-gc-and-resize` (часть A, сборщик мусора) | `kill-put.sh` | 10 |
 | Тело PUT сначала целиком пишется во временный файл (двойная запись, нужен том под `java.io.tmpdir` не меньше самого большого объекта, 5 ГиБ) | `FileStorageService.stageStream` | 10/11 |
-| Повторный `CompleteMultipartUpload` не идемпотентен | `test_multipart_upload` | 10 |
-| Границы частей multipart не сохраняются: нет `partNumber` при чтении, нет `PartsCount` | warp `multipart`, `test_multipart_get_part` | 09 |
+| ~~Повторный `CompleteMultipartUpload` не идемпотентен~~ исправлено (11, 13) | `test_multipart_upload` | 10 |
+| ~~Границы частей multipart не сохраняются: нет `partNumber` при чтении, нет `PartsCount`~~ исправлено в `13-multipart-metastore` | warp `multipart`, `test_multipart_get_part` | 13 |
 | Нет модели владельца, IAM, ACL как в S3 | 41 тест ACL, межаккаунтные проверки | отдельно |
 | Нет версионирования, блокировок объектов, CORS, POST-формы, условных записей, `GetObjectAttributes` | таблица в разделе «Совместимость» | вне плана |
 | Не-ASCII значения метаданных ломают подпись; `Expires`, `x-amz-storage-class` не хранятся/не возвращаются | `test_object_set_get_unicode_metadata`, mint | 11 |

@@ -30,7 +30,7 @@ S3-совместимое хранилище объектов на Java и Sprin
 | Бакеты | создание, удаление, `HeadBucket`, список бакетов |
 | Объекты | `PutObject`, `GetObject` (в том числе `Range`), `HeadObject`, `DeleteObject`, `CopyObject` |
 | Листинг | `ListObjectsV2` и `ListObjects` (v1) с префиксами и пагинацией |
-| Multipart | создание, загрузка частей, завершение, отмена, список частей и загрузок, копирование части |
+| Multipart | создание, загрузка частей, завершение (без копирования данных, идемпотентное), отмена, список частей и загрузок (префикс, разделитель, маркеры), копирование части, `GET`/`HEAD ?partNumber=N` |
 | Контрольные суммы | `x-amz-checksum-crc32` / `crc32c` / `crc64nvme` / `sha1` / `sha256` (заголовок или trailer `aws-chunked`), `Content-MD5`, `x-amz-checksum-algorithm`, составные суммы multipart (`COMPOSITE`/`FULL_OBJECT`), `x-amz-checksum-mode: ENABLED` на `HEAD`/`GET`; несовпадение — `BadDigest` и объект не сохраняется |
 | Доступ | ACL бакетов и объектов, политики бакетов, публичное чтение, presigned-ссылки |
 | Прочее | теги объектов, заглушки для `location`, `versioning`, `cors`, `lifecycle`, `encryption` |
@@ -220,7 +220,8 @@ java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false
 ```
 sectoriadb-meta/
   sectoria.db        пулы, блобы, манифесты, индексы (бакет, ключ) → манифест, индекс чанков (chunks, chunks_by_blob),
-                     очереди для сборки мусора (deleted_manifests, chunk_gc, chunk_orphans)
+                     очереди для сборки мусора (deleted_manifests, chunk_gc, chunk_orphans),
+                     multipart: загрузки и части (mpu_uploads, mpu_by_bucket, mpu_parts)
   credentials.json   ключи доступа
   oplogs.jsonl       журнал операций
 sectoriadb-data/<бакет>/   несколько blob_*.raw (кукушкины таблицы чанков) и small_*.sob (журналы малых объектов)
@@ -256,14 +257,28 @@ sectoriadb-server  ->  sectoriadb-core  ->  sectoriadb-engine
 | engine | `engine.error`, `engine.metrics` | общий базовый `StorageException`, интерфейс событий `EngineListener` |
 | core | `catalog`, `catalog.metastore` | сущности (манифесты, пулы, блобы) и интерфейсы репозиториев; реализации поверх метахранилища (единственный импортёр модуля `metastore`) |
 | core | `storage` | кэши таблиц и блобов, реестр блобов, пулы, чанки, запись `ObjectWriter`, чтение `ObjectReader`, каталог объектов `ObjectCatalog` |
+| core | `storage.multipart` | сценарии multipart (`MultipartService`): части как скрытые манифесты, `Complete` одной транзакцией, отмена, листинги, очистка |
 | core | `maintenance`, `maintenance.gc` | сборка мусора, уплотнение малых объектов, расширение блобов, чистка файлов |
 | core | `security`, `audit` | ключи доступа, журнал операций |
-| core | `checksum`, `metrics` | S3-контрольные суммы; интерфейс метрик `StorageMetrics` и переходники |
+| core | `checksum`, `metrics` | S3-контрольные суммы (в том числе склейка CRC частей `CrcCombine`); интерфейс метрик `StorageMetrics` и переходники |
 | core | `config` | настройки `sectoriadb.*` и `CoreConfiguration`, где собраны все бины ядра |
-| server | `s3.api`, `s3.multipart` | контроллеры S3 API; multipart: хранилище загрузок, сборка объекта, очистка |
+| server | `s3.api`, `s3.multipart` | контроллеры S3 API; multipart: контроллер, разбор запроса `Complete`, XML, планировщик очистки |
 | server | `s3.error`, `s3.http`, `s3.xml` | ошибки S3, разбор запросов и заголовки, XML |
 | server | `s3.auth`, `s3.access` | проверка SigV4, декодирование `aws-chunked`; ACL и политики доступа |
 | server | `observability`, `shell`, `scheduler` | метрики Prometheus, консоль администратора, фоновые задания |
+
+## Multipart
+
+Состояние multipart-загрузки лежит в метахранилище, а не в файлах. Каждая часть проходит обычный путь записи (нарезка на чанки,
+дедупликация, размещение HRW; часть меньше размера чанка хранится как малая запись) и фиксируется одной транзакцией вместе со ссылками
+на чанки; повтор части с тем же номером заменяет прежнюю в той же транзакции. `CompleteMultipartUpload` не копирует данные: одна
+транзакция проверяет список частей, собирает манифест объекта (раскладка `MULTIPART`: части по порядку с границами) и передаёт ему
+ссылки на чанки и малые записи частей. ETag (`md5(md5 частей)-N`), составные и полнообъёмные суммы (CRC32, CRC32C, CRC64NVME склеиваются
+из сумм частей математически) и CRC32C всего объекта вычисляются из сохранённых значений. Повторный `Complete` с тем же списком частей
+возвращает прежний результат. `GET`/`HEAD ?partNumber=N` отдают байты части (`206`, `Content-Range`, `x-amz-mp-parts-count`).
+Незавершённые загрузки старше `sectoriadb.multipart.stale-after` (7 суток) отменяются сами, их части освобождаются сборщиком мусора;
+записи о завершённых и отменённых загрузках хранятся `sectoriadb.multipart.completed-retention` (24 часа). Старый каталог
+`<data-dir>/.multipart` не читается и удаляется при старте. Подробности: [`docs/architecture/13-multipart-metastore.md`](docs/architecture/13-multipart-metastore.md).
 
 ## Сборка мусора
 

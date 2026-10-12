@@ -119,7 +119,7 @@ sectoriadb-server ──> sectoriadb-core ──> sectoriadb-engine
 | `S3Support` | `S3Request`, `UrlCodec`, `HttpDates`, `XmlSupport.escape`, `RequestIds.current` | — |
 
 Формат файлов `.multipart` остался прежним (`meta.properties`, `state.properties`, `etags.properties`,
-`checksums.properties`, `part-NNNNN`): перенос в метахранилище — этап 13.
+`checksums.properties`, `part-NNNNN`): перенос в метахранилище — этап 13 (сделан, `13-multipart-metastore.md`).
 
 Бины ядра теперь описаны методами `@Bean` в `config.CoreConfiguration`; в остальных классах ядра нет ни `@Service`,
 ни `@Component`, ни `@Autowired`. Конструкторы, существовавшие только ради тестов (`HashTableCache(props)`,
@@ -180,8 +180,8 @@ sectoriadb-server ──> sectoriadb-core ──> sectoriadb-engine
   пишет контрольные точки. Объединение изменило бы поведение при сбое, а этап чисто структурный.
 * Вынос `FreeSpace` (списки свободных страниц) и коммита/восстановления из `MetaStore`: они делят состояние под
   одним разрешением писателя, разрезать их безопасно можно только вместе с этапом 13 (там меняется коммит).
-* `StorageGauges` и `S3ExceptionHandler` всё ещё импортируют `MetaStore.Stats` и `MetaStoreUnavailableException`
-  напрямую. Развязка потребует собственного типа ошибки в ядре и поменяет перехватываемые исключения.
-* `S3MultipartController` по-прежнему копирует данные частей при Complete; перенос состояния в метахранилище и сборка
-  без копирования — этап 13.
+* ~~`StorageGauges` и `S3ExceptionHandler` всё ещё импортируют `MetaStore.Stats` и `MetaStoreUnavailableException`
+  напрямую.~~ Сделано в этапе 13: `catalog.CatalogInfo` и `catalog.CatalogUnavailableException`, исключения из теста-стража убраны.
+* ~~`S3MultipartController` по-прежнему копирует данные частей при Complete~~ Сделано в этапе 13: состояние в метахранилище,
+  сборка без копирования; `MultipartUploadStore`, `CompleteMultipartService`, `LazySequenceInputStream`, `UploadMeta` удалены.
 * Документы 01–11 остаются в прежних именах классов (см. таблицу в п. 2).
