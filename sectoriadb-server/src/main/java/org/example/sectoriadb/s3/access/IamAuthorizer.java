@@ -1,6 +1,7 @@
 package org.example.sectoriadb.s3.access;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.observability.OperationClassifier;
@@ -11,6 +12,7 @@ import org.example.sectoriadb.s3.http.UrlCodec;
 import org.example.sectoriadb.security.CredentialEntity;
 import org.example.sectoriadb.security.CredentialService;
 import org.example.sectoriadb.storage.PoolService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -18,6 +20,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.function.Function;
 
 /**
  * Authorization of SIGNED requests: the IAM identity policy of the access key together with the bucket policy,
@@ -57,13 +60,18 @@ public class IamAuthorizer {
             Set.of("lifecycle"), Set.of("encryption"), Set.of("publicAccessBlock"), Set.of("versions"));
 
     private final CredentialService credentials;
-    private final PoolService poolService;
+    private final Function<String, String> bucketPolicies;
     private final BucketPolicyEvaluator evaluator;
 
-    public IamAuthorizer(CredentialService credentials, PoolService poolService,
-                         com.fasterxml.jackson.databind.ObjectMapper objectMapper) {
+    @Autowired
+    public IamAuthorizer(CredentialService credentials, PoolService poolService, ObjectMapper objectMapper) {
+        this(credentials, bucket -> poolService.findByName(bucket).map(PoolEntity::getPolicy).orElse(null), objectMapper);
+    }
+
+    /** @param bucketPolicies bucket name to its policy JSON, null when the bucket has none or does not exist */
+    IamAuthorizer(CredentialService credentials, Function<String, String> bucketPolicies, ObjectMapper objectMapper) {
         this.credentials = credentials;
-        this.poolService = poolService;
+        this.bucketPolicies = bucketPolicies;
         this.evaluator = new BucketPolicyEvaluator(objectMapper);
     }
 
@@ -97,14 +105,10 @@ public class IamAuthorizer {
                 ? listContext(request) : Map.of();
         var question = new BucketPolicyEvaluator.Request(r.action(), r.resource(), accessKeyId, request.isSecure(), context);
         Decision byIdentity = identity == null ? Decision.NONE : evaluator.evaluateIdentity(identity, question);
-        Decision byBucket = r.bucket() == null ? Decision.NONE : evaluator.evaluate(bucketPolicy(r.bucket()), question);
+        Decision byBucket = r.bucket() == null ? Decision.NONE : evaluator.evaluate(bucketPolicies.apply(r.bucket()), question);
         if (byIdentity == Decision.DENY || byBucket == Decision.DENY) return false;
         if (byIdentity == Decision.ALLOW || byBucket == Decision.ALLOW) return true;
         return identity == null;
-    }
-
-    private String bucketPolicy(String bucket) {
-        return poolService.findByName(bucket).map(PoolEntity::getPolicy).orElse(null);
     }
 
     /** s3:prefix is "" when the request names none; s3:delimiter exists only when it is sent. */
