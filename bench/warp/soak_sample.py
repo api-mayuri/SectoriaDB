@@ -135,13 +135,20 @@ def report(a):
     if len(rows) < 4:
         print("too few samples for a drift report"); return 0
     num = lambda r, k: float(r[k]) if r.get(k) not in (None, "") else None
-    total_s = float(rows[-1]["elapsed_s"])
+    # only the part of the run under load counts: warp's preparation (at the start) and its cleanup (at the end) are not steady state
+    rps = sorted(x for x in (num(r, "rps") for r in rows) if x is not None)
+    busy = [r for r in rows if (num(r, "rps") or 0) >= 0.2 * (rps[len(rps) // 2] if rps else 0) and num(r, "rps")]
+    if len(busy) < 4:
+        print("too few samples under load for a drift report"); return 0
+    t_first, t_last = float(busy[0]["elapsed_s"]), float(busy[-1]["elapsed_s"])
+    rows = [r for r in rows if t_first <= float(r["elapsed_s"]) <= t_last]
+    total_s = t_last - t_first
     w = min(3600.0, total_s / 4)
-    warm = min(600.0, total_s / 10)
-    first = [r for r in rows if warm <= float(r["elapsed_s"]) <= warm + w]
-    last = [r for r in rows if float(r["elapsed_s"]) >= total_s - w]
-    print(f"== soak drift: {len(rows)} samples over {total_s / 3600:.2f} h; first window = {warm / 60:.0f}..{(warm + w) / 60:.0f} min, "
-          f"last window = last {w / 60:.0f} min")
+    warm = min(1200.0, total_s / 10)   # the GC queue fills for sectoriadb.gc.grace (15 min) before it levels off
+    first = [r for r in rows if t_first + warm <= float(r["elapsed_s"]) <= t_first + warm + w]
+    last = [r for r in rows if float(r["elapsed_s"]) >= t_last - w]
+    print(f"== soak drift: {len(rows)} samples under load over {total_s / 3600:.2f} h; first window = {warm / 60:.0f}..{(warm + w) / 60:.0f} min after load start, "
+          f"last window = last {w / 60:.0f} min of the load")
     rc = 0
     for col, label, worse in (("rps", "throughput (req/s)", lambda a, b: b < a * 0.9), ("p99_put_ms", "p99 PutObject (ms)", lambda a, b: b > a * 1.25),
                               ("p99_get_ms", "p99 GetObject (ms)", lambda a, b: b > a * 1.25)):
@@ -158,7 +165,7 @@ def report(a):
     errs = [x for x in (num(r, "err_5xx_pct") for r in rows) if x]
     print(f"  5xx: {'none in any interval' if not errs else f'{len(errs)} intervals with errors, max {max(errs):.3f} %'}")
     print("  growth after warm-up (first third vs last third of the samples; Kendall tau = 1 means strictly rising):")
-    body = [r for r in rows if float(r["elapsed_s"]) >= warm]
+    body = [r for r in rows if float(r["elapsed_s"]) >= t_first + warm]
     for col in ("rss_mb", "heap_used_mb", "nonheap_mb", "open_fds", "threads", "meta_file_mb", "meta_pages", "meta_free_pages", "gc_queue",
                 "store_du_mb", "gc_pause_ms_per_s"):
         xs = [x for x in (num(r, col) for r in body) if x is not None]
@@ -166,9 +173,13 @@ def report(a):
             continue
         t = len(xs) // 3
         a1, b1, tau = mean(xs[:t]), mean(xs[-t:]), kendall(xs)
+        mid = mean(xs[t:2 * t])
         grows = b1 > a1 * 1.10 + 1e-9 and tau >= 0.6
+        levelled = grows and b1 <= mid * 1.03   # grew, but the last third is flat against the middle one: a step, not a trend
+        grows = grows and not levelled
         expected = col in ("meta_file_mb", "meta_pages", "store_du_mb")  # these follow the data set, not a leak by themselves
-        flag = ("  <-- WARN: monotonic growth" + (" (follows the data set, check against the object count)" if expected else "")) if grows else ""
+        flag = "  (grew, then levelled off)" if levelled else ""
+        flag = ("  <-- WARN: monotonic growth" + (" (follows the data set, check against the object count)" if expected else "")) if grows else flag
         rc |= bool(grows and not expected)
         print(f"    {col:18s} {a1:10.1f} -> {b1:10.1f}   tau={tau:+.2f}{flag}")
     return rc

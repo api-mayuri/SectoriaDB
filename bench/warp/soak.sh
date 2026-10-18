@@ -3,7 +3,7 @@
 #
 #   ./soak.sh --duration 8h --sample 5m --conc 20 --size small [--container sectoriadb-bench] [-- extra run.sh options]
 #
-# warp (run.sh, mode mixed) runs for --duration; at the same time bench/warp/soak_sample.py scrapes the Prometheus endpoint
+# warp (run.sh, mode mixed with as many DELETEs as PUTs, so the data set stays the same size) runs for --duration; at the same time bench/warp/soak_sample.py scrapes the Prometheus endpoint
 # of the server every --sample (rates and p99 from the deltas between two scrapes) and appends a row to soak.csv in the
 # results directory <results>/<UTC>_<sha>_soak_<mode>_<size>_c<conc>/ next to the warp output. At the end the drift report
 # is printed: throughput and p99 of the first window against the last (window = 1 h, or a quarter of a short run) and a warning
@@ -29,7 +29,7 @@ while [ $# -gt 0 ]; do
     --conc) CONC=$2; shift 2 ;;
     --url) URL=$2; shift 2 ;;
     --container) CONTAINER=$2; shift 2 ;;
-    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
     --) shift; break ;;
     *) die "unknown option $1 (extra run.sh options go after --)" ;;
   esac
@@ -48,8 +48,11 @@ python3 -I "$(dirname "${BASH_SOURCE[0]}")/soak_sample.py" sample "$CSV" $(( TOT
 SAMPLER=$!
 trap 'kill "$SAMPLER" 2>/dev/null || true' EXIT INT TERM
 
+# mixed: as many DELETEs as PUTs, so the number of objects stays constant and growth of the metastore or the disk means a leak
+# (warp's default 15 % PUT / 10 % DELETE grows the data set all the time); an --extra after "--" overrides this
+BALANCE=(); [ "$MODE" = mixed ] && BALANCE=(--extra "--get-distrib 40 --delete-distrib 15")
 set +e
-"$(dirname "${BASH_SOURCE[0]}")/run.sh" --mode "$MODE" --size "$SIZE" --conc "$CONC" --duration "$DURATION" --no-annotate "$@"
+"$(dirname "${BASH_SOURCE[0]}")/run.sh" --mode "$MODE" --size "$SIZE" --conc "$CONC" --duration "$DURATION" --no-annotate "${BALANCE[@]}" "$@"
 RC=$?
 set -e
 kill "$SAMPLER" 2>/dev/null || true; wait "$SAMPLER" 2>/dev/null || true; trap - EXIT INT TERM
