@@ -15,12 +15,15 @@
 ## Как запустить
 
 ```bash
-# разовые команды в Docker (ONLINE и OFFLINE-ONLY; для OFFLINE-ONLY сначала docker compose stop sectoriadb)
+# ONLINE-команды в Docker: в работающем контейнере
 X="docker compose exec -T sectoriadb java -jar /app/sectoriadb.jar"
 $X mk-key --count 3 --desc "для бэкапов"
 
-# офлайн-проверка целостности при остановленном сервере (нужны тома: run, а не exec)
-docker compose run --rm --no-deps sectoriadb java -jar /app/sectoriadb.jar verify-all
+# OFFLINE-ONLY в Docker: сервер остановлен, команда запускается в новом контейнере на тех же томах
+# (ENTRYPOINT образа запускает сервер, поэтому его переопределяют)
+docker compose stop sectoriadb
+docker compose run --rm --no-deps --entrypoint java sectoriadb -jar /app/sectoriadb.jar verify-all
+docker compose start sectoriadb
 
 # интерактивная консоль сервера: compose включает stdin_open и tty, SPRING_SHELL_INTERACTIVE_ENABLED=true
 docker attach sectoriadb          # отсоединиться без остановки: Ctrl+P, Ctrl+Q (Ctrl+C остановит сервер)
