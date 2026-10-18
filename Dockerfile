@@ -21,7 +21,7 @@ RUN mvn -B package -DskipTests -q
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM eclipse-temurin:21-jre-alpine
 
-# Unprivileged user; /data is what the volumes below mount over (a fresh named volume inherits this ownership)
+# Unprivileged user; /data is what the volume below mounts over (a fresh named volume inherits this ownership)
 RUN addgroup -S sectoria && adduser -S -G sectoria sectoria \
  && mkdir -p /app /data/meta /data/storage \
  && chown -R sectoria:sectoria /app /data
@@ -30,7 +30,9 @@ WORKDIR /app
 # The version is not hard-coded: the repackaged jar is the only *.jar of the target directory
 COPY --from=builder --chown=sectoria:sectoria /build/sectoriadb-server/target/SectoriaDB-*.jar /app/sectoriadb.jar
 
-VOLUME ["/data/meta", "/data/storage"]
+# One volume for everything the server writes (/data/meta, /data/storage incl. the upload spool /data/storage/.tmp):
+# a snapshot of this single volume is consistent across metadata and blobs.
+VOLUME ["/data"]
 
 # ── Configuration via environment variables ───────────────────────────────────
 # Spring's relaxed binding maps SECTORIADB_* / SERVER_PORT / SPRING_* to the properties of application.properties, so

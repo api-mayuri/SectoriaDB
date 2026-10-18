@@ -32,8 +32,9 @@ services:
       JAVA_OPTS: ${JAVA_OPTS:--XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError -XX:+UseG1GC}
       SPRING_SHELL_INTERACTIVE_ENABLED: ${SPRING_SHELL_INTERACTIVE_ENABLED:-true}
     volumes:
-      - sectoriadb-meta:/data/meta
-      - sectoriadb-data:/data/storage
+      # ONE volume for metadata (/data/meta) and blobs + upload spool (/data/storage/.tmp): a snapshot of it is atomic
+      # across all of them (docs/guide/operations.md, "Резервное копирование")
+      - sectoriadb-store:/data
     restart: unless-stopped
     # finish running requests on `docker stop` (server.shutdown=graceful, 30 s)
     stop_grace_period: 40s
@@ -66,9 +67,7 @@ services:
     restart: unless-stopped
 
 volumes:
-  sectoriadb-meta:
-    driver: local
-  sectoriadb-data:
+  sectoriadb-store:
     driver: local
 
 networks:

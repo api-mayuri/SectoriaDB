@@ -39,7 +39,7 @@ TLS терминирует nginx из compose; порт самого серве�
 
 Разработка без TLS: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build` — дополнительно `http://localhost:8080` (S3, только loopback) и `http://localhost:8081` (веб-интерфейс s3manager, сторонний, необязательный).
 
-Данные лежат в Docker-томах `sectoriadb-meta` и `sectoriadb-data` и переживают пересборку. Подробности — [guide/operations.md](docs/guide/operations.md).
+Всё состояние (метаданные, блобы, спул загрузок) лежит в одном Docker-томе `sectoriadb-store` (`/data/meta`, `/data/storage`) и переживает пересборку; его снимок атомарен для метаданных и блобов (резервное копирование и шифрование — в operations.md). Подробности — [guide/operations.md](docs/guide/operations.md).
 
 ## Запуск из jar
 
