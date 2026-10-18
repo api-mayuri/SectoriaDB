@@ -8,7 +8,7 @@ import org.example.sectoriadb.security.CredentialService;
 import org.example.sectoriadb.storage.ObjectWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.ApplicationRunner;
+import org.springframework.beans.factory.SmartInitializingSingleton;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
@@ -123,12 +123,14 @@ public class Application {
     }
 
     /**
-     * Removes upload spool files left behind by a crash or kill -9 (nothing of this process can be using them yet).
+     * Removes upload spool files left behind by a crash or kill -9. Runs once all beans exist but before the web server
+     * accepts connections, so no upload of this process can own a spool file yet (an ApplicationRunner would run after
+     * the port is open, and behind a blocking interactive shell runner possibly never).
      * Not run in CLI mode: a command next to a running server must not delete that server's live uploads.
      */
     @Bean
-    public ApplicationRunner cleanUploadSpool(ObjectWriter writer) {
-        return args -> {
+    public SmartInitializingSingleton cleanUploadSpool(ObjectWriter writer) {
+        return () -> {
             if (System.getProperty("sectoriadb.metastore.lazy") != null) return;
             Path dir = writer.uploadTmpDir();
             int removed = 0;
@@ -149,10 +151,14 @@ public class Application {
      * registered, a key whose secret changed gets the new secret (the enabled flag and description are kept), an
      * identical key is left alone silently. Keys not declared in the environment are never touched. Secrets are never
      * logged, not even in error messages (entries are identified by position only).
+     *
+     * <p>Runs before the web server accepts connections (so there is no window where declared keys are rejected) and
+     * independently of application runners: the interactive shell is itself a runner that blocks on the console, and
+     * keys seeded from a runner were never applied when the shell started first (the default in docker-compose).
      */
     @Bean
-    public ApplicationRunner bootstrapCredential(CredentialService credentialService, StorageProperties props) {
-        return args -> {
+    public SmartInitializingSingleton bootstrapCredential(CredentialService credentialService, StorageProperties props) {
+        return () -> {
             if (System.getProperty("sectoriadb.metastore.lazy") != null) return;   // CLI mode: no seeding
             StorageProperties.S3 s3 = props.getS3();
             int index = 0;
