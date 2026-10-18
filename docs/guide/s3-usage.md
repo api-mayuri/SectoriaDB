@@ -10,8 +10,9 @@
 - **Access Key ID + Secret Key** — «логин и пароль» программы. Секрет по сети не передаётся, им подписывается запрос.
   Ключи создаются в [консоли администратора](admin-shell.md) (`mk-key`).
 - **Всё приватно по умолчанию.** Запрос без подписи получает `403 AccessDenied`.
-- **Владелец один.** IAM, пользователей и ролей нет: любой действующий ключ имеет полный доступ ко всем бакетам
-  (см. [безопасность](../architecture/security.md)). Для изоляции нужны отдельные экземпляры.
+- **Владелец один, права ключа задаёт IAM-политика.** Пользователей, групп и ролей нет, но у каждого ключа может быть стандартная IAM-политика
+  ([ниже](#iam-политики-ключей)); ключ **без** политики имеет полный доступ ко всем бакетам. Для изоляции арендаторов — один ключ на арендатора
+  с политикой на его бакеты (см. [безопасность](../architecture/security.md#авторизация-подписанных-запросов-iam)).
 
 ## Поддерживаемые операции
 
@@ -60,10 +61,11 @@
 - **`public-read-write` на бакете** даёт анонимные `PUT` и `DELETE` объектов (но не чтение, ACL, политики и multipart).
 - **Политика бакета** вычисляется как в AWS: явный `Deny` побеждает любой `Allow` и любые ACL. Поддерживаются `Principal`
   `"*"`, `Action`/`Resource` со строками и массивами и подстановками `*`/`?`, `NotAction`/`NotResource`/`NotPrincipal` только в `Deny`.
-  Из условий вычисляется ровно одно: `"Condition":{"Bool":{"aws:SecureTransport":"true"|"false"}}` (запрос пришёл по HTTPS или нет; ключ без учёта регистра, значение — строка, булево или массив). Остальные условия **не вычисляются**:
+  Из условий вычисляются `"Bool":{"aws:SecureTransport":"true"|"false"}` (запрос пришёл по HTTPS или нет; ключ без учёта регистра, значение — строка, булево или массив) и `StringEquals`/`StringLike` на `s3:prefix`, `s3:delimiter` (только листинг). Остальные условия **не вычисляются**:
   `Allow` с ними не действует, `Deny` с ними действует всегда. Пример «анонимам только по HTTPS»: `Deny` на `s3:*` с `"Bool":{"aws:SecureTransport":"false"}` ([operations.md](operations.md#tls-через-nginx)).
   Политика, не разбирающаяся как JSON, игнорируется. Размер до 20 КиБ.
-- **Политики и ACL действуют только на анонимные запросы.** Подписанный запрос любым действующим ключом имеет полный доступ.
+- **ACL действуют только на анонимные запросы.** Политика бакета действует и на подписанные: `Deny` на неё побеждает всё, `Allow` для `"*"` или для ключа (см. [IAM-политики ключей](#iam-политики-ключей)) даёт право
+  даже ключу, у которого политики нет или она этого не разрешает.
 - Анонимный запрос с `x-amz-copy-source`, не-`private` ACL или `x-amz-grant-*` — `403` (иначе открытый бакет стал бы способом
   вытащить приватные объекты). Подресурсы `acl`, `policy`, `uploads`, `uploadId`, `partNumber`, `tagging`, `delete`, `location` и т. п.
   анонимно недоступны.
@@ -74,6 +76,51 @@
 
 Публичная ссылка: `https://ВАШ-АДРЕС/бакет/ключ`. Не открывайте приватный бакет как `public-read` и не используйте
 `public-read-write` без нужды.
+
+## IAM-политики ключей
+
+Что может ключ, решает его IAM-политика — обычный документ AWS. Подключение (рядом с работающим сервером, без перезапуска):
+
+```bash
+sed 's/example-bucket/photos/g' deploy/iam/read-write.json > /tmp/photos.json
+java -jar sectoriadb.jar key-policy --id ACCESS_KEY_ID --file /tmp/photos.json    # key-policy --id ID --show | --remove
+```
+
+Готовые примеры лежат в [deploy/iam](../../deploy/iam/): `read-only.json` (список и чтение одного бакета), `read-write.json` (плюс запись, удаление и multipart), `backup-writer.json` (только добавление объектов, удалять нельзя).
+
+**Правила вычисления** (как в AWS для одного аккаунта): явный `Deny` в политике ключа или бакета запрещает; иначе `Allow` в любой из двух разрешает; иначе, если у ключа есть политика, `403 AccessDenied`, а у ключа без политики доступ полный.
+Анонимные запросы по-прежнему подчиняются ACL и политике бакета с `Principal: "*"`.
+
+**Что поддерживается.** `Effect` `Allow`/`Deny`; `Action` и `Resource` строкой или массивом с `*` и `?`; `NotAction`/`NotResource` только в `Deny`; `Condition`: `Bool` на `aws:SecureTransport`,
+`StringEquals`/`StringLike` на `s3:prefix` и `s3:delimiter`. Остальное (`Principal` в политике ключа, переменные `${...}`, другие условия, не-S3 действия) `key-policy` отвергает с понятной ошибкой, чтобы политика не значила тихо другое.
+
+**Какое действие нужно операции:**
+
+| Операция | Действие | Ресурс |
+|---|---|---|
+| `GetObject`, `HeadObject` | `s3:GetObject` | `arn:aws:s3:::бакет/ключ` |
+| `PutObject`, `CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload` | `s3:PutObject` | `arn:aws:s3:::бакет/ключ` |
+| `DeleteObject` (и каждый ключ `DeleteObjects`) | `s3:DeleteObject` | `arn:aws:s3:::бакет/ключ` |
+| `CopyObject`, `UploadPartCopy` | `s3:GetObject` на источнике **и** `s3:PutObject` на приёмнике | |
+| `AbortMultipartUpload`, `ListParts` | `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts` | `arn:aws:s3:::бакет/ключ` |
+| `GetObjectAcl`, `PutObjectAcl` | `s3:GetObjectAcl`, `s3:PutObjectAcl` | `arn:aws:s3:::бакет/ключ` |
+| `GetObjectTagging`, `PutObjectTagging`, `DeleteObjectTagging` | `s3:GetObjectTagging`, `s3:PutObjectTagging`, `s3:DeleteObjectTagging` | `arn:aws:s3:::бакет/ключ` |
+| `ListObjects(V2)`, `HeadBucket` | `s3:ListBucket` (`s3:ListBucketVersions` для `?versions`) | `arn:aws:s3:::бакет` |
+| `ListMultipartUploads` | `s3:ListBucketMultipartUploads` | `arn:aws:s3:::бакет` |
+| `CreateBucket`, `DeleteBucket` | `s3:CreateBucket`, `s3:DeleteBucket` | `arn:aws:s3:::бакет` |
+| `GetBucketAcl`, `PutBucketAcl` | `s3:GetBucketAcl`, `s3:PutBucketAcl` | `arn:aws:s3:::бакет` |
+| `GetBucketPolicy`, `PutBucketPolicy`, `DeleteBucketPolicy` | `s3:GetBucketPolicy`, `s3:PutBucketPolicy`, `s3:DeleteBucketPolicy` | `arn:aws:s3:::бакет` |
+| `GetBucketLocation`, `GetBucketVersioning`, `GetBucketTagging` | `s3:GetBucketLocation`, `s3:GetBucketVersioning`, `s3:GetBucketTagging` | `arn:aws:s3:::бакет` |
+| `ListBuckets` | `s3:ListAllMyBuckets` | `arn:aws:s3:::*` |
+
+Особенности: с правом `s3:ListAllMyBuckets` `ListBuckets` возвращает имена **всех** бакетов (как AWS; содержимое остаётся закрытым), без права — `403`. Для «листинга только своего префикса» (`aws s3 ls s3://бакет/home/alice/`)
+разрешите `s3:ListBucket` на `arn:aws:s3:::бакет` с условием `"StringLike":{"s3:prefix":["home/alice/*"]}` и `s3:GetObject` на `arn:aws:s3:::бакет/home/alice/*`. `DeleteObjects` не отвечает ошибкой целиком: запрещённые ключи
+приходят как `<Error><Key>…</Key><Code>AccessDenied</Code>…`, остальные удаляются. Запрещённая операция — `403 AccessDenied` с текстом «User: arn:aws:iam::sectoriadb:user/ID is not authorized to perform: s3:… on resource: arn:aws:s3:::…».
+
+**Политика бакета для ключа.** Чтобы дать ключу доступ к чужому бакету не меняя его политику, добавьте в политику бакета оператор с `Principal` `{"AWS":"arn:aws:iam::sectoriadb:user/ID"}` (допустим и просто `ID`).
+`Deny` на бакете побеждает любые `Allow` ключа и действует также на ключи без политики.
+
+**Миграция.** Ключи, созданные до этого этапа, политики не имеют и сохраняют полный доступ — обновление ничего не ломает. Подключите политики на ключи приложений и арендаторов, а ключ администратора оставьте без политики или с широкой.
 
 ## Загрузка и скачивание
 

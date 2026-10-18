@@ -100,7 +100,7 @@ aws s3 --endpoint-url https://localhost presign s3://my-bucket/photo.jpg --expir
 
 - Не публикуйте `.env` (там реальные ключи), `deploy/certs/` и порты `9464` (метрики без подписи), `8080` (без TLS) и `8081` (s3manager с полными правами) наружу.
 - Не отключайте авторизацию (`sectoriadb.s3.auth.enabled=false`) и не включайте `allow-open-setup` на сервере, доступном из сети. Сервер не терминирует TLS: в compose это делает nginx, `sectoriadb.s3.require-secure-transport=true` отвергает запросы не по HTTPS ([guide/operations.md](docs/guide/operations.md#tls-через-nginx)).
-- IAM нет: любой действующий ключ имеет полный доступ ко всему. `public-read` на бакете открывает только листинг; чтение объекта открывают ACL объекта или политика. Подробности — [architecture/security.md](docs/architecture/security.md).
+- Права ключа задаёт **IAM-политика** (стандартный документ AWS, `key-policy`, примеры в [deploy/iam](deploy/iam/)); пользователей, ролей и STS нет. **Ключ без политики имеет полный доступ ко всему**: выдавайте приложениям и арендаторам отдельные ключи с политиками. `public-read` на бакете открывает только листинг; чтение объекта открывают ACL объекта или политика. Подробности — [architecture/security.md](docs/architecture/security.md).
 - Перед важными операциями делайте согласованную копию обоих томов ([резервное копирование](docs/guide/operations.md#резервное-копирование)).
 
 ## Лицензия

@@ -46,8 +46,14 @@ java -jar ... verify-all --sectoriadb.meta-dir=/data/meta                 # ра
 | `keys [--secret]` | список ключей (секреты только с `--secret`) |
 | `rm-key --id ID1,ID2 [--yes]` | удалить ключи (без `--yes` только подсказка) |
 | `enable-key --id ID` / `disable-key --id ID` | включить / временно выключить без перезапуска |
+| `key-policy --id ID --file policy.json` | подключить IAM-политику ключа (заменяет прежнюю) |
+| `key-policy --id ID --show` / `key-policy --id ID --remove` | показать политику / снять её (ключ снова с полным доступом) |
 
-Работают рядом с сервером: сервер подхватывает изменения `credentials.json` по времени изменения и размеру файла.
+`key-policy --file` проверяет документ до записи: корень — объект, `Version` `2012-10-17`, `Statement` — объект или непустой массив; `Effect` `Allow`/`Deny`; `Action` — строки `s3:…` (или `*`); `Resource` — ARN `arn:aws:s3:::…` (или `*`);
+`NotAction`/`NotResource` только в `Deny`; нет `Principal`, переменных `${…}` и неподдерживаемых условий (разрешены `Bool aws:SecureTransport`, `StringEquals`/`StringLike` на `s3:prefix`, `s3:delimiter`). Ошибки перечисляются `Error: Invalid policy: …`
+и ничего не записывают; неизвестные ключи верхнего уровня и отсутствие `Version` — предупреждения (`Warning: …`), политика сохраняется. Список `keys` показывает колонку `Policy` (`yes`/`none`). Примеры — [deploy/iam](../../deploy/iam/), правила — [s3-usage.md](s3-usage.md#iam-политики-ключей).
+
+Работают рядом с сервером: сервер подхватывает изменения `credentials.json` по времени изменения и размеру файла (политика действует со следующего запроса, перезапуск не нужен).
 Ключи из окружения (`SECTORIADB_S3_CREDENTIALS`) заводятся при старте сервера и считаются источником истины для перечисленных там ключей.
 
 ## Доступ (OFFLINE-ONLY)
