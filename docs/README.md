@@ -3,16 +3,19 @@
 Документация описывает **текущее** состояние проекта. Хронология разработки (документы по этапам 01–14, дорожная карта) сохранена в [docs/history](history/ROADMAP.md);
 список изменений по этапам — [CHANGELOG](../CHANGELOG.md).
 
+> **Начните с [рекомендаций по использованию](guide/recommendations.md)** — чек-лист перед боевым запуском, nginx, резервные копии, обновления.
+
 ## Рекомендуемый порядок чтения
 
 **Если вы пользователь или администратор**
 
 1. [README проекта](../README.md) — что это, быстрый старт, ключи, `aws cli`.
-2. [guide/s3-usage.md](guide/s3-usage.md) — какой S3 API поддерживается, отличия от AWS, публичный доступ, multipart, лимиты и ошибки.
-3. [guide/operations.md](guide/operations.md) — Docker, тома, резервные копии, сборка мусора, сбои, полный диск, логи.
-4. [guide/configuration.md](guide/configuration.md) — все свойства `sectoriadb.*` в одной таблице.
-5. [guide/admin-shell.md](guide/admin-shell.md) — команды консоли (какие работают рядом с сервером).
-6. [guide/monitoring.md](guide/monitoring.md) — метрики, PromQL, стенд Grafana, алерты.
+2. [guide/recommendations.md](guide/recommendations.md) — когда подходит, чек-лист, nginx, копии, обновления.
+3. [guide/s3-usage.md](guide/s3-usage.md) — какой S3 API поддерживается, отличия от AWS, публичный доступ, multipart, лимиты и ошибки.
+4. [guide/operations.md](guide/operations.md) — Docker, тома, резервные копии, сборка мусора, сбои, полный диск, логи.
+5. [guide/configuration.md](guide/configuration.md) — все свойства `sectoriadb.*` в одной таблице.
+6. [guide/admin-shell.md](guide/admin-shell.md) — команды консоли (какие работают рядом с сервером).
+7. [guide/monitoring.md](guide/monitoring.md) — метрики, PromQL, стенд Grafana, алерты.
 
 **Если вы разработчик**
 
@@ -26,7 +29,7 @@
 
 | Каталог | Документы |
 |---|---|
-| `guide/` | `s3-usage`, `admin-shell`, `operations`, `configuration`, `monitoring`, `development` |
+| `guide/` | `recommendations`, `s3-usage`, `admin-shell`, `operations`, `configuration`, `monitoring`, `development` |
 | `architecture/` | `overview`, `storage-engine`, `metastore`, `metadata-model`, `garbage-collection`, `integrity`, `security`, `observability` |
 | `testing/` | `benchmarking`, `compatibility`, `fault-injection` |
 | `reports/` | `sandbox-results` (измерения с датами и оговоркой о железе) |
