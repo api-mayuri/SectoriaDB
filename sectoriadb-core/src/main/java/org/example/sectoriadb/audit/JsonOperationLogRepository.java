@@ -22,6 +22,8 @@ public class JsonOperationLogRepository implements OperationLogRepository {
 
     private static final Logger log = LoggerFactory.getLogger(JsonOperationLogRepository.class);
     private static final long MAX_FILE_BYTES = 100L * 1024 * 1024;
+    /** Rolled files kept next to the active one: the log must not grow without bound (a busy server rolls it every few minutes). */
+    static final int MAX_ARCHIVES = 5;
 
     private final ObjectMapper mapper;
     private final Path dataFile;
@@ -141,5 +143,17 @@ public class JsonOperationLogRepository implements OperationLogRepository {
         Path archive  = dataFile.resolveSibling("oplogs" + suffix + ".jsonl");
         Files.move(dataFile, archive);
         log.info("Rolled operation log: archived to {}", archive);
+        pruneArchives();
+    }
+
+    /** Deletes the oldest rolled files beyond {@link #MAX_ARCHIVES} (the timestamp in the name sorts chronologically). */
+    private void pruneArchives() throws IOException {
+        List<Path> archives;
+        try (var files = Files.list(dataFile.getParent())) {
+            archives = files.filter(f -> f.getFileName().toString().matches("oplogs-.+\\.jsonl")).sorted().toList();
+        }
+        for (int i = 0; i < archives.size() - MAX_ARCHIVES; i++) {
+            Files.deleteIfExists(archives.get(i));
+        }
     }
 }
