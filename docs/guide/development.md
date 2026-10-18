@@ -28,6 +28,7 @@ mvn checkstyle:check                  # правила Checkstyle
   `xml` < `error` < `http` < `access` < `auth` < `api` < `multipart`, а `metastore` сервер не импортирует. Новый пакет требует правила в тесте.
 - `DocsConsistencyTest` (`sectoriadb-server`): относительные ссылки markdown разрешаются, метрики `sectoriadb_*` из документации существуют в коде,
   свойства `sectoriadb.*` из [configuration.md](configuration.md) совпадают со свойствами в коде. Добавили свойство или метрику — обновите документацию.
+- Фаззинг парсеров запросов (`ParserFuzzTest`, `HttpParserFuzzTest`, `SigV4HeaderFuzzTest`): случайные и мутированные входы с фиксированным зерном (`FuzzSupport.SEED`), по 1–2 с на группу; допускаются только документированные ошибки S3 / `IOException`, без 5xx и зависаний. Падение воспроизводится тем же зерном; найденную ошибку закрепите отдельным тестом.
 - Нагрузочные, совместимость и отказы — в [docs/testing](../testing/benchmarking.md).
 
 ## Стиль кода

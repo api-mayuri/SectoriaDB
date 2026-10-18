@@ -4,7 +4,7 @@ set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")" || exit 2
 rc=0
 mkdir -p work
-for t in kill-put.sh kill-multipart.sh full-disk.sh corrupt-chunk.sh network-faults.sh security.sh; do
+for t in kill-put.sh kill-multipart.sh full-disk.sh corrupt-chunk.sh snapshot-backup.sh network-faults.sh security.sh; do
   echo "######## $t"
   # live output on the terminal, the full log in work/<script>.log (the first script no longer loses its log)
   ./"$t" 2>&1 | tee "work/${t%.sh}.log"
