@@ -14,6 +14,9 @@
   Прежний вариант без TLS и s3manager вынесены в `docker-compose.dev.yml` (`-f docker-compose.yml -f docker-compose.dev.yml`, S3-порт на `127.0.0.1:8080`). Новые переменные `HTTPS_PORT`, `HTTP_PORT`, `SECTORIADB_S3_REQUIRE_SECURE_TRANSPORT`.
 - Новое свойство `sectoriadb.s3.require-secure-transport` (по умолчанию `false`, в compose `true`): запрос не по HTTPS получает `403 InsecureTransport`. Схему сервер берёт из `X-Forwarded-Proto` (`server.forward-headers-strategy=native`) только от доверенных прокси (`server.tomcat.remoteip.internal-proxies`, по умолчанию частные сети).
 - Условие `Bool` на `aws:SecureTransport` в политиках бакета вычисляется (раньше `Allow` с любым условием не действовал, а `Deny` с условием запрещал всегда); остальные условия — как прежде.
+- В compose сервер доверяет `X-Forwarded-*` только адресу nginx (фиксированная подсеть `172.31.250.0/24`, nginx `172.31.250.10`), а не всем частным сетям: подделать схему из соседнего контейнера нельзя.
+- Исправлено: ключи из окружения (`SECTORIADB_S3_ACCESS_KEY`/`SECRET_KEY`, `SECTORIADB_S3_CREDENTIALS`) **не заводились**, когда включена интерактивная консоль (по умолчанию в compose): сидирование было `ApplicationRunner`, а консоль — тоже раннер, который блокирует поток.
+  Теперь сидирование и очистка каталога временных файлов выполняются до открытия порта и до любых раннеров (`StartupSeedingTest`). Заодно очистка больше не может удалить временный файл загрузки, начавшейся сразу после старта.
 - Формат данных не менялся.
 
 ## 15-docs — итоговая документация (2026-10-18)

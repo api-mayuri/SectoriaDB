@@ -21,6 +21,8 @@ services:
       SECTORIADB_S3_REGION: ${SECTORIADB_S3_REGION:-us-east-1}
       # Everything arrives over HTTPS via nginx (X-Forwarded-Proto); plain HTTP is refused with 403 InsecureTransport
       SECTORIADB_S3_REQUIRE_SECURE_TRANSPORT: ${SECTORIADB_S3_REQUIRE_SECURE_TRANSPORT:-true}
+      # trust X-Forwarded-* only from the nginx container (fixed address below), not from any private address
+      SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES: ${PROXY_ADDRESS_REGEX:-172\.31\.250\.10}
       SECTORIADB_S3_ACCESS_KEY: ${SECTORIADB_S3_ACCESS_KEY:-}
       SECTORIADB_S3_SECRET_KEY: ${SECTORIADB_S3_SECRET_KEY:-}
       SECTORIADB_S3_CREDENTIALS: ${SECTORIADB_S3_CREDENTIALS:-}
@@ -50,6 +52,9 @@ services:
     ports:
       - "${HTTPS_PORT:-443}:443"
       - "${HTTP_PORT:-80}:80"
+    networks:
+      default:
+        ipv4_address: 172.31.250.10
     volumes:
       - ./deploy/nginx/sectoriadb.conf:/etc/nginx/conf.d/default.conf:ro
       - ./deploy/certs:/etc/nginx/certs:ro
@@ -65,3 +70,10 @@ volumes:
     driver: local
   sectoriadb-data:
     driver: local
+
+networks:
+  default:
+    ipam:
+      config:
+        # fixed subnet so the proxy has a known address that the server trusts for X-Forwarded-Proto
+        - subnet: 172.31.250.0/24

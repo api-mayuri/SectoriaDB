@@ -52,8 +52,11 @@ docker compose logs -f sectoriadb
 - `sectoriadb.s3.require-secure-transport=true` (в compose включено по умолчанию, переменная `SECTORIADB_S3_REQUIRE_SECURE_TRANSPORT`): запрос не по HTTPS получает `403 InsecureTransport` до проверки подписи.
   Схему сервер берёт из `X-Forwarded-Proto` (`server.forward-headers-strategy=native`, `RemoteIpValve` Tomcat), **но только если запрос пришёл от доверенного прокси** — адреса из `server.tomcat.remoteip.internal-proxies`
   (по умолчанию loopback и частные сети: `10/8`, `172.16/12`, `192.168/16`). От остальных адресов заголовок игнорируется, так что подделать его снаружи нельзя.
-  Следствия: (1) не публикуйте порт `8080` наружу — любой хост из частной сети (в том числе шлюз Docker, то есть сам хост) может прислать `X-Forwarded-Proto: https` и обойти проверку; (2) если порт `8080` достижим из частной сети, сузьте доверие до адреса nginx:
-  `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES=172\.18\.0\.2`; (3) в `docker-compose.dev.yml` проверка выключена, потому что там клиенты ходят по HTTP.
+  В compose сеть имеет фиксированную подсеть `172.31.250.0/24`, у nginx постоянный адрес `172.31.250.10`, и сервер доверяет `X-Forwarded-*`
+  **только ему** (`SERVER_TOMCAT_REMOTEIP_INTERNALPROXIES`, переменная `PROXY_ADDRESS_REGEX` в `.env`). Запрос с поддельным `X-Forwarded-Proto: https`
+  от любого другого контейнера сети получает `403 InsecureTransport` (проверено). Если подсеть занята, поменяйте её в `docker-compose.yml` вместе
+  с адресом nginx и `PROXY_ADDRESS_REGEX`. Без compose задайте `server.tomcat.remoteip.internal-proxies` равным адресу своего прокси.
+  В `docker-compose.dev.yml` проверка выключена, потому что там клиенты ходят по HTTP.
 - Свойство защищает от ошибок настройки (клиент по `http://`, порт, случайно открытый наружу). Оно не заменяет шифрование на пути: TLS-соединение клиента заканчивается в nginx, участок nginx → сервер идёт по сети compose открытым текстом.
   Если nginx и сервер на разных хостах — поднимите между ними VPN/WireGuard или отдельную сеть.
 - Если пересоздали контейнер `sectoriadb` не через compose, перечитайте адрес: `docker compose restart nginx` (nginx разрешает имя сервера при старте; compose перезапускает его сам благодаря `depends_on … restart: true`).
