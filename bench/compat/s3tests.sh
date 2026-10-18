@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ceph/s3-tests against a running SectoriaDB (two accounts: main + alt; SectoriaDB has no IAM, so both are plain keys).
+# ceph/s3-tests against a running SectoriaDB (two accounts: main + alt; SectoriaDB has no users, so both are plain keys; to test isolation attach an IAM policy to the alt key first with the key-policy command, see docs/testing/compatibility.md).
 #
 #   ./s3tests.sh                       # default subset, 20 min timeout
 #   S3TESTS_FILTER='-k test_bucket_list' ./s3tests.sh
