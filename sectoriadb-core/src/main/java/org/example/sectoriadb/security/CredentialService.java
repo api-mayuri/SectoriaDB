@@ -1,5 +1,6 @@
 package org.example.sectoriadb.security;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -77,6 +78,30 @@ public class CredentialService {
         entity.setEnabled(enabled);
         credentialRepo.save(entity);
         log.info("Set credential enabled={}: accessKeyId={}", enabled, accessKeyId);
+    }
+
+    /**
+     * Attaches an IAM identity policy to the key (replacing any earlier one); {@code null} removes it, which gives the
+     * key full access again.
+     *
+     * @return warnings of the validation (the policy is stored anyway)
+     * @throws IllegalArgumentException if the key is unknown or the policy is invalid
+     */
+    public List<String> setPolicy(String accessKeyId, JsonNode policy) {
+        CredentialEntity entity = credentialRepo.findByAccessKeyId(accessKeyId)
+                .orElseThrow(() -> new IllegalArgumentException("Access key not found: " + accessKeyId));
+        List<String> warnings = List.of();
+        if (policy != null) {
+            IamPolicyValidator.Result result = IamPolicyValidator.validate(policy);
+            if (!result.errors().isEmpty()) {
+                throw new IllegalArgumentException("Invalid policy: " + String.join("; ", result.errors()));
+            }
+            warnings = result.warnings();
+        }
+        entity.setPolicy(policy);
+        credentialRepo.save(entity);
+        log.info("{} policy of credential: accessKeyId={}", policy == null ? "Removed" : "Set", accessKeyId);
+        return warnings;
     }
 
     /** Creates or updates a credential with the given fixed access/secret key pair. */

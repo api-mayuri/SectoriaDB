@@ -1,5 +1,8 @@
 package org.example.sectoriadb.security;
 
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.databind.JsonNode;
+
 import java.time.Instant;
 
 /** An access key / secret key pair for S3 SigV4 authentication. */
@@ -10,6 +13,9 @@ public class CredentialEntity {
     private String description;
     private Instant createdAt;
     private boolean enabled = true;
+    /** Optional IAM identity policy (standard JSON). Absent = legacy full access. */
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    private JsonNode policy;
 
     public CredentialEntity() {}
 
@@ -35,4 +41,10 @@ public class CredentialEntity {
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
+
+    /** The IAM identity policy of this key, or null when the key has none (full access). */
+    public JsonNode getPolicy() { return policy; }
+    public void setPolicy(JsonNode policy) {
+        this.policy = policy == null || policy.isNull() || policy.isMissingNode() ? null : policy;
+    }
 }
