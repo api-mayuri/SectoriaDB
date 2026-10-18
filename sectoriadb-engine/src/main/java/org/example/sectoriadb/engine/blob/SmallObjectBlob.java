@@ -44,7 +44,7 @@ import static org.example.sectoriadb.engine.format.SmallBlobLayout.verifyHeader;
 
 /**
  * An append-only, log-structured file holding whole small objects (see {@link SmallBlobLayout} for the format and
- * {@code docs/architecture/04-small-objects.md} for the protocol).
+ * {@code docs/architecture/storage-engine.md} for the protocol).
  *
  * <ul>
  *   <li><b>Append</b>: group fsync. An appender takes the per-file lock only for the time it needs to reserve the

@@ -15,7 +15,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * The metastore module depends on the JDK and slf4j only: no Spring, no Jackson, no other SectoriaDB module.
- * (docs/architecture/12-modularization.md)
+ * (docs/architecture/overview.md)
  */
 class ModuleDependencyGuardTest {
 

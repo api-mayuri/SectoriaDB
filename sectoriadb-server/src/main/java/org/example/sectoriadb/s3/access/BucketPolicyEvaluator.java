@@ -17,7 +17,7 @@ import java.util.Locale;
  * Action and Resource as string or array with the wildcards {@code *} and {@code ?};
  * Statement as an array or a single object; NotAction / NotResource / NotPrincipal on Deny statements.
  *
- * Fail-closed rules (documented in docs/architecture/02-security.md):
+ * Fail-closed rules (documented in docs/architecture/security.md):
  *  - an Allow statement that has a Condition block is never applied (conditions are not evaluated);
  *  - a Deny statement that has a Condition block IS applied as if the condition were true;
  *  - Allow statements with NotAction / NotResource / NotPrincipal are never applied;

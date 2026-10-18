@@ -86,7 +86,7 @@
         </pluginManagement>
 
         <plugins>
-            <!-- Code style, see docs/architecture/14-code-style.md. Fix imports with: mvn spotless:apply -->
+            <!-- Code style, see docs/guide/development.md. Fix imports with: mvn spotless:apply -->
             <plugin>
                 <groupId>com.diffplug.spotless</groupId>
                 <artifactId>spotless-maven-plugin</artifactId>

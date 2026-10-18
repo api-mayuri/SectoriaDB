@@ -146,7 +146,7 @@ public class ResizeService {
                     + " quarantined slot(s) (damaged metadata); run 'scrub' and repair before resizing");
         }
 
-        // Guard: a table reaches >90% fill before an insert fails (see docs/architecture/03-chunk-integrity.md),
+        // Guard: a table reaches >90% fill before an insert fails (see docs/architecture/storage-engine.md),
         // but insert cost (BFS path length) grows steeply near the limit — keep 70% as headroom after migration.
         int newTotalSlots  = 2 * newNumBuckets * CuckooHashTable.SLOTS_PER_BUCKET;
         int minSlotsNeeded = (int) Math.ceil(activeSlots / MAX_SAFE_FILL);

@@ -16,7 +16,7 @@ import java.nio.file.Path;
  * The embedded metadata store: one file, {@code ${sectoriadb.meta-dir}/sectoria.db}, durable commits according to
  * {@code sectoriadb.fsync}, closed (and its file lock released) by {@link #close()}.
  *
- * <p>Group commit limits (docs/architecture/09-multi-blob-pool.md): {@code sectoriadb.metastore.group.*}. A failed
+ * <p>Group commit limits (docs/architecture/metastore.md): {@code sectoriadb.metastore.group.*}. A failed
  * commit makes the store read-only until it recovers in place; {@code sectoriadb.metastore.recovery-backoff}
  * is the pause between attempts.
  *
@@ -24,7 +24,7 @@ import java.nio.file.Path;
  * in server mode the composition root opens it when the context starts, so a second server on the same directory fails
  * at startup; the admin CLI ({@code sectoriadb.metastore.lazy=true}) opens it only if a command really needs it, so
  * credential commands keep working next to a running server (the file is single-process, see
- * docs/architecture/06-btree-metastore.md).
+ * docs/architecture/metastore.md).
  */
 public final class MetaStoreHolder implements MetaStoreProvider, AutoCloseable {
 

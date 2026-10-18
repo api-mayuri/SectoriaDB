@@ -33,7 +33,7 @@ bench/results/<UTC-время>_<короткий-sha>[-dirty]_<режим>_<ра
 | `hardware` | `nproc`, модель CPU, RAM, ядро, ОС, файловая система и тип диска каталога данных Docker, `lsblk`, виртуализация |
 
 `error_free: false` значит, что warp сообщил об ошибках запросов: такой прогон нельзя сравнивать с другими (см.
-методику в `docs/architecture/08-observability-bench.md`). `run.sh` в этом случае завершается с кодом 3.
+методику в `docs/testing/benchmarking.md`). `run.sh` в этом случае завершается с кодом 3.
 
 ## Как сравнивать
 

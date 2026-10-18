@@ -39,7 +39,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * metadata only (BFS, at most {@code maxEvictions} moves). If there is no path, {@link TableFullException}
  * is thrown and nothing has been modified. Otherwise the chunks along the path are moved starting from the
  * free end of the path, so at every instant (including a crash) each stored chunk is present in at least
- * one ACTIVE slot with correct data. See docs/architecture/01-engine-safety.md.
+ * one ACTIVE slot with correct data. See docs/architecture/storage-engine.md.
  *
  * <h3>Durability of a new chunk</h3>
  * A chunk that goes into a free slot is written (data, then meta) WITHOUT an fsync and without waiting for one: the table
@@ -48,7 +48,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
  * the others waiting for it) covers every write issued up to that moment. Until then such a slot is not referenced by
  * anything durable: after a crash it may hold stale or partial bytes under an ACTIVE meta entry, which the CRC of the
  * data detects, a repeated upload heals, and the collector's sweep frees. The moves of an eviction path protect chunks
- * that ARE referenced already and keep their ordered fsyncs. See docs/architecture/10-gc-and-resize.md.
+ * that ARE referenced already and keep their ordered fsyncs. See docs/architecture/garbage-collection.md.
  *
  * <h3>Concurrency</h3>
  * The table owns a {@link ReentrantReadWriteLock}. Mutations take the write lock, lookups, reads, statistics

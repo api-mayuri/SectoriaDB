@@ -24,7 +24,7 @@ public interface GcRepository {
     List<ChunkRef> dueChunks(String poolId, long queuedBeforeMillis, int limit);
 
     /**
-     * One exclusive transaction for a batch of chunks, each handled by the garbage-collection protocol (docs/architecture/09-multi-blob-pool.md):
+     * One exclusive transaction for a batch of chunks, each handled by the garbage-collection protocol (docs/architecture/garbage-collection.md):
      * <ol>
      *   <li>no index entry: the queue rows are dropped;</li>
      *   <li>reference count not zero (revived): the queue rows are dropped, the entry stays;</li>

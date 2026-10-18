@@ -24,7 +24,7 @@ import java.util.Set;
 /**
  * Names, key encodings and the transaction-scoped primitives shared by the three metastore repositories.
  * Every method takes the caller's transaction, so a repository operation that touches several trees is one
- * atomic commit. See docs/architecture/07-metastore-integration.md for the table of trees.
+ * atomic commit. See docs/architecture/metadata-model.md for the table of trees.
  */
 final class Trees {
 

@@ -4,7 +4,7 @@ package org.example.sectoriadb.catalog;
  * What an upload holds from the moment it writes data into a blob (chunks into cuckoo blobs, a record into a
  * small-object blob) until its manifest is committed or the upload is abandoned. While a hold exists the garbage
  * collector does not free copies that no index entry or manifest points to: they may be the upload's. See
- * {@code UploadGate} and docs/architecture/10-gc-and-resize.md.
+ * {@code UploadGate} and docs/architecture/garbage-collection.md.
  */
 public interface UploadHold {
 

@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Rules of the server module (docs/architecture/12-modularization.md): the S3 packages form layers
+ * Rules of the server module (docs/architecture/overview.md): the S3 packages form layers
  * (xml, error, http, access, auth, api, multipart), observability knows nothing of S3, and there are no package cycles.
  */
 class ModuleDependencyGuardTest {

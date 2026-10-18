@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Rules of the engine module (docs/architecture/12-modularization.md): JDK and slf4j only, no other SectoriaDB module,
+ * Rules of the engine module (docs/architecture/overview.md): JDK and slf4j only, no other SectoriaDB module,
  * and an acyclic package structure whose leaves ({@code error}, {@code hash}, {@code metrics}) depend on nothing.
  */
 class ModuleDependencyGuardTest {

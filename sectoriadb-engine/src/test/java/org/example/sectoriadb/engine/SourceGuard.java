@@ -23,7 +23,7 @@ import java.util.stream.Stream;
 
 /**
  * Dependency guard without ArchUnit: reads the import lines of the main sources of a module and lets a test assert
- * which packages may import what (see docs/architecture/12-modularization.md). Shared with the other modules through the
+ * which packages may import what (see docs/architecture/overview.md). Shared with the other modules through the
  * test-jar of sectoriadb-engine.
  */
 public final class SourceGuard {

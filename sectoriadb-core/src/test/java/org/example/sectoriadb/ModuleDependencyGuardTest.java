@@ -19,7 +19,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Rules of the core module (docs/architecture/12-modularization.md): who may import the metastore, where Spring lives,
+ * Rules of the core module (docs/architecture/overview.md): who may import the metastore, where Spring lives,
  * the direction of the layers and the absence of package cycles.
  */
 class ModuleDependencyGuardTest {

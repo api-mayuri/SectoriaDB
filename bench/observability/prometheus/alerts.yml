@@ -1,4 +1,4 @@
-# Alert rules (proposed thresholds; adjust after measuring on your hardware: docs/architecture/08-observability-bench.md,
+# Alert rules (proposed thresholds; adjust after measuring on your hardware: docs/guide/monitoring.md,
 # section "Пороги алертов"). Prometheus only evaluates them (visible at /alerts and as the ALERTS series, usable in
 # Grafana); delivery needs an Alertmanager, which this stand does not run.
 groups:

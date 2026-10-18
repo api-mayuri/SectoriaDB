@@ -8,7 +8,7 @@ import java.util.List;
 
 /**
  * The two meta pages at the start of the file (slots 0 and 1, written alternately by txId parity): encoding, parsing,
- * and choosing the valid one with the highest txId on open. See docs/architecture/06-btree-metastore.md.
+ * and choosing the valid one with the highest txId on open. See docs/architecture/metastore.md.
  */
 final class MetaPage {
     private MetaPage() {

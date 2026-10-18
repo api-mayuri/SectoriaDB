@@ -3,7 +3,7 @@
 # mount -o loop). PUTs are sent until the disk is full. Expected: clean 5xx error (no hang, no crash), earlier objects
 # still readable, no corruption (offline verify-all), service keeps answering, and PUTs work again after space is freed
 # (a filler file on the same device is removed; SectoriaDB itself does not delete data to make room).
-# TARGET=meta (doc 10, part B): the metadata store keeps serving reads while its disk is full (writes: 507 / 503) and
+# TARGET=meta (see docs/testing/fault-injection.md): the metadata store keeps serving reads while its disk is full (writes: 507 / 503) and
 # recovers IN PLACE once space is freed: the PUT after freeing must succeed WITHOUT a restart.
 #   SIZE_MB=64 TARGET=storage ./full-disk.sh        data directory full
 #   SIZE_MB=40 TARGET=meta OBJ_KIB=1 MAX_PUTS=20000 FILLER_MB=20 ./full-disk.sh   metadata directory full

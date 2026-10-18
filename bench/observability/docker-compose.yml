@@ -1,4 +1,4 @@
-# Observability + benchmark stand for SectoriaDB (docs/architecture/08-observability-bench.md).
+# Observability + benchmark stand for SectoriaDB (docs/testing/benchmarking.md).
 #
 #   cp .env.example .env && docker compose up -d      # prometheus, grafana, influxdb, node_exporter, sectoriadb
 #

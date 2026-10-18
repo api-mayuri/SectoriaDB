@@ -14,7 +14,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 
 /**
- * RED metrics of the S3 API (see the catalogue in docs/architecture/08-observability-bench.md). All labels are
+ * RED metrics of the S3 API (see the catalogue in docs/guide/monitoring.md). All labels are
  * closed sets: operation ({@link S3Operation}), status class, S3 error code (validated), auth failure reason.
  */
 @Component

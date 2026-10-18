@@ -79,7 +79,7 @@ public class StorageProperties {
     public void setS3(S3 v) { this.s3 = v; }
 
     /**
-     * Several cuckoo blobs per pool (bucket): chunks are spread over them by weighted rendezvous hashing, see docs/architecture/09-multi-blob-pool.md.
+     * Several cuckoo blobs per pool (bucket): chunks are spread over them by weighted rendezvous hashing, see docs/architecture/storage-engine.md.
      */
     public static class Pool {
         private int initialBlobs = 1;
@@ -246,7 +246,7 @@ public class StorageProperties {
     }
 
     /**
-     * The embedded metadata store (docs/architecture/06-btree-metastore.md): when it is opened, how a failed commit recovers and the group commit
+     * The embedded metadata store (docs/architecture/metastore.md): when it is opened, how a failed commit recovers and the group commit
      * limits ({@code sectoriadb.metastore.group.*}).
      */
     public static class Metastore {

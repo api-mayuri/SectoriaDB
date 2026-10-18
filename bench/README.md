@@ -1,7 +1,7 @@
 # bench/: стенд наблюдаемости, бенчмарки, совместимость, отказы
 
 Всё, что связано с измерением SectoriaDB, лежит здесь. Подробное описание методики, схемы стенда и результатов:
-[docs/architecture/08-observability-bench.md](../docs/architecture/08-observability-bench.md), раздел «Стенд и бенчмарки».
+[docs/testing/benchmarking.md](../docs/testing/benchmarking.md).
 
 ```
 bench/

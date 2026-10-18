@@ -48,7 +48,7 @@ import java.util.concurrent.locks.ReentrantLock;
 
 /**
  * Garbage collection of the storage engine: gives the space of deleted and overwritten objects back. The protocol
- * is described in docs/architecture/10-gc-and-resize.md.
+ * is described in docs/architecture/garbage-collection.md.
  *
  * <ul>
  *   <li>{@link #run}: the chunk queue {@code chunk_gc} (zero-reference chunks older than the grace period G: slot freed

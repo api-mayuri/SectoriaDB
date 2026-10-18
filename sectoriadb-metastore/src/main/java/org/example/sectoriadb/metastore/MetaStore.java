@@ -25,7 +25,7 @@ import java.util.function.Function;
 
 /**
  * Embedded transactional key-value store with named copy-on-write B+trees in a single file.
- * See docs/architecture/06-btree-metastore.md for the file format and the commit protocol.
+ * See docs/architecture/metastore.md for the file format and the commit protocol.
  *
  * <p>One write transaction at a time, any number of concurrent read transactions with snapshot isolation.
  */

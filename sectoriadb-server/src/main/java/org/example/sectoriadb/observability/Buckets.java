@@ -3,7 +3,7 @@ package org.example.sectoriadb.observability;
 import java.time.Duration;
 
 /**
- * Explicit histogram bucket boundaries (10-15 per histogram). See docs/architecture/08-observability-bench.md for the
+ * Explicit histogram bucket boundaries (10-15 per histogram). See docs/guide/monitoring.md for the
  * reasoning behind each set.
  */
 public final class Buckets {
