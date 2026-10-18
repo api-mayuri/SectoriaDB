@@ -22,6 +22,7 @@ public record ByteRange(long first, long last) {
         long end;
         try {
             if (parts[0].isBlank()) {
+                if (parts.length < 2) return null;   // "bytes=" without a dash: malformed
                 long suffix = Long.parseLong(parts[1].trim());
                 if (suffix <= 0) throw invalidRange();
                 start = Math.max(0, total - suffix);

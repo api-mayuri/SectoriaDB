@@ -1,5 +1,9 @@
 package org.example.sectoriadb.s3.xml;
 
+import org.xml.sax.ErrorHandler;
+import org.xml.sax.SAXException;
+import org.xml.sax.SAXParseException;
+
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
@@ -7,6 +11,13 @@ import javax.xml.parsers.ParserConfigurationException;
 
 /** The single place that creates XML parsers for request bodies; XXE and entity expansion are disabled. */
 public final class XmlSupport {
+
+    /** Malformed input is the caller's 400: only throw, the default handler would print "[Fatal Error]" to stderr per request. */
+    private static final ErrorHandler THROW_QUIETLY = new ErrorHandler() {
+        @Override public void warning(SAXParseException e) { }
+        @Override public void error(SAXParseException e) throws SAXException { throw e; }
+        @Override public void fatalError(SAXParseException e) throws SAXException { throw e; }
+    };
 
     private XmlSupport() {}
 
@@ -22,7 +33,9 @@ public final class XmlSupport {
         dbf.setXIncludeAware(false);
         dbf.setExpandEntityReferences(false);
         dbf.setNamespaceAware(namespaceAware);
-        return dbf.newDocumentBuilder();
+        DocumentBuilder db = dbf.newDocumentBuilder();
+        db.setErrorHandler(THROW_QUIETLY);
+        return db;
     }
 
     /** Escapes text for use inside an XML element or attribute value; null becomes the empty string. */
