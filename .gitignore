@@ -51,3 +51,7 @@ bench/results/*
 !bench/results/README.md
 bench/compat/work/
 bench/faults/work/
+
+### TLS: certificates and keys (deploy/gen-self-signed.sh, certbot, corporate CA) ###
+deploy/certs/*
+!deploy/certs/.gitkeep

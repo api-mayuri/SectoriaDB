@@ -1,0 +1,31 @@
+# Local development WITHOUT TLS, on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+# (or export COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml)
+# Publishes the plain S3 port on the host's loopback and starts the optional s3manager web UI.
+# Do not use on a server that other people can reach.
+services:
+  sectoriadb:
+    ports:
+      - "127.0.0.1:${HOST_PORT:-8080}:${SERVER_PORT:-8080}"
+    environment:
+      # clients speak plain HTTP here (so does s3manager inside the compose network)
+      SECTORIADB_S3_REQUIRE_SECURE_TRANSPORT: "false"
+
+  s3manager:
+    image: cloudlena/s3manager:v0.5.0
+    container_name: s3manager
+    ports:
+      # loopback only: the manager can delete objects with the S3 keys below
+      - "127.0.0.1:8081:8080"
+    environment:
+      ENDPOINT: sectoriadb:${SERVER_PORT:-8080}
+      REGION: ${SECTORIADB_S3_REGION:-us-east-1}
+      ACCESS_KEY_ID: ${SECTORIADB_S3_ACCESS_KEY:-}
+      SECRET_ACCESS_KEY: ${SECTORIADB_S3_SECRET_KEY:-}
+      USE_SSL: "false"
+      SIGNATURE_TYPE: "V4"
+      ALLOW_DELETE: "true"
+    depends_on:
+      sectoriadb:
+        condition: service_healthy
+    restart: unless-stopped
