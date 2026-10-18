@@ -65,7 +65,7 @@ public class Application {
      * Commands that work next to a running server: they only touch credentials.json (and never open the metastore).
      */
     static final Set<String> ONLINE_COMMANDS = Set.of(
-            "mk-key", "keys", "rm-key", "enable-key", "disable-key");
+            "mk-key", "keys", "rm-key", "enable-key", "disable-key", "key-policy");
 
     /**
      * Commands that need the single-process metastore: they work only while the server is STOPPED (or from the server's
@@ -112,7 +112,7 @@ public class Application {
             if (lock == null) {
                 System.err.println("Error: '" + command + "' needs exclusive access to the metadata store " + file.toAbsolutePath()
                         + ", which the running server holds.\nStop the server first, or run the command in the server's interactive shell"
-                        + " (docker attach sectoriadb). Only the key commands (mk-key, keys, rm-key, enable-key, disable-key)"
+                        + " (docker attach sectoriadb). Only the key commands (mk-key, keys, rm-key, enable-key, disable-key, key-policy)"
                         + " work next to a running server.");
                 System.exit(2);
             }

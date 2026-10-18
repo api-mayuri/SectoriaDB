@@ -1,21 +1,31 @@
 package org.example.sectoriadb.shell;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.security.CredentialEntity;
 import org.example.sectoriadb.security.CredentialService;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
 @ShellComponent
 public class CredentialCommands {
 
-    private final CredentialService credentialService;
+    private static final long MAX_POLICY_FILE_BYTES = 64 * 1024;
 
-    public CredentialCommands(CredentialService credentialService) {
+    private final CredentialService credentialService;
+    private final ObjectMapper mapper;
+
+    public CredentialCommands(CredentialService credentialService, ObjectMapper mapper) {
         this.credentialService = credentialService;
+        this.mapper = mapper;
     }
 
     @ShellMethod(key = "mk-key",
@@ -78,25 +88,27 @@ public class CredentialCommands {
         }
         StringBuilder sb = new StringBuilder();
         if (secret) {
-            sb.append(String.format("%-24s  %-8s  %-30s  %-40s  %s%n",
-                    "Access Key ID", "Enabled", "Created", "Secret Key", "Description"));
-            sb.append("─".repeat(140)).append('\n');
+            sb.append(String.format("%-24s  %-8s  %-7s  %-30s  %-40s  %s%n",
+                    "Access Key ID", "Enabled", "Policy", "Created", "Secret Key", "Description"));
+            sb.append("─".repeat(150)).append('\n');
             for (CredentialEntity c : list) {
-                sb.append(String.format("%-24s  %-8s  %-30s  %-40s  %s%n",
+                sb.append(String.format("%-24s  %-8s  %-7s  %-30s  %-40s  %s%n",
                         c.getAccessKeyId(),
                         c.isEnabled() ? "yes" : "no",
+                        c.getPolicy() != null ? "yes" : "none",
                         c.getCreatedAt(),
                         c.getSecretKey(),
                         c.getDescription() != null ? c.getDescription() : ""));
             }
         } else {
-            sb.append(String.format("%-24s  %-8s  %-30s  %s%n",
-                    "Access Key ID", "Enabled", "Created", "Description"));
-            sb.append("─".repeat(90)).append('\n');
+            sb.append(String.format("%-24s  %-8s  %-7s  %-30s  %s%n",
+                    "Access Key ID", "Enabled", "Policy", "Created", "Description"));
+            sb.append("─".repeat(100)).append('\n');
             for (CredentialEntity c : list) {
-                sb.append(String.format("%-24s  %-8s  %-30s  %s%n",
+                sb.append(String.format("%-24s  %-8s  %-7s  %-30s  %s%n",
                         c.getAccessKeyId(),
                         c.isEnabled() ? "yes" : "no",
+                        c.getPolicy() != null ? "yes" : "none",
                         c.getCreatedAt(),
                         c.getDescription() != null ? c.getDescription() : ""));
             }
@@ -153,6 +165,59 @@ public class CredentialCommands {
             return "Disabled access key: " + id;
         } catch (IllegalArgumentException e) {
             return "Error: " + e.getMessage();
+        }
+    }
+
+    @ShellMethod(key = "key-policy",
+            value = "Attach, show or remove the IAM policy of an access key  |  key-policy --id ID (--file policy.json | --show | --remove)")
+    public String keyPolicy(
+            @ShellOption(help = "Access Key ID") String id,
+            @ShellOption(defaultValue = "", help = "JSON policy document to attach") String file,
+            @ShellOption(defaultValue = "false", help = "Print the attached policy") boolean show,
+            @ShellOption(defaultValue = "false", help = "Remove the policy (the key gets full access again)") boolean remove) {
+        int modes = (file.isBlank() ? 0 : 1) + (show ? 1 : 0) + (remove ? 1 : 0);
+        if (modes != 1) {
+            return "Error: give exactly one of --file POLICY.json, --show or --remove";
+        }
+        var cred = credentialService.findByAccessKeyId(id);
+        if (cred.isEmpty()) {
+            return "Error: Access key not found: " + id;
+        }
+        if (show) {
+            JsonNode policy = cred.get().getPolicy();
+            if (policy == null) {
+                return "No policy: the key has full access to every bucket.";
+            }
+            try {
+                return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(policy);
+            } catch (IOException e) {
+                return "Error: " + e.getMessage();
+            }
+        }
+        try {
+            if (remove) {
+                credentialService.setPolicy(id, null);
+                return "Removed the policy of " + id + ": the key has full access again.";
+            }
+            JsonNode policy = readPolicy(Path.of(file));
+            List<String> warnings = credentialService.setPolicy(id, policy);
+            StringBuilder sb = new StringBuilder("Policy attached to " + id
+                    + ". The running server applies it to the next request.");
+            for (String w : warnings) sb.append("\nWarning: ").append(w);
+            return sb.toString();
+        } catch (IllegalArgumentException e) {
+            return "Error: " + e.getMessage();
+        }
+    }
+
+    private JsonNode readPolicy(Path path) {
+        try {
+            if (Files.size(path) > MAX_POLICY_FILE_BYTES) {
+                throw new IllegalArgumentException("the policy file is larger than " + MAX_POLICY_FILE_BYTES + " bytes");
+            }
+            return mapper.readTree(Files.readString(path, StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            throw new IllegalArgumentException("cannot read the policy file " + path + ": " + e.getMessage());
         }
     }
 }

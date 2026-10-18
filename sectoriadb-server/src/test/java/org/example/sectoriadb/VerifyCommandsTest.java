@@ -132,7 +132,7 @@ class VerifyCommandsTest {
     /** Only the key commands work next to a running server; the metastore commands are offline-only. */
     @Test
     void onlyKeyCommandsAreOnline() {
-        assertEquals(Set.of("mk-key", "keys", "rm-key", "enable-key", "disable-key"), Application.ONLINE_COMMANDS);
+        assertEquals(Set.of("mk-key", "keys", "rm-key", "enable-key", "disable-key", "key-policy"), Application.ONLINE_COMMANDS);
         assertEquals(Set.of("bucket-acl", "object-acl", "public-list", "verify-all", "verify"), Application.OFFLINE_ONLY_COMMANDS);
         for (String c : Application.OFFLINE_ONLY_COMMANDS) assertFalse(Application.ONLINE_COMMANDS.contains(c));
     }
