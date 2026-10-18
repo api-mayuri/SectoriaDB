@@ -59,6 +59,7 @@
 | `sectoriadb.s3.auth.allow-unsigned-payload` | `true` | принимать `UNSIGNED-PAYLOAD` и `STREAMING-UNSIGNED-PAYLOAD-TRAILER`; `false` — требовать подписанное тело |
 | `sectoriadb.s3.auth.enforce-region` | `true` | регион в `Credential` должен совпадать с `sectoriadb.s3.region` |
 | `sectoriadb.s3.auth.require-signed-headers` | `true` | `host` и все `x-amz-*` обязаны входить в `SignedHeaders` |
+| `sectoriadb.s3.require-secure-transport` | `false` | `true` — запрос не по HTTPS получает `403 InsecureTransport` ещё до проверки подписи. Схема берётся из `X-Forwarded-Proto` TLS-прокси; ставьте `true` за прокси ([operations.md](operations.md#tls-через-nginx)). Это же значение видит условие `aws:SecureTransport` политик бакета |
 | `sectoriadb.s3.limits.min-body-bytes-per-second` | `1024` | минимальная средняя скорость тела запроса; медленнее — `400 RequestTimeout`; `0` выключает |
 | `sectoriadb.s3.limits.min-body-rate-grace` | `30s` | время разгона до начала проверки скорости |
 | `sectoriadb.s3.limits.max-inflight-writes-per-key` | `64` | одновременных `PUT`/`POST` на ключ доступа (сверх — `503 SlowDown`); `0` выключает |
@@ -82,6 +83,8 @@
 | `management.server.address` | не задан | привязать порт метрик к интерфейсу (`127.0.0.1`) |
 | `management.metrics.tags.application` | `SectoriaDB` | общая метка метрик |
 | `management.metrics.distribution.slo.jvm.gc.pause` | `1ms…5s` | границы гистограммы пауз GC |
+| `server.forward-headers-strategy` | `native` | схему и адрес клиента берёт Tomcat (`RemoteIpValve`) из `X-Forwarded-Proto`/`X-Forwarded-For`, **только** от пира из `server.tomcat.remoteip.internal-proxies` (по умолчанию loopback и частные сети), от остальных заголовки игнорируются |
+| `server.tomcat.remoteip.internal-proxies` | не задан (частные сети) | регулярное выражение адресов, которым доверяются `X-Forwarded-*`; сузьте до адреса прокси, если порт `8080` достижим кому-то ещё из частной сети |
 | `server.tomcat.connection-timeout` | `60s` | таймаут чтения/записи сокета |
 | `server.tomcat.keep-alive-timeout` | `30s` | простой keep-alive |
 | `server.tomcat.max-keep-alive-requests` | `1000` | запросов на соединение |

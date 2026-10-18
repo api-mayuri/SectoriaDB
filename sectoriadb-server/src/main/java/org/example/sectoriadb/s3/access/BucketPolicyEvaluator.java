@@ -17,9 +17,10 @@ import java.util.Locale;
  * Action and Resource as string or array with the wildcards {@code *} and {@code ?};
  * Statement as an array or a single object; NotAction / NotResource / NotPrincipal on Deny statements.
  *
- * Fail-closed rules (documented in docs/architecture/security.md):
- *  - an Allow statement that has a Condition block is never applied (conditions are not evaluated);
- *  - a Deny statement that has a Condition block IS applied as if the condition were true;
+ * Conditions: exactly {@code "Bool": {"aws:SecureTransport": "true"|"false"}} is evaluated (the standard way to demand
+ * TLS per bucket); anything else in a Condition block is not understood and handled fail-closed:
+ *  - an Allow statement with an unsupported Condition is never applied;
+ *  - a Deny statement with an unsupported Condition IS applied as if the condition were true;
  *  - Allow statements with NotAction / NotResource / NotPrincipal are never applied;
  *  - an unparseable policy yields {@link Decision#NONE} (no grants at all).
  */
@@ -35,8 +36,11 @@ public final class BucketPolicyEvaluator {
         this.mapper = mapper;
     }
 
-    /** @param action e.g. "s3:GetObject"; @param resource full ARN, e.g. "arn:aws:s3:::b/key" */
-    public Decision evaluate(String policyJson, String action, String resource) {
+    /**
+     * @param action e.g. "s3:GetObject"; @param resource full ARN, e.g. "arn:aws:s3:::b/key"
+     * @param secureTransport whether the request came over HTTPS ({@code aws:SecureTransport})
+     */
+    public Decision evaluate(String policyJson, String action, String resource, boolean secureTransport) {
         if (policyJson == null || policyJson.isBlank()) return Decision.NONE;
         JsonNode root;
         try {
@@ -60,18 +64,48 @@ public final class BucketPolicyEvaluator {
             boolean allow = "Allow".equals(effect);
             if (!deny && !allow) continue;
 
-            if (allow && (stmt.has("Condition") || stmt.has("NotAction")
-                    || stmt.has("NotResource") || stmt.has("NotPrincipal"))) {
+            if (allow && (stmt.has("NotAction") || stmt.has("NotResource") || stmt.has("NotPrincipal"))) {
                 continue; // fail closed: cannot grant on something we do not evaluate
             }
             if (!principalMatches(stmt)) continue;
             if (!actionMatches(stmt, action)) continue;
             if (!resourceMatches(stmt, resource)) continue;
+            if (stmt.has("Condition") && !conditionHolds(stmt.get("Condition"), secureTransport, deny)) continue;
 
             if (deny) return Decision.DENY;   // explicit Deny (incl. Deny with unevaluated Condition)
             allowed = true;
         }
         return allowed ? Decision.ALLOW : Decision.NONE;
+    }
+
+    /**
+     * True when the Condition block holds. Only {@code Bool} on {@code aws:SecureTransport} is understood; any other
+     * operator or key makes the block "unknown", which counts as true for Deny and as false for Allow.
+     */
+    private static boolean conditionHolds(JsonNode condition, boolean secureTransport, boolean deny) {
+        if (!condition.isObject() || condition.isEmpty()) return deny;
+        for (var operators = condition.fields(); operators.hasNext(); ) {
+            var op = operators.next();
+            JsonNode keys = op.getValue();
+            if (!"Bool".equals(op.getKey()) || !keys.isObject() || keys.isEmpty()) return deny;
+            for (var entries = keys.fields(); entries.hasNext(); ) {
+                var e = entries.next();
+                if (!"aws:securetransport".equals(e.getKey().toLowerCase(Locale.ROOT))) return deny;
+                if (!boolValueMatches(e.getValue(), secureTransport)) return false;   // all keys and operators must hold
+            }
+        }
+        return true;
+    }
+
+    /** Bool: the key matches when any listed value equals the actual flag; a value that is not true/false never matches. */
+    private static boolean boolValueMatches(JsonNode values, boolean actual) {
+        if (values.isArray()) {
+            for (JsonNode v : values) if (boolValueMatches(v, actual)) return true;
+            return false;
+        }
+        if (!values.isTextual() && !values.isBoolean()) return false;
+        String t = values.asText().toLowerCase(Locale.ROOT);
+        return (t.equals("true") && actual) || (t.equals("false") && !actual);
     }
 
     private static boolean principalMatches(JsonNode stmt) {

@@ -182,11 +182,11 @@ public class AccessControlService {
             if ("GET".equals(method) || "HEAD".equals(method)) {
                 // Bucket-level request (ListObjects / HeadBucket) -> s3:ListBucket
                 if (isBucketListRequest(uri, bucket)) {
-                    if (policyDecision(poolEntity, "s3:ListBucket", bucketArn) == BucketPolicyEvaluator.Decision.DENY) {
+                    if (policyDecision(request, poolEntity, "s3:ListBucket", bucketArn) == BucketPolicyEvaluator.Decision.DENY) {
                         return false;
                     }
                     return isPublicBucket(poolEntity)
-                            || policyDecision(poolEntity, "s3:ListBucket", bucketArn) == BucketPolicyEvaluator.Decision.ALLOW;
+                            || policyDecision(request, poolEntity, "s3:ListBucket", bucketArn) == BucketPolicyEvaluator.Decision.ALLOW;
                 }
 
                 String key = extractKeyFromUri(uri, bucket);
@@ -194,7 +194,7 @@ public class AccessControlService {
                     return false;
                 }
                 String resource = bucketArn + "/" + key;
-                var decision = policyDecision(poolEntity, "s3:GetObject", resource);
+                var decision = policyDecision(request, poolEntity, "s3:GetObject", resource);
                 if (decision == BucketPolicyEvaluator.Decision.DENY) return false;   // explicit Deny beats ACLs
                 // Bucket ACL does NOT make objects readable (S1): only the object ACL or a policy Allow does.
                 return isObjectPublicReadable(bucket, key) || decision == BucketPolicyEvaluator.Decision.ALLOW;
@@ -207,7 +207,7 @@ public class AccessControlService {
                     return false;
                 }
                 String action = "PUT".equals(method) ? "s3:PutObject" : "s3:DeleteObject";
-                var decision = policyDecision(poolEntity, action, bucketArn + "/" + key);
+                var decision = policyDecision(request, poolEntity, action, bucketArn + "/" + key);
                 if (decision == BucketPolicyEvaluator.Decision.DENY) return false;
                 return "public-read-write".equals(poolEntity.getAcl()) || decision == BucketPolicyEvaluator.Decision.ALLOW;
             }
@@ -364,7 +364,8 @@ public class AccessControlService {
                 .orElse(false);
     }
 
-    private BucketPolicyEvaluator.Decision policyDecision(PoolEntity pool, String action, String resource) {
-        return policyEvaluator.evaluate(pool.getPolicy(), action, resource);
+    private BucketPolicyEvaluator.Decision policyDecision(HttpServletRequest request, PoolEntity pool,
+                                                          String action, String resource) {
+        return policyEvaluator.evaluate(pool.getPolicy(), action, resource, request.isSecure());
     }
 }
