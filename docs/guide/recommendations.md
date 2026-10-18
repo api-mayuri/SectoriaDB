@@ -19,9 +19,10 @@
 
 ## Чек-лист перед боевым использованием
 
-1. **TLS-прокси впереди.** Сервер не терминирует TLS; всегда ставьте перед ним обратный прокси с HTTPS (пример ниже). Порт `8080` наружу не публикуйте — только прокси.
-2. **Порт управления `9464` никогда не публиковать наружу** (метрики и health без аутентификации). В compose он уже на `127.0.0.1`; на голом jar привяжите `management.server.address=127.0.0.1`.
-3. **Ключи** — через `mk-key` или `SECTORIADB_S3_CREDENTIALS`; **не запускайте с `sectoriadb.s3.auth.allow-open-setup=true`** и не отключайте `sectoriadb.s3.auth.enabled`. Один ключ — одному приложению. s3manager из compose (`8081`) работает с полными правами: не публикуйте или не запускайте на проде.
+1. **TLS-прокси впереди.** Сервер не терминирует TLS; перед ним стоит nginx из `docker-compose.yml` ([проверенная конфигурация ниже](#обратный-прокси-nginx)): настоящий сертификат в `deploy/certs/`, `SECTORIADB_S3_REQUIRE_SECURE_TRANSPORT=true` (в compose так по умолчанию), порт `8080` наружу не публикуется — только `443`/`80` nginx.
+   Не запускайте боевой экземпляр с `docker-compose.dev.yml` (там нет TLS).
+2. **Порт управления `9464` никогда не публиковать наружу** (метрики и health без аутентификации). В compose он уже на `127.0.0.1`, через nginx не проксируется; на голом jar привяжите `management.server.address=127.0.0.1`.
+3. **Ключи** — через `mk-key` или `SECTORIADB_S3_CREDENTIALS`; **не запускайте с `sectoriadb.s3.auth.allow-open-setup=true`** и не отключайте `sectoriadb.s3.auth.enabled`. Один ключ — одному приложению. s3manager (`8081`, только в `docker-compose.dev.yml`) работает с полными правами: на проде не запускайте.
 4. **`sectoriadb.fsync=true`** (по умолчанию). Отключение даёт скорость ценой потери подтверждённых записей при сбое питания — только для тестов.
 5. **`meta-dir` и `data-dir` на одной файловой системе (одном томе)** и этот том зашифрован (LUKS, шифрованный диск облака): иначе нельзя сделать атомарный снимок, согласованный по обеим частям, а шифрования на уровне приложения нет.
    Сейчас `docker-compose.yml` использует два именованных тома — для боевого развёртывания замените их двумя подкаталогами одного монтирования, например:
@@ -33,42 +34,47 @@
 
 ## Обратный прокси (nginx)
 
-Требования к прокси, вытекающие из устройства сервера:
-- **`Host` передавать как пришёл** (`$http_host`): SigV4 подписывает `host`, любое изменение — `SignatureDoesNotMatch`.
-- **Путь не переписывать и не нормализовать**: ключ `a//b` или `../x` — обычные ключи, подписанный канонический URI должен дойти без изменений. Поэтому `proxy_pass` без URI-части и `merge_slashes off`.
-- Размер тела — до 5 ГиБ на запрос (`PutObject`/`UploadPart`): `client_max_body_size 5g`.
-- Не буферизовать запрос (`proxy_request_buffering off`: иначе тело ляжет на диск прокси, а сервер увидит его только после полной загрузки) и ответ (`proxy_buffering off`: потоковая отдача больших `GET`).
-- Длинные таймауты: загрузки и скачивания идут минутами. Сервер сам отсекает медленные тела (меньше 1 КиБ/с после 30 с — `400 RequestTimeout`) и держит `connection-timeout=60s`.
-- HTTP/1.1 к бэкенду, без заголовка `Connection: close`.
+**Проверено.** Конфигурация [deploy/nginx/sectoriadb.conf](../../deploy/nginx/sectoriadb.conf) (сервис `nginx` в `docker-compose.yml`, образ `nginx:1.27.5-alpine`) прошла проверку реальными клиентами при включённой проверке подписи
+(матрица ниже). Установка, сертификаты и `require-secure-transport` — [operations.md](operations.md#tls-через-nginx).
 
-```nginx
-server {
-    listen 443 ssl http2;
-    server_name s3.example.com;
+Требования к прокси, вытекающие из устройства сервера, и как они выполнены:
 
-    ssl_certificate     /etc/ssl/s3.example.com/fullchain.pem;
-    ssl_certificate_key /etc/ssl/s3.example.com/privkey.pem;
+| Требование | Директива | Что будет без неё |
+|---|---|---|
+| `Host` как пришёл, вместе с портом | `proxy_set_header Host $http_host;` | SigV4 подписывает `host`: `SignatureDoesNotMatch` |
+| Путь не переписывается | `proxy_pass http://sectoriadb;` **без URI-части** | nginx отправил бы нормализованный путь; ключи с пробелами, `+`, `%`, `//`, `../`, юникодом и эмодзи не сошлись бы с подписью. `merge_slashes off` не нужен: путь берётся из исходной строки запроса (проверено и с `merge_slashes on`) |
+| Тело до 5 ГиБ | `client_max_body_size 5g;` | `413` на больших загрузках (проверено: заголовок `Content-Length` больше лимита сразу даёт `413`) |
+| Без буферизации запроса и ответа | `proxy_request_buffering off; proxy_buffering off;` | тело ложится на диск прокси и доходит до сервера после полной загрузки; `GET` большого объекта не стримится |
+| Длинные операции | `proxy_send_timeout`, `proxy_read_timeout`, `send_timeout` — `3600s` | обрыв на минутной загрузке/скачивании |
+| HTTP/1.1 и keep-alive к серверу | `proxy_http_version 1.1; proxy_set_header Connection "";` + `upstream … { keepalive 32; }` | новое TCP-соединение на каждый запрос |
+| Схема для сервера | `proxy_set_header X-Forwarded-Proto $scheme;` | `require-secure-transport` отвергает все запросы; `aws:SecureTransport` в политиках не сработает |
+| Заголовки с `_` | `underscores_in_headers on;` | nginx по умолчанию молча отбрасывает такие заголовки (S3-клиентам они не нужны, но не теряем) |
 
-    client_max_body_size 5g;
-    merge_slashes off;                 # ключи объектов могут содержать "//"
+Что проверено в потоке данных (через nginx, подпись включена): `aws-chunked` с `Transfer-Encoding: chunked` и `Expect: 100-continue` (так по умолчанию грузит `aws cli`/botocore) проходит; `Expect: 100-continue` с известной длиной — клиент получает `100 Continue` и `200`;
+`PUT` с `Transfer-Encoding: chunked` без `aws-chunked` и без `Content-Length` получает `411 MissingContentLength` — так же, как без прокси (сервер требует размер, [security.md](../architecture/security.md)); HTTP/2 к nginx работает (`curl --http2`);
+TLS 1.0 и 1.1 отвергаются (`protocol version`), 1.2 и 1.3 принимаются. Известное ограничение сервера, не прокси: `%2F` внутри пути (закодированный `/`) отклоняет Tomcat (`400`) и без nginx; SDK и CLI слэш в ключе не кодируют.
 
-    location / {
-        proxy_pass http://127.0.0.1:8080;      # без URI-части: путь уходит как есть
-        proxy_http_version 1.1;
-        proxy_set_header Host $http_host;       # подпись SigV4 покрывает Host
-        proxy_set_header Connection "";
-        proxy_request_buffering off;            # тело сразу к серверу
-        proxy_buffering off;                    # потоковая отдача GET
-        proxy_connect_timeout 10s;
-        proxy_send_timeout    3600s;
-        proxy_read_timeout    3600s;
-        send_timeout          3600s;
-    }
-}
-```
+**Матрица клиентов** (все через `https://localhost`, самоподписанный сертификат из `deploy/gen-self-signed.sh`, `sectoriadb.s3.auth.enabled=true`, `require-secure-transport=true`):
 
-Адрес бэкенда `127.0.0.1:8080` — для прокси на том же хосте (в compose тогда опубликуйте порт только на loopback: `ports: ["127.0.0.1:8080:8080"]`). Этот блок станет готовым сервисом compose на следующем этапе;
-пока он приведён как образец и конфигурацией проекта не проверялся — проверьте `aws s3 cp` большого файла, `ls` ключа с `//` и presigned-ссылку через ваш прокси.
+| Клиент | Что проверено | Итог |
+|---|---|---|
+| `aws cli` 1.46.1 (botocore 1.43) | `mb`, `cp` малого и 200 МиБ (multipart, 25 частей, `aws-chunked` + трейлер CRC32), `cp` обратно (sha256 совпал), `ls`, `GET` с `Range`, `presign` + `curl` (диапазон и целиком), `put-object --checksum-algorithm SHA256`, загрузка из stdin, 9 ключей с пробелами, `+`, `%`, `//`, `../`, `?#&;`, юникодом и эмодзи (запись, чтение, листинг) | работает |
+| `rclone` 1.75.2 | `copy` каталога (малые, 120 МиБ, имя с пробелом, `+` и эмодзи), multipart (`--s3-upload-cutoff 50M`, 8 частей), `check --download`, `copy` обратно (`diff -r` пуст) | работает |
+| `s3cmd` 2.4.0 | `ls`, `put`/`get` с именем из пробела, `+` и юникода, multipart 40 МиБ (`--multipart-chunk-size-mb=15`) | работает |
+| `curl` 8.5 | presigned `GET` (HTTP/1.1 и HTTP/2, `Range`), `PUT` по presigned-ссылке с `Expect: 100-continue`, `--aws-sigv4` с путём `../` | работает |
+| `minio/warp` 1.3.1 | `mixed`, 16 потоков, 1 МиБ и 4 КиБ, `--tls --insecure` | без ошибок |
+| `http://localhost:80` | `301` на `https://localhost/<тот же путь и запрос>` | работает |
+| `http://localhost:8080` с хоста | порт не опубликован: соединение отвергнуто | как задумано |
+| запрос в сервер мимо nginx по HTTP (из сети compose) | `403 InsecureTransport` | как задумано |
+
+Накладные расходы TLS и прокси, один короткий замер (`warp mixed`, 16 потоков, 30 с, 4 vCPU песочницы, на которых одновременно работают warp, nginx и сервер — это худший случай; цифры не про боевое железо и сильно зависят от процессора и от того, где клиент):
+
+| Профиль `warp mixed` | напрямую (`sectoriadb:8080`) | через nginx + TLS (`nginx:443`) | разница |
+|---|---|---|---|
+| 1 МиБ, два прогона в разном порядке | 490 и 488 МиБ/с (817 и 814 объектов/с) | 340 и 314 МиБ/с (566 и 523 объектов/с) | −31…−36 % |
+| 4 КиБ, один прогон | 2561 объектов/с | 1991 объектов/с | −22 % |
+
+Ошибок в прогонах не было. Отключение HTTP/2 на nginx цифры не меняет (320 МиБ/с на 1 МиБ). Это порядок величины на 4 vCPU, где процессор делят warp, nginx и сервер; на своём железе замерьте сами (`bench/warp`).
 
 ## Резервные копии и проверка
 
@@ -130,13 +136,19 @@ ACL, политики бакетов и ключи доступа не копи�
 Всегда **path-style** (`http(s)://host/bucket/key`; virtual-hosted не поддерживается) и регион, равный `sectoriadb.s3.region` (`us-east-1` по умолчанию; иначе `AuthorizationHeaderMalformed`).
 Проверялись набором совместимости ([compatibility.md](../testing/compatibility.md)): `aws cli`, boto3 (ceph/s3-tests), `s3cmd`, `mc`, AWS SDK Go/PHP/Ruby и minio-SDK (часть наборов mint завершается с известными отказами). `rclone` в наборы не входит — настройка ниже стандартная, проверьте её на вашем экземпляре.
 
+Ниже — настройки для HTTPS через nginx; проверены на `aws cli` 1.46.1, `rclone` 1.75.2 и `s3cmd` 2.4.0 (в проверке вместо `s3.example.com` был `localhost` с самоподписанным сертификатом). Строки про свой CA нужны только для самоподписанного или корпоративного сертификата;
+для Let's Encrypt их не добавляйте.
+
 `aws cli` (`~/.aws/config`):
 
 ```ini
 [profile sectoria]
 region = us-east-1
+# ca_bundle нужен только для самоподписанного или корпоративного CA
+ca_bundle = /путь/к/fullchain.pem
 s3 =
     addressing_style = path
+    signature_version = s3v4
     multipart_threshold = 64MB
     multipart_chunksize = 16MB
 endpoint_url = https://s3.example.com
@@ -150,8 +162,9 @@ aws_secret_access_key = ВАШ_СЕКРЕТ
 ```bash
 aws --profile sectoria s3 cp big.iso s3://bucket/ --checksum-algorithm SHA256       # сервер сверит сумму
 aws --profile sectoria s3api head-object --bucket bucket --key big.iso --checksum-mode ENABLED
+aws --profile sectoria s3 presign s3://bucket/big.iso --expires-in 3600              # ссылка открывается в curl/браузере
 ```
-Директива `endpoint_url` в профиле требует AWS CLI v2 (v1: ключ `--endpoint-url`). Если клиент по умолчанию отправляет неподдерживаемую сумму/режим — задайте
+`signature_version = s3v4` нужен AWS CLI v1: без него `presign` выдаёт подпись v2 (`AWSAccessKeyId=…`), которую сервер не принимает. Директива `endpoint_url` в профиле работает в AWS CLI v2 и в проверенной v1.46; на старых v1 используйте ключ `--endpoint-url`. По умолчанию клиент (`aws-chunked` с трейлером CRC32) сервер принимает; если ваш клиент шлёт неподдерживаемую сумму/режим — задайте
 `request_checksum_calculation = when_required` (новые версии CLI/SDK) — сервер принимает CRC32/CRC32C/CRC64NVME/SHA1/SHA256.
 
 `rclone` (`rclone.conf`):
@@ -167,6 +180,7 @@ region = us-east-1
 force_path_style = true
 chunk_size = 16M
 ```
+Свой CA: ключ `--ca-cert /путь/к/fullchain.pem` в командной строке (в `rclone.conf` его нет). Multipart включается выше `upload_cutoff` (по умолчанию 200 МиБ; для проверки `--s3-upload-cutoff 50M`).
 
 `s3cmd` (`~/.s3cfg`):
 
@@ -176,8 +190,11 @@ secret_key = ВАШ_СЕКРЕТ
 host_base = s3.example.com
 host_bucket = s3.example.com
 use_https = True
+# ca_certs_file нужен только для самоподписанного или корпоративного CA
+ca_certs_file = /путь/к/fullchain.pem
 bucket_location = us-east-1
 signature_v2 = False
 ```
+`s3cmd signurl` подписывает по v2 и выдаёт `http://`-ссылку — для presigned-ссылок используйте `aws s3 presign`.
 
 Для проверки целостности на стороне клиента включайте `--checksum-algorithm` (CLI/SDK) и читайте с `x-amz-checksum-mode: ENABLED`; клиент, не сверяющий длину ответа, может принять обрыв повреждённого `GET` за конец файла.

@@ -4,18 +4,22 @@
 
 ```bash
 cp .env.example .env            # задайте ключ: SECTORIADB_S3_ACCESS_KEY / SECTORIADB_S3_SECRET_KEY (секрет не короче 16 символов)
-docker compose up -d --build    # сервис sectoriadb (+ необязательный веб-интерфейс s3manager)
+deploy/gen-self-signed.sh       # для проверки: самоподписанный сертификат в deploy/certs/ (боевой — см. «TLS через nginx»)
+docker compose up -d --build    # сервисы sectoriadb и nginx (TLS)
 docker compose logs -f sectoriadb
 ```
+
+Для разработки без TLS: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build` — дополнительно публикует S3-порт `127.0.0.1:8080` и запускает веб-интерфейс s3manager.
 
 | Что | Как устроено |
 |---|---|
 | Образ | двухстадийный `Dockerfile`: сборка Maven, запуск на `eclipse-temurin:21-jre-alpine` от непривилегированного пользователя `sectoria` |
-| Порты | `8080` — S3 API (на всех интерфейсах); `9464` — метрики и health, публикуется только на `127.0.0.1` хоста; `8081` — s3manager, тоже только на loopback |
+| Порты | `443` и `80` — nginx (HTTPS и редирект на него), единственный вход для S3-клиентов; `8080` — S3 API сервера, **на хост не публикуется** (виден только nginx по сети compose; в `docker-compose.dev.yml` — `127.0.0.1:8080`); `9464` — метрики и health, только `127.0.0.1` хоста; `8081` — s3manager (только в `docker-compose.dev.yml`, loopback) |
+| TLS | сервис `nginx` (`nginx:1.27.5-alpine`), конфигурация `deploy/nginx/sectoriadb.conf`, сертификат `deploy/certs/{fullchain,privkey}.pem`; сервер получает `SECTORIADB_S3_REQUIRE_SECURE_TRANSPORT=true` и отвечает `403 InsecureTransport` на всё, что пришло не по HTTPS |
 | Тома | `sectoriadb-meta` → `/data/meta` (метаданные), `sectoriadb-data` → `/data/storage` (блобы и спул загрузок). Переживают пересборку и перезапуск |
 | Остановка | `server.shutdown=graceful` (30 с), `stop_grace_period: 40s`: текущие запросы дозавершаются |
 | Перезапуск | `restart: unless-stopped`; `-XX:+ExitOnOutOfMemoryError` завершает процесс при нехватке памяти, чтобы он поднялся чистым |
-| Healthcheck | `wget` к `http://127.0.0.1:9464/actuator/health` раз в 30 с (старт до 40 с, 3 попытки); S3-порт для этого не годится — анонимные запросы получают `403`. s3manager стартует после `service_healthy` |
+| Healthcheck | `wget` к `http://127.0.0.1:9464/actuator/health` раз в 30 с (старт до 40 с, 3 попытки); S3-порт для этого не годится — анонимные запросы получают `403`. nginx и s3manager стартуют после `service_healthy` |
 | Консоль | `docker attach sectoriadb` (compose включает `stdin_open`/`tty`); разовые команды — [admin-shell.md](admin-shell.md) |
 
 Первый запуск: пока нет ни одного ключа, все S3-запросы получают `403` (если не включён `allow-open-setup`). Создайте ключ
@@ -23,6 +27,41 @@ docker compose logs -f sectoriadb
 
 Запуск без Docker: `mvn package -DskipTests`, затем `java -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar` (нужен JDK 21).
 Свойства: [configuration.md](configuration.md).
+
+## TLS через nginx
+
+Сервер сам TLS не терминирует (и не будет): шифрование выносится в nginx, который в `docker-compose.yml` уже стоит перед сервером. Конфигурация — [deploy/nginx/sectoriadb.conf](../../deploy/nginx/sectoriadb.conf);
+**проверено** на nginx 1.27.5 с реальными клиентами (таблица в [recommendations.md](recommendations.md#обратный-прокси-nginx)).
+
+**Что делает конфигурация**
+- `443`: TLS 1.2/1.3, современные шифры (ECDHE + AES-GCM/ChaCha20, без сессионных билетов), HSTS (`max-age=63072000`), HTTP/2 для клиентов, которые его умеют.
+- `80`: `301` на `https://$host$request_uri` (путь и запрос сохраняются как есть). Для нестандартного внешнего порта HTTPS (`HTTPS_PORT`) поправьте адрес редиректа в конфигурации.
+- Прокси к `sectoriadb:8080` без переписывания пути, `Host` как пришёл (с портом), `X-Forwarded-Proto`/`X-Forwarded-For`, без буферизации запроса и ответа, тело до 5 ГиБ, таймауты по часу, keep-alive к серверу.
+- Порт управления (`9464`: метрики и health без подписи) через nginx **не проксируется**.
+
+**Сертификат**
+- Проверка на своей машине: `deploy/gen-self-signed.sh [имя-или-IP ...]` создаёт `deploy/certs/fullchain.pem` и `privkey.pem` (по умолчанию `localhost`, `127.0.0.1`, `::1`). Клиентам нужно доверять ему:
+  `aws --ca-bundle deploy/certs/fullchain.pem …` (или `AWS_CA_BUNDLE`), `curl --cacert …`, `ca_certs_file` в s3cmd, `--ca-cert` в rclone; `--no-verify-ssl` — только для проверок.
+- Боевой: положите в `deploy/certs/` цепочку сертификатов (`fullchain.pem`) и ключ (`privkey.pem`) от корпоративного CA или Let's Encrypt. Каталог в `.gitignore`, ключ не коммитить.
+  Let's Encrypt: получите сертификат `certbot` любым способом (например, `certbot certonly --standalone -d s3.example.com`, пока nginx остановлен, или webroot — в `server` на порту 80 в конфигурации оставлен комментарий-подсказка) и скопируйте
+  `fullchain.pem`/`privkey.pem` из `/etc/letsencrypt/live/<имя>/` в `deploy/certs/` (копируйте файлы, а не симлинки: симлинки на каталог вне монтирования внутри контейнера не откроются).
+  Автоматизации выпуска в проекте нет. После обновления сертификата: `docker compose exec nginx nginx -s reload`.
+- Имя сертификата должно совпадать с именем, по которому ходят клиенты (path-style: `https://s3.example.com/bucket/key`; виртуальные хосты `bucket.s3.example.com` не поддерживаются).
+
+**Обязательно за прокси**
+- `sectoriadb.s3.require-secure-transport=true` (в compose включено по умолчанию, переменная `SECTORIADB_S3_REQUIRE_SECURE_TRANSPORT`): запрос не по HTTPS получает `403 InsecureTransport` до проверки подписи.
+  Схему сервер берёт из `X-Forwarded-Proto` (`server.forward-headers-strategy=native`, `RemoteIpValve` Tomcat), **но только если запрос пришёл от доверенного прокси** — адреса из `server.tomcat.remoteip.internal-proxies`
+  (по умолчанию loopback и частные сети: `10/8`, `172.16/12`, `192.168/16`). От остальных адресов заголовок игнорируется, так что подделать его снаружи нельзя.
+  Следствия: (1) не публикуйте порт `8080` наружу — любой хост из частной сети (в том числе шлюз Docker, то есть сам хост) может прислать `X-Forwarded-Proto: https` и обойти проверку; (2) если порт `8080` достижим из частной сети, сузьте доверие до адреса nginx:
+  `SERVER_TOMCAT_REMOTEIP_INTERNAL_PROXIES=172\.18\.0\.2`; (3) в `docker-compose.dev.yml` проверка выключена, потому что там клиенты ходят по HTTP.
+- Свойство защищает от ошибок настройки (клиент по `http://`, порт, случайно открытый наружу). Оно не заменяет шифрование на пути: TLS-соединение клиента заканчивается в nginx, участок nginx → сервер идёт по сети compose открытым текстом.
+  Если nginx и сервер на разных хостах — поднимите между ними VPN/WireGuard или отдельную сеть.
+- Если пересоздали контейнер `sectoriadb` не через compose, перечитайте адрес: `docker compose restart nginx` (nginx разрешает имя сервера при старте; compose перезапускает его сам благодаря `depends_on … restart: true`).
+
+**Политика бакета «только TLS».** Условие `Bool` / `aws:SecureTransport` в политиках вычисляется (единственное поддерживаемое условие, [s3-usage.md](s3-usage.md#политики-бакета)). Политики действуют только на анонимные запросы,
+поэтому типичный сценарий — публичный бакет, читаемый только по HTTPS:
+`{"Effect":"Deny","Principal":"*","Action":"s3:*","Resource":["arn:aws:s3:::b","arn:aws:s3:::b/*"],"Condition":{"Bool":{"aws:SecureTransport":"false"}}}`.
+Для подписанных запросов то же гарантирует `require-secure-transport` на уровне сервера.
 
 ## Что лежит на диске
 
@@ -120,6 +159,6 @@ docker compose logs -f sectoriadb
 
 ## Безопасность эксплуатации
 
-- Не публикуйте порт метрик `9464` наружу (без подписи), порт `8081` s3manager (полные права) и сам `8080` без TLS-прокси; `.env` не коммитьте.
+- Не публикуйте порт метрик `9464` наружу (без подписи), порт `8081` s3manager (полные права) и сам `8080` (только через nginx с TLS: [TLS через nginx](#tls-через-nginx)); `.env` и `deploy/certs/` не коммитьте.
 - Не отключайте авторизацию на доступном из сети сервере (`sectoriadb.s3.auth.enabled=false` — только для разработки), не оставляйте `allow-open-setup=true`.
 - Подробнее — [security.md](../architecture/security.md).

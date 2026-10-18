@@ -6,7 +6,7 @@ S3-совместимое хранилище объектов на Java 21 и Sp
 
 > Проект учебный и экспериментальный. Перед использованием для важных данных прочитайте [известные ограничения](docs/README.md#известные-ограничения-и-планы).
 
-> **Перед боевым использованием прочитайте [рекомендации](docs/guide/recommendations.md):** когда SectoriaDB подходит, TLS-прокси, резервные копии, память, мониторинг.
+> **Перед боевым использованием прочитайте [рекомендации](docs/guide/recommendations.md):** когда SectoriaDB подходит, TLS (nginx), резервные копии, память, мониторинг.
 
 ## Возможности
 
@@ -26,14 +26,18 @@ cp .env.example .env
 # откройте .env и задайте ключ (секрет не короче 16 символов):
 #   SECTORIADB_S3_ACCESS_KEY=ваш_access_key
 #   SECTORIADB_S3_SECRET_KEY=ваш_секретный_ключ_не_короче_16_символов
+deploy/gen-self-signed.sh      # сертификат для проверки (боевой — в deploy/certs/, см. guide/operations.md)
 docker compose up -d --build
 ```
 
+TLS терминирует nginx из compose; порт самого сервера (`8080`) на хост не публикуется.
+
 | Адрес | Что это |
 |---|---|
-| `http://localhost:8080` | S3 API |
-| `http://localhost:8081` | веб-интерфейс s3manager (сторонний, необязательный, только с этого хоста) |
+| `https://localhost` | S3 API (nginx, TLS); `http://localhost` отвечает `301` на HTTPS |
 | `http://127.0.0.1:9464/actuator/prometheus` | метрики и `/actuator/health` (без подписи, только loopback) |
+
+Разработка без TLS: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build` — дополнительно `http://localhost:8080` (S3, только loopback) и `http://localhost:8081` (веб-интерфейс s3manager, сторонний, необязательный).
 
 Данные лежат в Docker-томах `sectoriadb-meta` и `sectoriadb-data` и переживают пересборку. Подробности — [guide/operations.md](docs/guide/operations.md).
 
@@ -70,12 +74,13 @@ $X rm-key --id ID1,ID2 --yes                # удалить
 aws configure set aws_access_key_id     <AccessKeyId>
 aws configure set aws_secret_access_key <SecretKey>
 aws configure set default.region        us-east-1
+aws configure set default.ca_bundle     "$PWD/deploy/certs/fullchain.pem"   # только для самоподписанного сертификата
 
-aws s3 --endpoint-url http://localhost:8080 mb s3://my-bucket
-aws s3 --endpoint-url http://localhost:8080 cp photo.jpg s3://my-bucket/
-aws s3 --endpoint-url http://localhost:8080 ls s3://my-bucket
-aws s3 --endpoint-url http://localhost:8080 cp s3://my-bucket/photo.jpg ./copy.jpg
-aws s3 --endpoint-url http://localhost:8080 presign s3://my-bucket/photo.jpg --expires-in 3600
+aws s3 --endpoint-url https://localhost mb s3://my-bucket
+aws s3 --endpoint-url https://localhost cp photo.jpg s3://my-bucket/
+aws s3 --endpoint-url https://localhost ls s3://my-bucket
+aws s3 --endpoint-url https://localhost cp s3://my-bucket/photo.jpg ./copy.jpg
+aws s3 --endpoint-url https://localhost presign s3://my-bucket/photo.jpg --expires-in 3600
 ```
 
 Регион клиента должен совпадать с `sectoriadb.s3.region` (по умолчанию `us-east-1`). Объекты приватны; как открыть их всем — [guide/s3-usage.md](docs/guide/s3-usage.md).
@@ -93,8 +98,8 @@ aws s3 --endpoint-url http://localhost:8080 presign s3://my-bucket/photo.jpg --e
 
 ## Безопасность в двух словах
 
-- Не публикуйте `.env` (там реальные ключи) и порты `9464` (метрики без подписи) и `8081` (s3manager с полными правами) наружу.
-- Не отключайте авторизацию (`sectoriadb.s3.auth.enabled=false`) и не включайте `allow-open-setup` на сервере, доступном из сети. Сервер не терминирует TLS — для интернета нужен обратный прокси с HTTPS.
+- Не публикуйте `.env` (там реальные ключи), `deploy/certs/` и порты `9464` (метрики без подписи), `8080` (без TLS) и `8081` (s3manager с полными правами) наружу.
+- Не отключайте авторизацию (`sectoriadb.s3.auth.enabled=false`) и не включайте `allow-open-setup` на сервере, доступном из сети. Сервер не терминирует TLS: в compose это делает nginx, `sectoriadb.s3.require-secure-transport=true` отвергает запросы не по HTTPS ([guide/operations.md](docs/guide/operations.md#tls-через-nginx)).
 - IAM нет: любой действующий ключ имеет полный доступ ко всему. `public-read` на бакете открывает только листинг; чтение объекта открывают ACL объекта или политика. Подробности — [architecture/security.md](docs/architecture/security.md).
 - Перед важными операциями делайте согласованную копию обоих томов ([резервное копирование](docs/guide/operations.md#резервное-копирование)).
 

@@ -100,7 +100,8 @@
 
 ## Переменные окружения Docker
 
-`docker-compose.yml` пробрасывает (значения по умолчанию в скобках): `HOST_PORT` (8080), `SERVER_PORT`, `METRICS_HOST_PORT` (9464, только на loopback),
+`docker-compose.yml` пробрасывает (значения по умолчанию в скобках): `HTTPS_PORT` (443) и `HTTP_PORT` (80) — порты nginx на хосте; `HOST_PORT` (8080, только в `docker-compose.dev.yml`, на loopback), `SERVER_PORT`, `METRICS_HOST_PORT` (9464, только на loopback),
+`SECTORIADB_S3_REQUIRE_SECURE_TRANSPORT` (`true` в compose, `false` в dev-файле),
 `MANAGEMENT_SERVER_PORT`, `SECTORIADB_S3_REGION`, `SECTORIADB_S3_AUTH_ENABLED`, `SECTORIADB_S3_AUTH_ALLOW_OPEN_SETUP`,
 `SECTORIADB_S3_AUTH_ALLOW_UNSIGNED_PAYLOAD`, `SECTORIADB_S3_ACCESS_KEY`, `SECTORIADB_S3_SECRET_KEY`, `SECTORIADB_S3_CREDENTIALS`,
 `SECTORIADB_CACHE_MAX_RESIDENT_TABLES`, `JAVA_OPTS` (`-XX:MaxRAMPercentage=70 -XX:+ExitOnOutOfMemoryError -XX:+UseG1GC`),
