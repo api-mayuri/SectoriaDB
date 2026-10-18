@@ -15,8 +15,10 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -31,8 +33,24 @@ public class JsonCredentialRepository implements CredentialRepository {
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
     /** Immutable view of credentials.json as of file modification time and size; replaced as a whole, never mutated. */
-    private record Snapshot(List<CredentialEntity> entries, long modifiedTime, long fileSize) {
+    /**
+     * The cached view and the identity of the file it was read from. Every write is an atomic replace, so a new version is
+     * a new file: comparing the file key (inode) as well as the full-precision time and the size never misses a change,
+     * even two writes of the same size within one timestamp tick (a missed policy or disable would keep a key's old rights).
+     */
+    private record Snapshot(List<CredentialEntity> entries, Object fileKey, FileTime modifiedTime, long fileSize) {
+
+        static Snapshot of(List<CredentialEntity> entries, BasicFileAttributes attrs) {
+            return new Snapshot(entries, attrs.fileKey(), attrs.lastModifiedTime(), attrs.size());
+        }
+
+        boolean sameFile(BasicFileAttributes attrs) {
+            return Objects.equals(fileKey, attrs.fileKey()) && Objects.equals(modifiedTime, attrs.lastModifiedTime())
+                    && fileSize == attrs.size();
+        }
     }
+
+    private static final Snapshot ABSENT = new Snapshot(List.of(), null, null, -1);
 
     private volatile Snapshot snapshot = null;
 
@@ -103,26 +121,19 @@ public class JsonCredentialRepository implements CredentialRepository {
     /** The current credentials as an immutable list; reloads the file when its time or size changed (the admin CLI edits it too). */
     private List<CredentialEntity> readAll() {
         if (!Files.exists(dataFile)) {
-            Snapshot s = snapshot;
-            if (s == null || s.modifiedTime() != -1) {
-                s = new Snapshot(List.of(), -1, -1);
-                snapshot = s;
-            }
-            return s.entries();
+            snapshot = ABSENT;
+            return ABSENT.entries();
         }
 
         try {
             BasicFileAttributes attrs = Files.readAttributes(dataFile, BasicFileAttributes.class);
-            long modTime = attrs.lastModifiedTime().toMillis();
-            long fileSize = attrs.size();
-
             Snapshot s = snapshot;
-            if (s != null && modTime == s.modifiedTime() && fileSize == s.fileSize()) {
+            if (s != null && s != ABSENT && s.sameFile(attrs)) {
                 return s.entries();
             }
 
             List<CredentialEntity> loaded = List.copyOf(mapper.readValue(dataFile.toFile(), LIST_TYPE));
-            snapshot = new Snapshot(loaded, modTime, fileSize);
+            snapshot = Snapshot.of(loaded, attrs);
             return loaded;
         } catch (IOException e) {
             log.error("Failed to read credentials.json: {}", e.getMessage());
@@ -134,7 +145,7 @@ public class JsonCredentialRepository implements CredentialRepository {
     private void publish(List<CredentialEntity> written) {
         try {
             BasicFileAttributes attrs = Files.readAttributes(dataFile, BasicFileAttributes.class);
-            snapshot = new Snapshot(List.copyOf(written), attrs.lastModifiedTime().toMillis(), attrs.size());
+            snapshot = Snapshot.of(List.copyOf(written), attrs);
         } catch (IOException e) {
             snapshot = null;
         }

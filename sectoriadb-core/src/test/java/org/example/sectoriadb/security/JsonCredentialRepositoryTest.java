@@ -6,7 +6,9 @@ import org.example.sectoriadb.config.StorageProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -68,5 +70,30 @@ class JsonCredentialRepositoryTest {
         repo.deleteByAccessKeyId("a");
         assertEquals(1, repo.findAll().size());
         assertEquals(2, before.size() + 1);
+    }
+
+    @Test
+    void aSameSizeChangeByAnotherProcessIsSeenEvenWithinOneTimestampTick() throws Exception {
+        StorageProperties props = new StorageProperties();
+        props.setMetaDir(dir.toString());
+        JsonCredentialRepository server = new JsonCredentialRepository(new ObjectMapper(), props);
+        JsonCredentialRepository cli = new JsonCredentialRepository(new ObjectMapper(), props);
+        CredentialEntity c = cred("a");
+        c.setDescription("aaaa");
+        server.save(c);
+        assertEquals("aaaa", server.findByAccessKeyId("a").orElseThrow().getDescription());
+
+        Path file = dir.resolve("credentials.json");
+        FileTime before = Files.getLastModifiedTime(file);
+        long sizeBefore = Files.size(file);
+        CredentialEntity changed = cli.findByAccessKeyId("a").orElseThrow();
+        changed.setDescription("bbbb");   // same length: the file size does not change
+        cli.save(changed);
+        // make the replacement indistinguishable by time as well (a coarse-timestamp file system, or the same tick)
+        Files.setLastModifiedTime(file, before);
+        assertEquals(sizeBefore, Files.size(file));
+
+        assertEquals("bbbb", server.findByAccessKeyId("a").orElseThrow().getDescription(),
+                "the server must see the other process's change (a missed disable or policy keeps old rights)");
     }
 }
