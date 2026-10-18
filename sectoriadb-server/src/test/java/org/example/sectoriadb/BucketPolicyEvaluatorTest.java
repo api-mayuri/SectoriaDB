@@ -141,4 +141,65 @@ class BucketPolicyEvaluatorTest {
         String empty = "{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:GetObject\",\"Resource\":\"*\",\"Condition\":{}}";
         assertEquals(Decision.NONE, ev.evaluate(policy(empty), "s3:GetObject", "arn:aws:s3:::b/k", true));
     }
+
+    private static final String KEY = "SCTRIAABCDEFGHIJKLMN";
+
+    private BucketPolicyEvaluator.Request asKey(String action, String resource, java.util.Map<String, String> context) {
+        return new BucketPolicyEvaluator.Request(action, resource, KEY, true, context);
+    }
+
+    @Test
+    void principalNamingTheKeyMatchesOnlyThatKeyAndNeverAnAnonymousCaller() {
+        for (String principal : new String[]{
+                "\"" + BucketPolicyEvaluator.principalArn(KEY) + "\"", "{\"AWS\":\"" + KEY + "\"}",
+                "{\"AWS\":[\"arn:aws:iam::sectoriadb:user/x\",\"" + BucketPolicyEvaluator.principalArn(KEY) + "\"]}",
+                "\"*\"", "{\"AWS\":\"*\"}"}) {
+            String allow = "{\"Effect\":\"Allow\",\"Principal\":" + principal + ",\"Action\":\"s3:GetObject\",\"Resource\":\"*\"}";
+            assertEquals(Decision.ALLOW, ev.evaluate(policy(allow), asKey("s3:GetObject", "arn:aws:s3:::b/k", java.util.Map.of())), principal);
+        }
+        String named = "{\"Effect\":\"Allow\",\"Principal\":{\"AWS\":\"" + KEY + "\"},\"Action\":\"s3:GetObject\",\"Resource\":\"*\"}";
+        assertEquals(Decision.NONE, ev.evaluate(policy(named), "s3:GetObject", "arn:aws:s3:::b/k", true), "anonymous");
+        var other = new BucketPolicyEvaluator.Request("s3:GetObject", "arn:aws:s3:::b/k", "SCTRIAOTHEROTHEROTHE", true, java.util.Map.of());
+        assertEquals(Decision.NONE, ev.evaluate(policy(named), other), "another key");
+    }
+
+    @Test
+    void notPrincipalDenyExemptsTheListedKey() {
+        String deny = "{\"Effect\":\"Deny\",\"NotPrincipal\":{\"AWS\":\"" + BucketPolicyEvaluator.principalArn(KEY)
+                + "\"},\"Action\":\"s3:*\",\"Resource\":\"*\"}";
+        assertEquals(Decision.NONE, ev.evaluate(policy(deny), asKey("s3:GetObject", "arn:aws:s3:::b/k", java.util.Map.of())));
+        assertEquals(Decision.DENY, ev.evaluate(policy(deny), "s3:GetObject", "arn:aws:s3:::b/k", true));
+    }
+
+    @Test
+    void identityPolicyHasNoPrincipalAndFollowsTheSameRules() throws Exception {
+        var node = new ObjectMapper().readTree(policy(
+                "{\"Effect\":\"Allow\",\"Action\":\"s3:Get*\",\"Resource\":\"arn:aws:s3:::b/*\"}",
+                "{\"Effect\":\"Deny\",\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::b/secret/*\"}"));
+        assertEquals(Decision.ALLOW, ev.evaluateIdentity(node, asKey("s3:GetObject", "arn:aws:s3:::b/k", java.util.Map.of())));
+        assertEquals(Decision.DENY, ev.evaluateIdentity(node, asKey("s3:GetObject", "arn:aws:s3:::b/secret/k", java.util.Map.of())));
+        assertEquals(Decision.NONE, ev.evaluateIdentity(node, asKey("s3:PutObject", "arn:aws:s3:::b/k", java.util.Map.of())));
+    }
+
+    @Test
+    void prefixAndDelimiterConditions() {
+        String like = "{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:ListBucket\",\"Resource\":\"arn:aws:s3:::b\","
+                + "\"Condition\":{\"StringLike\":{\"s3:prefix\":[\"home/alice/*\",\"home/alice\"]}}}";
+        String res = "arn:aws:s3:::b";
+        assertEquals(Decision.ALLOW, ev.evaluate(policy(like), asKey("s3:ListBucket", res, java.util.Map.of("s3:prefix", "home/alice/docs/"))));
+        assertEquals(Decision.NONE, ev.evaluate(policy(like), asKey("s3:ListBucket", res, java.util.Map.of("s3:prefix", "home/bob/"))));
+        assertEquals(Decision.NONE, ev.evaluate(policy(like), asKey("s3:ListBucket", res, java.util.Map.of("s3:prefix", ""))));
+        assertEquals(Decision.NONE, ev.evaluate(policy(like), asKey("s3:ListBucket", res, java.util.Map.of())), "no such key in the request");
+
+        String equals = "{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":\"s3:ListBucket\",\"Resource\":\"arn:aws:s3:::b\","
+                + "\"Condition\":{\"StringEquals\":{\"s3:prefix\":[\"\"],\"s3:delimiter\":\"/\"}}}";
+        assertEquals(Decision.ALLOW, ev.evaluate(policy(equals), asKey("s3:ListBucket", res, java.util.Map.of("s3:prefix", "", "s3:delimiter", "/"))));
+        assertEquals(Decision.NONE, ev.evaluate(policy(equals), asKey("s3:ListBucket", res, java.util.Map.of("s3:prefix", ""))), "delimiter missing");
+        assertEquals(Decision.NONE, ev.evaluate(policy(equals), asKey("s3:ListBucket", res, java.util.Map.of("s3:prefix", "a", "s3:delimiter", "/"))));
+
+        String denyOutside = "{\"Effect\":\"Deny\",\"Principal\":\"*\",\"Action\":\"s3:ListBucket\",\"Resource\":\"*\","
+                + "\"Condition\":{\"StringLike\":{\"s3:prefix\":\"private*\"}}}";
+        assertEquals(Decision.DENY, ev.evaluate(policy(denyOutside), asKey("s3:ListBucket", res, java.util.Map.of("s3:prefix", "private/x"))));
+        assertEquals(Decision.NONE, ev.evaluate(policy(denyOutside), asKey("s3:ListBucket", res, java.util.Map.of("s3:prefix", "public/"))));
+    }
 }
