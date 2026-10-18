@@ -123,6 +123,11 @@ public final class OperationClassifier {
         return false;
     }
 
+    /** True if the raw query string has a parameter with exactly this (raw) name. */
+    public static boolean hasParam(String query, String name) {
+        return parseQuery(query).containsKey(name);
+    }
+
     /** Names (and raw values) of the query parameters; a parameter without '=' has the value "". Not decoded. */
     static Map<String, String> parseQuery(String query) {
         Map<String, String> out = new HashMap<>();

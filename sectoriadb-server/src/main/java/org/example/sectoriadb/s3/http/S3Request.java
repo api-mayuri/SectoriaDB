@@ -12,6 +12,9 @@ public final class S3Request {
     /** Request attribute set by SigV4Filter when the request carries a verified identity (or auth is off / open setup). */
     public static final String AUTHENTICATED_ATTRIBUTE = "sectoriadb.s3.authenticated";
 
+    /** Request attribute set by SigV4Filter to the access key id of a verified signed request (absent for anonymous requests). */
+    public static final String ACCESS_KEY_ATTRIBUTE = "sectoriadb.s3.accessKeyId";
+
     private S3Request() {}
 
     /**

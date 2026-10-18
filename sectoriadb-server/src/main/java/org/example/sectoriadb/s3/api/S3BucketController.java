@@ -4,6 +4,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.s3.access.AccessControlService;
+import org.example.sectoriadb.s3.access.IamAuthorizer;
 import org.example.sectoriadb.s3.error.S3Exception;
 import org.example.sectoriadb.s3.http.HttpDates;
 import org.example.sectoriadb.s3.http.S3Request;
@@ -52,10 +53,12 @@ public class S3BucketController {
     private final ObjectCatalog catalog;
     private final S3Lookup lookup;
     private final AccessControlService accessControl;
+    private final IamAuthorizer iamAuthorizer;
 
     public S3BucketController(PoolService poolService, ManifestRepository manifestRepo,
                                ObjectCatalog catalog, S3Lookup lookup,
-                               AccessControlService accessControl) {
+                               AccessControlService accessControl, IamAuthorizer iamAuthorizer) {
+        this.iamAuthorizer = iamAuthorizer;
         this.poolService   = poolService;
         this.manifestRepo  = manifestRepo;
         this.catalog = catalog;
@@ -136,7 +139,14 @@ public class S3BucketController {
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                 "<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
 
+        String accessKey = (String) request.getAttribute(S3Request.ACCESS_KEY_ATTRIBUTE);
         for (String key : keys) {
+            if (accessKey != null && !iamAuthorizer.isAllowed(request, accessKey, "s3:DeleteObject", bucket, key)) {
+                // like AWS: the call succeeds and names every refused key
+                result.append("<Error><Key>").append(XmlSupport.escape(key))
+                        .append("</Key><Code>AccessDenied</Code><Message>Access Denied</Message></Error>");
+                continue;
+            }
             catalog.deleteObject(bucket, key);   // one transaction per key
             if (!del.quiet()) {
                 result.append("<Deleted><Key>").append(XmlSupport.escape(key)).append("</Key></Deleted>");

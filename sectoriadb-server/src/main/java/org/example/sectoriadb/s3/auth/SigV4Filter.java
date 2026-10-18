@@ -11,6 +11,7 @@ import org.example.sectoriadb.observability.AuthFailure;
 import org.example.sectoriadb.observability.ObservabilityAttributes;
 import org.example.sectoriadb.observability.RequestIds;
 import org.example.sectoriadb.s3.access.AccessControlService;
+import org.example.sectoriadb.s3.access.IamAuthorizer;
 import org.example.sectoriadb.s3.http.S3Request;
 import org.example.sectoriadb.s3.http.UrlCodec;
 import org.example.sectoriadb.s3.xml.XmlSupport;
@@ -71,6 +72,7 @@ public class SigV4Filter extends OncePerRequestFilter {
 
     private final CredentialService credentialService;
     private final AccessControlService accessControlService;
+    private final IamAuthorizer iamAuthorizer;
     private final boolean authEnabled;
     private final String region;
     private final boolean allowOpenSetup;
@@ -87,6 +89,7 @@ public class SigV4Filter extends OncePerRequestFilter {
     public SigV4Filter(
             CredentialService credentialService,
             AccessControlService accessControlService,
+            IamAuthorizer iamAuthorizer,
             @Value("${sectoriadb.s3.auth.enabled:true}") boolean authEnabled,
             @Value("${sectoriadb.s3.region:us-east-1}") String region,
             @Value("${sectoriadb.s3.auth.allow-open-setup:false}") boolean allowOpenSetup,
@@ -97,6 +100,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             @Value("${sectoriadb.s3.limits.max-inflight-reads-per-key:128}") int maxInflightReads) {
         this.credentialService = credentialService;
         this.accessControlService = accessControlService;
+        this.iamAuthorizer = iamAuthorizer;
         this.authEnabled = authEnabled;
         this.region = region;
         this.allowOpenSetup = allowOpenSetup;
@@ -148,6 +152,8 @@ public class SigV4Filter extends OncePerRequestFilter {
         if (presigned) {
             String key = verifyPresigned(request, response);
             if (key == null) return;
+            request.setAttribute(ACCESS_KEY_ATTRIBUTE, key);
+            if (!authorized(request, response, key)) return;
             request.setAttribute(S3Request.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
             proceed(request, response, chain, key);
             return;
@@ -177,11 +183,23 @@ public class SigV4Filter extends OncePerRequestFilter {
             return;
         }
 
+        String accessKey = (String) request.getAttribute(ACCESS_KEY_ATTRIBUTE);
+        if (!authorized(verified, response, accessKey)) return;
         request.setAttribute(S3Request.AUTHENTICATED_ATTRIBUTE, Boolean.TRUE);
-        proceed(verified, response, chain, (String) request.getAttribute(ACCESS_KEY_ATTRIBUTE));
+        proceed(verified, response, chain, accessKey);
     }
 
-    private static final String ACCESS_KEY_ATTRIBUTE = "sectoriadb.s3.accessKeyId";
+    /** IAM identity policy + bucket policy of a verified key; writes the 403 AccessDenied itself when the request is refused. */
+    private boolean authorized(HttpServletRequest request, HttpServletResponse response, String accessKey)
+            throws IOException {
+        var denial = iamAuthorizer.authorize(request, accessKey);
+        if (denial.isEmpty()) return true;
+        request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, AuthFailure.POLICY_DENIED);
+        sendError(request, response, 403, "AccessDenied", sanitize(denial.get().message()));
+        return false;
+    }
+
+    private static final String ACCESS_KEY_ATTRIBUTE = S3Request.ACCESS_KEY_ATTRIBUTE;
 
     /** Runs the request under the per-access-key in-flight limit: one valid key cannot occupy every worker thread. */
     private void proceed(HttpServletRequest request, HttpServletResponse response, FilterChain chain, String accessKey)

@@ -26,7 +26,9 @@ public enum AuthFailure {
     /** An unsigned request to something that does not allow anonymous access. */
     ANONYMOUS_DENIED("anonymous_denied"),
     /** UNSIGNED-PAYLOAD sent while sectoriadb.s3.auth.allow-unsigned-payload=false. */
-    UNSIGNED_PAYLOAD_DENIED("unsigned_payload_denied");
+    UNSIGNED_PAYLOAD_DENIED("unsigned_payload_denied"),
+    /** The signature is valid but the IAM identity policy / bucket policy does not permit the operation. */
+    POLICY_DENIED("policy_denied");
 
     private final String label;
 

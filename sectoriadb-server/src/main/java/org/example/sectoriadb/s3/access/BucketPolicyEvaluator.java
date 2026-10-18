@@ -8,17 +8,20 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
- * Evaluates a bucket policy for an ANONYMOUS caller, following the AWS evaluation order:
- * an explicit Deny on a matching statement always wins over any Allow.
+ * Evaluates a bucket policy (for an anonymous caller or for a signed access key) and an IAM identity policy with the
+ * same code, following the AWS evaluation order: an explicit Deny on a matching statement always wins over any Allow.
  *
- * Supported: Effect Allow/Deny; Principal "*" / {"AWS":"*"} / {"AWS":["*", ...]};
+ * Supported: Effect Allow/Deny; Principal "*" / {"AWS":"*"} / {"AWS":["*", ...]}; for a signed caller also the key's
+ * ARN ({@link #principalArn}) or its plain access key id. An identity policy has no Principal: it is the key's own;
  * Action and Resource as string or array with the wildcards {@code *} and {@code ?};
  * Statement as an array or a single object; NotAction / NotResource / NotPrincipal on Deny statements.
  *
- * Conditions: exactly {@code "Bool": {"aws:SecureTransport": "true"|"false"}} is evaluated (the standard way to demand
- * TLS per bucket); anything else in a Condition block is not understood and handled fail-closed:
+ * Conditions: {@code "Bool": {"aws:SecureTransport": "true"|"false"}} (the standard way to demand TLS per bucket) and
+ * {@code StringEquals} / {@code StringLike} on {@code s3:prefix} and {@code s3:delimiter} (ListBucket); a key that is
+ * not part of the request never matches. Anything else in a Condition block is not understood and handled fail-closed:
  *  - an Allow statement with an unsupported Condition is never applied;
  *  - a Deny statement with an unsupported Condition IS applied as if the condition were true;
  *  - Allow statements with NotAction / NotResource / NotPrincipal are never applied;
@@ -30,6 +33,21 @@ public final class BucketPolicyEvaluator {
 
     public enum Decision { ALLOW, DENY, NONE }
 
+    /**
+     * One authorization question.
+     *
+     * @param principalKeyId access key id of a signed caller, null for an anonymous one
+     * @param context        lower-case condition keys of the request other than aws:SecureTransport (s3:prefix, s3:delimiter)
+     */
+    public record Request(String action, String resource, String principalKeyId, boolean secureTransport,
+                          Map<String, String> context) {
+    }
+
+    /** The one documented ARN form of an access key as a bucket policy principal (the plain access key id is accepted too). */
+    public static String principalArn(String accessKeyId) {
+        return "arn:aws:iam::sectoriadb:user/" + accessKeyId;
+    }
+
     private final ObjectMapper mapper;
 
     public BucketPolicyEvaluator(ObjectMapper mapper) {
@@ -37,18 +55,32 @@ public final class BucketPolicyEvaluator {
     }
 
     /**
+     * Bucket policy for an anonymous caller.
+     *
      * @param action e.g. "s3:GetObject"; @param resource full ARN, e.g. "arn:aws:s3:::b/key"
      * @param secureTransport whether the request came over HTTPS ({@code aws:SecureTransport})
      */
     public Decision evaluate(String policyJson, String action, String resource, boolean secureTransport) {
+        return evaluate(policyJson, new Request(action, resource, null, secureTransport, Map.of()));
+    }
+
+    /** A bucket policy (JSON text): statements whose Principal matches the caller of the request. */
+    public Decision evaluate(String policyJson, Request request) {
         if (policyJson == null || policyJson.isBlank()) return Decision.NONE;
-        JsonNode root;
         try {
-            root = mapper.readTree(policyJson);
+            return evaluate(mapper.readTree(policyJson), request, false);
         } catch (Exception e) {
             log.warn("Unparseable bucket policy ignored: {}", e.getMessage());
             return Decision.NONE;
         }
+    }
+
+    /** An IAM identity policy of the calling access key: the Principal is implicit, a Principal element is ignored. */
+    public Decision evaluateIdentity(JsonNode policy, Request request) {
+        return evaluate(policy, request, true);
+    }
+
+    private Decision evaluate(JsonNode root, Request req, boolean identity) {
         JsonNode statements = root == null ? null : root.get("Statement");
         if (statements == null) return Decision.NONE;
 
@@ -67,10 +99,10 @@ public final class BucketPolicyEvaluator {
             if (allow && (stmt.has("NotAction") || stmt.has("NotResource") || stmt.has("NotPrincipal"))) {
                 continue; // fail closed: cannot grant on something we do not evaluate
             }
-            if (!principalMatches(stmt)) continue;
-            if (!actionMatches(stmt, action)) continue;
-            if (!resourceMatches(stmt, resource)) continue;
-            if (stmt.has("Condition") && !conditionHolds(stmt.get("Condition"), secureTransport, deny)) continue;
+            if (!identity && !principalMatches(stmt, req.principalKeyId())) continue;
+            if (!actionMatches(stmt, req.action())) continue;
+            if (!resourceMatches(stmt, req.resource())) continue;
+            if (stmt.has("Condition") && !conditionHolds(stmt.get("Condition"), req, deny)) continue;
 
             if (deny) return Decision.DENY;   // explicit Deny (incl. Deny with unevaluated Condition)
             allowed = true;
@@ -79,22 +111,44 @@ public final class BucketPolicyEvaluator {
     }
 
     /**
-     * True when the Condition block holds. Only {@code Bool} on {@code aws:SecureTransport} is understood; any other
-     * operator or key makes the block "unknown", which counts as true for Deny and as false for Allow.
+     * True when the Condition block holds. Understood: {@code Bool} on {@code aws:SecureTransport}, {@code StringEquals}
+     * and {@code StringLike} on the request's context keys; any other operator or key makes the block "unknown", which
+     * counts as true for Deny and as false for Allow.
      */
-    private static boolean conditionHolds(JsonNode condition, boolean secureTransport, boolean deny) {
+    private static boolean conditionHolds(JsonNode condition, Request req, boolean deny) {
         if (!condition.isObject() || condition.isEmpty()) return deny;
         for (var operators = condition.fields(); operators.hasNext(); ) {
             var op = operators.next();
+            String operator = op.getKey();
             JsonNode keys = op.getValue();
-            if (!"Bool".equals(op.getKey()) || !keys.isObject() || keys.isEmpty()) return deny;
+            if (!keys.isObject() || keys.isEmpty()) return deny;
             for (var entries = keys.fields(); entries.hasNext(); ) {
                 var e = entries.next();
-                if (!"aws:securetransport".equals(e.getKey().toLowerCase(Locale.ROOT))) return deny;
-                if (!boolValueMatches(e.getValue(), secureTransport)) return false;   // all keys and operators must hold
+                String key = e.getKey().toLowerCase(Locale.ROOT);
+                boolean holds;
+                if ("Bool".equals(operator) && key.equals("aws:securetransport")) {
+                    holds = boolValueMatches(e.getValue(), req.secureTransport());
+                } else if (("StringEquals".equals(operator) || "StringLike".equals(operator))
+                        && (key.equals("s3:prefix") || key.equals("s3:delimiter"))) {
+                    holds = stringValueMatches(e.getValue(), req.context().get(key), "StringLike".equals(operator));
+                } else {
+                    return deny;
+                }
+                if (!holds) return false;   // all keys and operators must hold
             }
         }
         return true;
+    }
+
+    /** A key that is not part of the request (null) never matches; a value that is not a string never matches. */
+    private static boolean stringValueMatches(JsonNode values, String actual, boolean like) {
+        if (actual == null) return false;
+        if (values.isArray()) {
+            for (JsonNode v : values) if (stringValueMatches(v, actual, like)) return true;
+            return false;
+        }
+        if (!values.isTextual()) return false;
+        return like ? glob(values.asText(), actual, false) : values.asText().equals(actual);
     }
 
     /** Bool: the key matches when any listed value equals the actual flag; a value that is not true/false never matches. */
@@ -108,28 +162,32 @@ public final class BucketPolicyEvaluator {
         return (t.equals("true") && actual) || (t.equals("false") && !actual);
     }
 
-    private static boolean principalMatches(JsonNode stmt) {
+    private static boolean principalMatches(JsonNode stmt, String keyId) {
         JsonNode np = stmt.get("NotPrincipal");
         if (np != null) {
-            // Applies to everyone except the listed principals; anonymous is excluded only by "*".
-            return !containsWildcard(np);
+            // Applies to everyone except the listed principals.
+            return !names(np, keyId);
         }
         JsonNode p = stmt.get("Principal");
-        return p != null && containsWildcard(p);
+        return p != null && names(p, keyId);
     }
 
-    /** True for "*", {"AWS":"*"}, {"AWS":["*",...]}. */
-    private static boolean containsWildcard(JsonNode p) {
-        if (p.isTextual()) return "*".equals(p.asText());
+    /** True for "*", {"AWS":"*"}, {"AWS":[...]} listing "*" or, for a signed caller, its ARN / plain access key id. */
+    private static boolean names(JsonNode p, String keyId) {
+        if (p.isTextual()) return nameMatches(p.asText(), keyId);
         if (p.isObject()) {
             JsonNode aws = p.get("AWS");
             if (aws == null) return false;
-            if (aws.isTextual()) return "*".equals(aws.asText());
+            if (aws.isTextual()) return nameMatches(aws.asText(), keyId);
             if (aws.isArray()) {
-                for (JsonNode n : aws) if (n.isTextual() && "*".equals(n.asText())) return true;
+                for (JsonNode n : aws) if (n.isTextual() && nameMatches(n.asText(), keyId)) return true;
             }
         }
         return false;
+    }
+
+    private static boolean nameMatches(String name, String keyId) {
+        return "*".equals(name) || keyId != null && (name.equals(keyId) || name.equals(principalArn(keyId)));
     }
 
     private static boolean actionMatches(JsonNode stmt, String action) {
