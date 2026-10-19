@@ -187,12 +187,13 @@ public class S3ObjectController {
             length = range.length();
             partial = true;
             response.setHeader("Content-Range", "bytes " + range.first() + "-" + range.last() + "/" + total);
-        } else if (partExtent != null && partExtent.length() > 0) {
-            // GET ?partNumber=N of a multipart object: that part's bytes, answered like a range
+        } else if (partExtent != null) {
+            // GET ?partNumber=N of a multipart object: that part's bytes, answered like a range; an empty part is an
+            // empty 206 (it has no Content-Range: a range cannot be empty), never the whole object
             start = partExtent.start();
             length = partExtent.length();
             partial = true;
-            response.setHeader("Content-Range", "bytes " + start + "-" + (start + length - 1) + "/" + total);
+            if (length > 0) response.setHeader("Content-Range", "bytes " + start + "-" + (start + length - 1) + "/" + total);
         }
         if (partExtent != null) response.setHeader(PARTS_COUNT_HEADER, String.valueOf(entity.getSegments().size()));
 
@@ -303,7 +304,7 @@ public class S3ObjectController {
         }
 
         String ct = entity.getContentType() != null ? entity.getContentType() : "application/octet-stream";
-        boolean partial = partExtent != null && partExtent.length() > 0;
+        boolean partial = partExtent != null;
         var resp = ResponseEntity.status(partial ? HttpStatus.PARTIAL_CONTENT : HttpStatus.OK)
                 .contentType(safeParseMediaType(ct))
                 .contentLength(partial ? partExtent.length() : entity.getTotalBytes())
@@ -311,7 +312,7 @@ public class S3ObjectController {
                 .header("ETag", etag)
                 .header("Last-Modified", HttpDates.httpDate(entity.getCreatedAt()));
 
-        if (partial) {
+        if (partial && partExtent.length() > 0) {
             resp.header("Content-Range", "bytes " + partExtent.start() + "-" + (partExtent.start() + partExtent.length() - 1)
                     + "/" + entity.getTotalBytes());
         }

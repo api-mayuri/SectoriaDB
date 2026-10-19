@@ -477,6 +477,34 @@ class S3ApiRegressionTest {
         assertEquals(5 * 1024 * 1024 + 1000, get("partnum", "mp").body().length);
     }
 
+    /** A zero-length part used to fall through the part branch: the response was 200 with the WHOLE object. */
+    @Test
+    void getAndHeadOfAZeroLengthPartAreEmptyNotTheWholeObject() throws Exception {
+        mkBucket("zero-part");
+        var init = send(HttpRequest.newBuilder(uri("/zero-part/mp?uploads")).POST(BodyPublishers.noBody()));
+        Matcher m = Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(new String(init.body()));
+        assertTrue(m.find());
+        String uid = m.group(1);
+        byte[] p1 = random(5 * 1024 * 1024, 11);
+        var r1 = send(HttpRequest.newBuilder(uri("/zero-part/mp?partNumber=1&uploadId=" + uid)).PUT(BodyPublishers.ofByteArray(p1)));
+        var r2 = send(HttpRequest.newBuilder(uri("/zero-part/mp?partNumber=2&uploadId=" + uid)).PUT(BodyPublishers.noBody()));
+        assertEquals(200, r2.statusCode());
+        String body = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>" + r1.headers().firstValue("ETag").get()
+                + "</ETag></Part><Part><PartNumber>2</PartNumber><ETag>" + r2.headers().firstValue("ETag").get() + "</ETag></Part></CompleteMultipartUpload>";
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/zero-part/mp?uploadId=" + uid)).POST(BodyPublishers.ofString(body))).statusCode());
+
+        var part2 = send(HttpRequest.newBuilder(uri("/zero-part/mp?partNumber=2")).GET());
+        assertEquals(206, part2.statusCode());
+        assertEquals(0, part2.body().length, "the part is empty, the object is " + p1.length + " bytes");
+        assertEquals("2", part2.headers().firstValue("x-amz-mp-parts-count").get());
+        var head2 = send(HttpRequest.newBuilder(uri("/zero-part/mp?partNumber=2")).method("HEAD", BodyPublishers.noBody()));
+        assertEquals(206, head2.statusCode());
+        assertEquals("0", head2.headers().firstValue("Content-Length").get());
+        var part1 = send(HttpRequest.newBuilder(uri("/zero-part/mp?partNumber=1")).GET());
+        assertEquals(206, part1.statusCode());
+        assertArrayEquals(p1, part1.body());
+    }
+
     @Test
     void putWithUploadIdButNoPartNumberDoesNotOverwriteTheObject() throws Exception {
         mkBucket("put-uid");
