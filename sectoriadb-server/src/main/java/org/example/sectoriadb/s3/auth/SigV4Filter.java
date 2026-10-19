@@ -82,6 +82,8 @@ public class SigV4Filter extends OncePerRequestFilter {
     private final int maxInflightWrites;
     private final int maxInflightReads;
     private final Semaphore anonymousSlots;
+    /** Failed authentication is attacker-controlled input: 10 lines per 10 seconds, the rest only counted. */
+    private final RateLimitedWarn failedAuthLog = new RateLimitedWarn(log, 10, 10_000_000_000L);
     private final ConcurrentHashMap<String, Semaphore> writeSlots =
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Semaphore> readSlots =
@@ -180,7 +182,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         try {
             verified = verifyHeaderAuth(request, authHeader, xAmzDate);
         } catch (AuthException e) {
-            log.warn("SigV4 auth failed: {}", sanitize(e.getMessage()));
+            failedAuthLog.warn("SigV4 auth failed: {}", sanitize(e.getMessage()));
             request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, e.reason);
             sendError(request, response, e.httpStatus, e.errorCode, e.getMessage());
             return;
@@ -357,7 +359,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         try {
             return verifyPresignedInternal(request);
         } catch (AuthException e) {
-            log.warn("Presigned URL auth failed: {}", sanitize(e.getMessage()));
+            failedAuthLog.warn("Presigned URL auth failed: {}", sanitize(e.getMessage()));
             request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, e.reason);
             sendError(request, response, e.httpStatus, e.errorCode, e.getMessage());
             return null;
