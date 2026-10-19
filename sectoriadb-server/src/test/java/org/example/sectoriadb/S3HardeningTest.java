@@ -250,6 +250,31 @@ class S3HardeningTest {
         assertTrue(d.body().contains("MalformedXML"), d.body());
     }
 
+    @Test
+    void deeplyNestedXmlIsMalformedXmlNotAStackOverflow() throws Exception {
+        int depth = 100_000;
+        StringBuilder sb = new StringBuilder("<Delete><Object><Key>");
+        for (int i = 0; i < depth; i++) sb.append("<a>");
+        for (int i = 0; i < depth; i++) sb.append("</a>");
+        sb.append("</Key></Object></Delete>");
+        byte[] xml = sb.toString().getBytes(StandardCharsets.UTF_8);
+        var d = client.request("POST", "/hbkt", "delete", SigV4TestClient.sha256(xml), xml);
+        assertEquals(400, d.statusCode(), d.body());
+        assertTrue(d.body().contains("MalformedXML"), d.body());
+
+        var open = client.request("POST", "/hbkt/nested.bin", "uploads", SigV4TestClient.sha256(new byte[0]), new byte[0]);
+        assertEquals(200, open.statusCode(), open.body());
+        String uploadId = open.body().replaceAll("(?s).*<UploadId>([^<]+)</UploadId>.*", "$1");
+        StringBuilder complete = new StringBuilder("<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>");
+        for (int i = 0; i < depth; i++) complete.append("<a>");
+        for (int i = 0; i < depth; i++) complete.append("</a>");
+        complete.append("</ETag></Part></CompleteMultipartUpload>");
+        byte[] cx = complete.toString().getBytes(StandardCharsets.UTF_8);
+        var c = client.request("POST", "/hbkt/nested.bin", "uploadId=" + uploadId, SigV4TestClient.sha256(cx), cx);
+        assertEquals(400, c.statusCode(), c.body());
+        assertTrue(c.body().contains("MalformedXML"), c.body());
+    }
+
     // ── 13: response-* overrides need a verified identity ───────────────────────────────────────────────
 
     @Test

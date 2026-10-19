@@ -19,6 +19,9 @@ public final class XmlSupport {
         @Override public void fatalError(SAXParseException e) throws SAXException { throw e; }
     };
 
+    /** Deepest element nesting accepted in a request document (the legitimate ones need 4). */
+    public static final int MAX_ELEMENT_DEPTH = 32;
+
     private XmlSupport() {}
 
     public static DocumentBuilder newSecureDocumentBuilder(boolean namespaceAware) throws ParserConfigurationException {
@@ -30,6 +33,8 @@ public final class XmlSupport {
         dbf.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
         dbf.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
         dbf.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+        // a request document has 3-4 levels; getTextContent() and friends recurse, so a 300 000-level body is a StackOverflowError
+        dbf.setAttribute("jdk.xml.maxElementDepth", String.valueOf(MAX_ELEMENT_DEPTH));
         dbf.setXIncludeAware(false);
         dbf.setExpandEntityReferences(false);
         dbf.setNamespaceAware(namespaceAware);
