@@ -19,7 +19,7 @@
 | Область | Операции |
 |---|---|
 | Сервис | `ListBuckets` |
-| Бакеты | `CreateBucket` (повторное создание существующего даёт `200`; заголовки `x-amz-acl`/`x-amz-grant-*` применяются), `HeadBucket`, `DeleteBucket` (`409 BucketNotEmpty`, если есть объекты; незавершённые multipart-загрузки отбрасываются), `GetBucketLocation` |
+| Бакеты | `CreateBucket` (повторное создание существующего даёт `200`, его ACL не меняется; заголовки `x-amz-acl`/`x-amz-grant-*` применяются только к новому бакету и требуют `s3:PutBucketAcl`), `HeadBucket`, `DeleteBucket` (`409 BucketNotEmpty`, если есть объекты; незавершённые multipart-загрузки отбрасываются), `GetBucketLocation` |
 | Листинг | `ListObjects` (v1) и `ListObjectsV2`: `prefix`, `delimiter`, `max-keys` (не более 1000, `0` даёт пустую страницу), `marker`/`continuation-token`/`start-after`, `encoding-type=url`, `fetch-owner`; `ListObjectVersions` (каждый объект как версия `null`) |
 | Объекты | `PutObject`, `GetObject` (`Range`, условные заголовки, `response-*`), `HeadObject`, `DeleteObject` (идемпотентно, `204`), `DeleteObjects` (до 1000 ключей, `Quiet`), `CopyObject` |
 | Multipart | `CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListParts`, `ListMultipartUploads`, `GET`/`HEAD ?partNumber=N` |
@@ -99,7 +99,7 @@ java -jar sectoriadb.jar key-policy --id ACCESS_KEY_ID --file /tmp/photos.json  
 | Операция | Действие | Ресурс |
 |---|---|---|
 | `GetObject`, `HeadObject` | `s3:GetObject` | `arn:aws:s3:::бакет/ключ` |
-| `PutObject`, `CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload` | `s3:PutObject` | `arn:aws:s3:::бакет/ключ` |
+| `PutObject`, `CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload` | `s3:PutObject` (плюс `s3:PutObjectAcl`, если у `PutObject`/`CreateMultipartUpload`/`CopyObject` есть `x-amz-acl` не `private` или `x-amz-grant-*`) | `arn:aws:s3:::бакет/ключ` |
 | `DeleteObject` (и каждый ключ `DeleteObjects`) | `s3:DeleteObject` | `arn:aws:s3:::бакет/ключ` |
 | `CopyObject`, `UploadPartCopy` | `s3:GetObject` на источнике **и** `s3:PutObject` на приёмнике | |
 | `AbortMultipartUpload`, `ListParts` | `s3:AbortMultipartUpload`, `s3:ListMultipartUploadParts` | `arn:aws:s3:::бакет/ключ` |
@@ -107,7 +107,7 @@ java -jar sectoriadb.jar key-policy --id ACCESS_KEY_ID --file /tmp/photos.json  
 | `GetObjectTagging`, `PutObjectTagging`, `DeleteObjectTagging` | `s3:GetObjectTagging`, `s3:PutObjectTagging`, `s3:DeleteObjectTagging` | `arn:aws:s3:::бакет/ключ` |
 | `ListObjects(V2)`, `HeadBucket` | `s3:ListBucket` (`s3:ListBucketVersions` для `?versions`) | `arn:aws:s3:::бакет` |
 | `ListMultipartUploads` | `s3:ListBucketMultipartUploads` | `arn:aws:s3:::бакет` |
-| `CreateBucket`, `DeleteBucket` | `s3:CreateBucket`, `s3:DeleteBucket` | `arn:aws:s3:::бакет` |
+| `CreateBucket`, `DeleteBucket` | `s3:CreateBucket` (плюс `s3:PutBucketAcl` при `x-amz-acl` не `private` или `x-amz-grant-*`), `s3:DeleteBucket` | `arn:aws:s3:::бакет` |
 | `GetBucketAcl`, `PutBucketAcl` | `s3:GetBucketAcl`, `s3:PutBucketAcl` | `arn:aws:s3:::бакет` |
 | `GetBucketPolicy`, `PutBucketPolicy`, `DeleteBucketPolicy` | `s3:GetBucketPolicy`, `s3:PutBucketPolicy`, `s3:DeleteBucketPolicy` | `arn:aws:s3:::бакет` |
 | `GetBucketLocation`, `GetBucketVersioning`, `GetBucketTagging` | `s3:GetBucketLocation`, `s3:GetBucketVersioning`, `s3:GetBucketTagging` | `arn:aws:s3:::бакет` |

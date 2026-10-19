@@ -51,7 +51,7 @@ $X key-policy --id ID --file /tmp/tenant-a.json
 $X keys                                                        # колонка Policy: yes
 ```
 
-Арендатору дайте бакет, созданный администратором (`CreateBucket` в политику не включайте), и не давайте `s3:PutBucketPolicy`, `s3:PutBucketAcl`, `s3:PutObjectAcl`: иначе он сможет открыть свой бакет анонимам. Изоляция только по бакетам и префиксам:
+Арендатору дайте бакет, созданный администратором (`CreateBucket` в политику не включайте), и не давайте `s3:PutBucketPolicy`, `s3:PutBucketAcl`, `s3:PutObjectAcl`: иначе он сможет открыть свой бакет анонимам. Это действует и для заголовков: `PutObject`, `CopyObject`, `CreateMultipartUpload` с `x-amz-acl` (кроме `private`) или любым `x-amz-grant-*` требуют дополнительно `s3:PutObjectAcl`, а `CreateBucket` с такими заголовками — `s3:PutBucketAcl`; без права ответ `403 AccessDenied`. `CreateBucket` существующего бакета ACL не меняет никогда. Изоляция только по бакетам и префиксам:
 общих ресурсов сервера (диск, память, потоки) политики не делят, лимиты на ключ см. [security.md](../architecture/security.md#лимиты-и-защита-от-злоупотреблений).
 
 ## Обратный прокси (nginx)

@@ -429,4 +429,67 @@ class S3IamTest {
         assertEquals(200, send(legacy, "GET", "/", null, null).statusCode());
         assertEquals(204, send(legacy, "DELETE", "/legacy-b/k", null, null).statusCode());
     }
+
+    // ── ACL headers need ACL permissions ─────────────────────────────────────
+
+    private static String putOnly(String b) {
+        return policy(stmt("Allow", "[\"s3:PutObject\",\"s3:GetObject\",\"s3:CreateBucket\"]", "[\"arn:aws:s3:::" + b + "\",\"arn:aws:s3:::" + b + "/*\"]"));
+    }
+
+    private boolean anonymousCanRead(String path) throws Exception {
+        return admin().get(java.net.URI.create("http://localhost:" + port + path)).statusCode() == 200;
+    }
+
+    @Test
+    void aclHeadersOnPutObjectNeedPutObjectAcl() throws Exception {
+        assertEquals(200, send(admin(), "PUT", "/aclhdr", null, null).statusCode());
+        var t = tenant(putOnly("aclhdr"));
+        assertEquals(200, send(t, "PUT", "/aclhdr/plain", null, "x").statusCode());
+        assertEquals(200, send(t, "PUT", "/aclhdr/priv", null, "x", Map.of("x-amz-acl", "private")).statusCode());
+        assertDenied(send(t, "PUT", "/aclhdr/pub", null, "x", Map.of("x-amz-acl", "public-read")), "public-read");
+        assertDenied(send(t, "PUT", "/aclhdr/grant", null, "x", Map.of("x-amz-grant-read", "uri=\"http://acs.amazonaws.com/groups/global/AllUsers\"")), "grant-read");
+        assertDenied(send(t, "PUT", "/aclhdr/grant2", null, "x", Map.of("x-amz-grant-full-control", "id=\"abc\"")), "grant-full-control");
+        assertFalse(anonymousCanRead("/aclhdr/pub"));
+        assertFalse(anonymousCanRead("/aclhdr/grant"));
+
+        var withAcl = tenant(policy(stmt("Allow", "[\"s3:PutObject\",\"s3:PutObjectAcl\"]", "\"arn:aws:s3:::aclhdr/*\"")));
+        assertEquals(200, send(withAcl, "PUT", "/aclhdr/ok", null, "x", Map.of("x-amz-acl", "public-read")).statusCode());
+        assertTrue(anonymousCanRead("/aclhdr/ok"));
+    }
+
+    @Test
+    void aclHeadersOnCopyAndCreateMultipartUploadNeedPutObjectAcl() throws Exception {
+        assertEquals(200, send(admin(), "PUT", "/aclcopy", null, null).statusCode());
+        assertEquals(200, send(admin(), "PUT", "/aclcopy/src", null, "data").statusCode());
+        var t = tenant(putOnly("aclcopy"));
+        assertDenied(send(t, "PUT", "/aclcopy/dst", null, null,
+                Map.of("x-amz-copy-source", "/aclcopy/src", "x-amz-acl", "public-read")), "copy with acl");
+        assertEquals(200, send(t, "PUT", "/aclcopy/dst", null, null, Map.of("x-amz-copy-source", "/aclcopy/src")).statusCode());
+        assertDenied(send(t, "POST", "/aclcopy/mp", "uploads", null, Map.of("x-amz-acl", "public-read-write")), "multipart with acl");
+        assertDenied(send(t, "POST", "/aclcopy/mp", "uploads", null, Map.of("x-amz-grant-write", "uri=\"http://acs.amazonaws.com/groups/global/AllUsers\"")), "multipart grant");
+        assertEquals(200, send(t, "POST", "/aclcopy/mp", "uploads", null).statusCode());
+        assertFalse(anonymousCanRead("/aclcopy/dst"));
+    }
+
+    @Test
+    void createBucketWithAnAclNeedsPutBucketAclAndNeverTouchesAnExistingBucket() throws Exception {
+        assertEquals(200, send(admin(), "PUT", "/victim-acl", null, null).statusCode());
+        assertEquals(200, send(admin(), "PUT", "/victim-acl/k", null, "secret").statusCode());
+        var t = tenant(policy(stmt("Allow", "\"s3:CreateBucket\"", "\"arn:aws:s3:::*\"")));
+        assertDenied(send(t, "PUT", "/victim-acl", null, null, Map.of("x-amz-acl", "public-read-write")), "acl on create");
+        assertEquals(200, send(t, "PUT", "/victim-acl", null, null).statusCode(), "plain re-create stays idempotent");
+
+        // an operator with PutBucketAcl re-creating an EXISTING bucket still does not change its ACL
+        var owner = tenant(policy(stmt("Allow", "[\"s3:CreateBucket\",\"s3:PutBucketAcl\"]", "\"arn:aws:s3:::*\"")));
+        assertEquals(200, send(owner, "PUT", "/victim-acl", null, null, Map.of("x-amz-acl", "public-read-write")).statusCode());
+        assertFalse(anonymousCanRead("/victim-acl/k"));
+        assertEquals(403, admin().http.send(java.net.http.HttpRequest.newBuilder(java.net.URI.create("http://localhost:" + port + "/victim-acl/anon"))
+                .PUT(java.net.http.HttpRequest.BodyPublishers.ofString("x")).build(), java.net.http.HttpResponse.BodyHandlers.ofString()).statusCode());
+
+        // a NEW bucket with an ACL is created with it when the key may
+        assertEquals(200, send(owner, "PUT", "/fresh-acl", null, null, Map.of("x-amz-acl", "public-read")).statusCode());
+        assertEquals(200, send(admin(), "PUT", "/fresh-acl/k", null, "pub").statusCode());
+        assertEquals(403, admin().get(java.net.URI.create("http://localhost:" + port + "/fresh-acl/k")).statusCode(), "public-read bucket: objects stay private");
+        assertEquals(200, admin().get(java.net.URI.create("http://localhost:" + port + "/fresh-acl?list-type=2")).statusCode());
+    }
 }

@@ -181,7 +181,26 @@ public class IamAuthorizer {
                 return null;
             }
         }
+        if (carriesAclHeaders(request)) {
+            // like AWS: publishing through x-amz-acl / x-amz-grant-* is an ACL change and needs the ACL permission
+            switch (op) {
+                case PutObject, CopyObject, CreateMultipartUpload -> out.add(new Requirement("s3:PutObjectAcl", bucket, key));
+                case CreateBucket -> out.add(bucketLevel("s3:PutBucketAcl", bucket));
+                default -> { }
+            }
+        }
         return out;
+    }
+
+    /** A non-private canned ACL or any grant header: {@code x-amz-acl: private} changes nothing and needs no extra right. */
+    static boolean carriesAclHeaders(HttpServletRequest request) {
+        String canned = request.getHeader("x-amz-acl");
+        if (canned != null && !canned.isBlank() && !"private".equalsIgnoreCase(canned.trim())) return true;
+        var names = request.getHeaderNames();
+        while (names != null && names.hasMoreElements()) {
+            if (names.nextElement().regionMatches(true, 0, "x-amz-grant-", 0, 12)) return true;
+        }
+        return false;
     }
 
     private static Requirement bucketLevel(String action, String bucket) {

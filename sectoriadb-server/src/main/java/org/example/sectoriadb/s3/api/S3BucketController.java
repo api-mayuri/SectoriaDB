@@ -78,8 +78,10 @@ public class S3BucketController {
 
         // x-amz-acl / x-amz-grant-* headers (e.g. `s3api create-bucket --acl public-read`): a bad ACL must not leave a bucket behind
         accessControl.resolveAcl(request, new byte[0]);
+        // CreateBucket of an EXISTING bucket is idempotent and must never rewrite its ACL (that is PutBucketAcl's job)
+        boolean existed = poolService.existsByName(bucket);
         PoolEntity pool = poolService.createBucket(bucket);
-        accessControl.applyBucketAcl(request, new byte[0], pool);
+        if (!existed) accessControl.applyBucketAcl(request, new byte[0], pool);
         return ResponseEntity.ok()
                 .header("Location", "/" + bucket)
                 .build();
