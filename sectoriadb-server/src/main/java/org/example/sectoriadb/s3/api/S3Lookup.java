@@ -116,5 +116,10 @@ public class S3Lookup {
             throw new S3Exception(HttpStatus.BAD_REQUEST, "KeyTooLongError",
                     "Your key is too long");
         }
+        // NUL is the escape byte of the metastore key encoding: a key full of NULs doubles in size and would only fail
+        // after the whole body was staged
+        if (key.indexOf('\0') >= 0) {
+            throw S3Exception.invalidArgument("Object key cannot contain NUL characters");
+        }
     }
 }

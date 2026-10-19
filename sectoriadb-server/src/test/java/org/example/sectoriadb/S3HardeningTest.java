@@ -251,6 +251,19 @@ class S3HardeningTest {
     }
 
     @Test
+    void aKeyWithNulBytesIsRefused() throws Exception {
+        // Tomcat already answers 400 to a NUL (raw or %00) in the path, so this is the second line of defence
+        var lookup = new org.example.sectoriadb.s3.api.S3Lookup(null, null);
+        var e = org.junit.jupiter.api.Assertions.assertThrows(org.example.sectoriadb.s3.error.S3Exception.class,
+                () -> lookup.validateObjectKey("a\0b"));
+        assertEquals(400, e.getStatus().value());
+        assertTrue(e.getMessage().contains("NUL"), e.getMessage());
+        lookup.validateObjectKey("a;b c/ü");
+        var path = client.request("PUT", "/hbkt/nul%00key", null, SigV4TestClient.sha256(bytes("payload")), bytes("payload"));
+        assertEquals(400, path.statusCode());
+    }
+
+    @Test
     void deeplyNestedXmlIsMalformedXmlNotAStackOverflow() throws Exception {
         int depth = 100_000;
         StringBuilder sb = new StringBuilder("<Delete><Object><Key>");
