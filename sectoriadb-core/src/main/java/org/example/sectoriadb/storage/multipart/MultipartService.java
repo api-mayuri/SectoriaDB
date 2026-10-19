@@ -59,7 +59,7 @@ public class MultipartService {
         template.setInitiatedAt(now);
         template.setUpdatedAt(now);
         MultipartUpload created = repo.create(template);
-        log.info("Multipart upload created: id={} bucket={} key={}", created.getUploadId(), created.getBucket(), created.getKey());
+        log.debug("Multipart upload created: id={} bucket={} key={}", created.getUploadId(), created.getBucket(), created.getKey());
         return created;
     }
 
@@ -157,7 +157,7 @@ public class MultipartService {
     public MultipartRepository.CompleteResult complete(MultipartRepository.CompleteCommand command) {
         MultipartRepository.CompleteResult r = repo.complete(command);
         if (!r.replayed()) {
-            log.info("Multipart upload completed: id={} bucket={} key={} etag={}", command.uploadId(), r.bucket(), r.key(), r.etag());
+            log.debug("Multipart upload completed: id={} bucket={} key={} etag={}", command.uploadId(), r.bucket(), r.key(), r.etag());
         }
         return r;
     }
@@ -165,7 +165,7 @@ public class MultipartService {
     /** AbortMultipartUpload; returns the number of parts released. */
     public int abort(String uploadId, String bucket, String key) {
         int parts = repo.abort(uploadId, bucket, key, System.currentTimeMillis());
-        log.info("Multipart upload aborted: id={} bucket={} key={} parts={}", uploadId, bucket, key, parts);
+        log.debug("Multipart upload aborted: id={} bucket={} key={} parts={}", uploadId, bucket, key, parts);
         return parts;
     }
 

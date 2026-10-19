@@ -99,7 +99,7 @@ public class ObjectWriter {
      */
     private ManifestEntity stage(Path filePath, PoolEntity pool, String crc32c) throws IOException {
         long t0 = System.currentTimeMillis();
-        log.info("Storing file: {} → pool '{}'", filePath.toAbsolutePath(), pool.getName());
+        log.debug("Storing file: {} → pool '{}'", filePath.toAbsolutePath(), pool.getName());
 
         long size = Files.size(filePath);
         if (size == 0) {
@@ -197,7 +197,7 @@ public class ObjectWriter {
             details.put("totalChunks", entity.getTotalChunks());
         }
         opLog.success("STORE", entity.getId(), entity.getSourceFileName(), details, ms);
-        log.info("Stored: id={} file={} size={} kind={} blob={}", entity.getId(), entity.getSourceFileName(),
+        log.debug("Stored: id={} file={} size={} kind={} blob={}", entity.getId(), entity.getSourceFileName(),
                 entity.getTotalBytes(), entity.getStorageKind(), blobId);
     }
 

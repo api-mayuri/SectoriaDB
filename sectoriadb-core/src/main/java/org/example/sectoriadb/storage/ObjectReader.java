@@ -52,7 +52,7 @@ public class ObjectReader {
         long t0 = System.currentTimeMillis();
         ManifestEntity entity = catalog.getActiveManifest(manifestId);
 
-        log.info("Restoring file: id={} → {}", manifestId, outputPath);
+        log.debug("Restoring file: id={} → {}", manifestId, outputPath);
         if (entity.getStorageKind() != StorageKind.CHUNKED) {
             boolean done = false;
             try (OutputStream out = Files.newOutputStream(outputPath)) {
@@ -63,7 +63,7 @@ public class ObjectReader {
             }
             opLog.success("RESTORE", manifestId, entity.getSourceFileName(),
                     Map.of("outputPath", outputPath.toString()), System.currentTimeMillis() - t0);
-            log.info("Restored: id={} → {}", manifestId, outputPath);
+            log.debug("Restored: id={} → {}", manifestId, outputPath);
             return;
         }
         long[] keys = entity.chunkKeyArray();
@@ -100,7 +100,7 @@ public class ObjectReader {
         opLog.success("RESTORE", manifestId, entity.getSourceFileName(),
                 Map.of("outputPath", outputPath.toString()),
                 System.currentTimeMillis() - t0);
-        log.info("Restored: id={} → {}", manifestId, outputPath);
+        log.debug("Restored: id={} → {}", manifestId, outputPath);
     }
 
     // ── Restore (byte range) ──────────────────────────────────────────────────
@@ -143,7 +143,7 @@ public class ObjectReader {
         int lastIdx      = (int)((startByte + lengthBytes - 1) / chunkSize);
         ChunkStore.Reader chunks = readerOf(entity);
 
-        log.info("Restoring range: id={} [{}, +{}] chunks [{},{}]",
+        log.debug("Restoring range: id={} [{}, +{}] chunks [{},{}]",
                 manifestId, startByte, lengthBytes, firstIdx, lastIdx);
 
         boolean rangeOk = false;
@@ -172,7 +172,7 @@ public class ObjectReader {
         opLog.success("RESTORE_RANGE", manifestId, entity.getSourceFileName(),
                 Map.of("startByte", startByte, "length", lengthBytes, "outputPath", outputPath.toString()),
                 System.currentTimeMillis() - t0);
-        log.info("Range restored: id={} [{},+{}] → {}", manifestId, startByte, lengthBytes, outputPath);
+        log.debug("Range restored: id={} [{},+{}] → {}", manifestId, startByte, lengthBytes, outputPath);
     }
 
     // ── S3 Stream output ──────────────────────────────────────────────────────

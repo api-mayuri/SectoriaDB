@@ -67,6 +67,6 @@ public class ObjectCatalog {
         opLog.success("DELETE", entity.getId(), entity.getSourceFileName(),
                 Map.of("blobFileId", blobId, "storageKind", entity.getStorageKind().name()),
                 System.currentTimeMillis() - t0);
-        log.info("Object deleted: id={} name={}", entity.getId(), entity.getSourceFileName());
+        log.debug("Object deleted: id={} name={}", entity.getId(), entity.getSourceFileName());
     }
 }

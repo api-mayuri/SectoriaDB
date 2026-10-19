@@ -174,7 +174,7 @@ public class HashTableCache {
         evictedStats.remove(blobId);
         gate.forget(blobId);
         cache.evict(blobId);
-        log.info("Evicted table from cache: blobId={}", blobId);
+        log.debug("Evicted table from cache: blobId={}", blobId);
     }
 
     /** Closes all tables (and their file channels) on shutdown. */
@@ -184,7 +184,7 @@ public class HashTableCache {
     }
 
     private CuckooHashTable load(BlobFileEntity e) throws IOException {
-        log.info("Loading CuckooHashTable: blobId={} path={}", e.getId(), e.getFilePath());
+        log.debug("Loading CuckooHashTable: blobId={} path={}", e.getId(), e.getFilePath());
         BlobFile bf = new BlobFile(e.getId(), Path.of(e.getFilePath()), e.getTotalBytes());
         CuckooHashTable table = new CuckooHashTable(
                 bf, newEngine(), new XxHash64BytesHasher(),

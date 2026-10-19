@@ -544,7 +544,7 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
                         if (retired != null) {
                             expired++;
                             parts += retired;
-                            log.info("Expired multipart upload {} ({}/{}): {} part(s) released", snapshot.getUploadId(),
+                            log.debug("Expired multipart upload {} ({}/{}): {} part(s) released", snapshot.getUploadId(),
                                     snapshot.getBucket(), snapshot.getKey(), retired);
                         }
                     }
