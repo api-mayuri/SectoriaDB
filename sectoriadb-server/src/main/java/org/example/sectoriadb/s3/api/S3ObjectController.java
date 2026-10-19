@@ -12,6 +12,7 @@ import org.example.sectoriadb.checksum.ChecksumType;
 import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.engine.error.ChunkCorruptedException;
 import org.example.sectoriadb.engine.error.SmallObjectCorruptedException;
+import org.example.sectoriadb.logging.LogSafe;
 import org.example.sectoriadb.s3.access.AccessControlService;
 import org.example.sectoriadb.s3.error.ResponseAbortedException;
 import org.example.sectoriadb.s3.error.S3Exception;
@@ -239,7 +240,7 @@ public class S3ObjectController {
     private void failStreaming(ManifestEntity entity, HttpServletResponse response, IOException cause) {
         if (!(cause instanceof ObjectCorruptedException)) {   // that one logged itself
             log.error("Integrity failure while serving GET: bucket={} key={} manifest={}: {}",
-                    entity.getBucketName(), entity.getObjectKey(), entity.getId(), cause.getMessage());
+                    LogSafe.clean(entity.getBucketName()), LogSafe.clean(entity.getObjectKey()), entity.getId(), cause.getMessage());
         }
         if (!response.isCommitted()) {
             response.reset();

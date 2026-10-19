@@ -6,6 +6,7 @@ import org.example.sectoriadb.catalog.BlobFileRepository;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.PoolRepository;
 import org.example.sectoriadb.config.StorageProperties;
+import org.example.sectoriadb.logging.LogSafe;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -45,7 +46,7 @@ public class PoolService {
 
     public PoolEntity create(String name, String basePath) throws IOException {
         long t0 = System.currentTimeMillis();
-        log.info("Creating pool: name={} path={}", name, basePath);
+        log.info("Creating pool: name={} path={}", LogSafe.clean(name), basePath);
 
         if (poolRepo.existsByName(name)) {
             throw new IllegalArgumentException("Pool already exists: " + name);
@@ -60,7 +61,7 @@ public class PoolService {
         opLog.success("POOL_CREATE", pool.getId(), name,
                 Map.of("name", name, "basePath", dir.toString()),
                 System.currentTimeMillis() - t0);
-        log.info("Pool created: id={} name={} path={}", pool.getId(), name, dir);
+        log.info("Pool created: id={} name={} path={}", pool.getId(), LogSafe.clean(name), dir);
         return pool;
     }
 
@@ -144,7 +145,7 @@ public class PoolService {
         blobService.forgetPool(pool.getId());
         opLog.success("POOL_DELETE", pool.getId(), name, Map.of("name", name),
                 System.currentTimeMillis() - t0);
-        log.info("Pool deleted: id={} name={}", pool.getId(), name);
+        log.info("Pool deleted: id={} name={}", pool.getId(), LogSafe.clean(name));
     }
 
     /**
@@ -174,6 +175,6 @@ public class PoolService {
 
         opLog.success("BUCKET_DELETE", pool.getId(), bucketName, Map.of("name", bucketName),
                 System.currentTimeMillis() - t0);
-        log.info("Bucket deleted: id={} name={}", pool.getId(), bucketName);
+        log.info("Bucket deleted: id={} name={}", pool.getId(), LogSafe.clean(bucketName));
     }
 }

@@ -16,6 +16,7 @@ import org.example.sectoriadb.checksum.MultiDigestInputStream;
 import org.example.sectoriadb.checksum.UploadChecksums;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.engine.blob.SmallObjectBlob;
+import org.example.sectoriadb.logging.LogSafe;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -197,7 +198,8 @@ public class ObjectWriter {
             details.put("totalChunks", entity.getTotalChunks());
         }
         opLog.success("STORE", entity.getId(), entity.getSourceFileName(), details, ms);
-        log.debug("Stored: id={} file={} size={} kind={} blob={}", entity.getId(), entity.getSourceFileName(),
+        // DEBUG: one line per object is a flood on a busy server, and the file name is the client's object key
+        log.debug("Stored: id={} file={} size={} kind={} blob={}", entity.getId(), LogSafe.clean(entity.getSourceFileName()),
                 entity.getTotalBytes(), entity.getStorageKind(), blobId);
     }
 

@@ -7,6 +7,7 @@ import org.example.sectoriadb.catalog.PartSegment;
 import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.engine.blob.SmallObjectBlob;
+import org.example.sectoriadb.logging.LogSafe;
 import org.example.sectoriadb.metrics.StorageMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -239,7 +240,7 @@ public class ObjectReader {
         if (!stored.equals(actual)) {
             metrics.crcFailure(StorageMetrics.CrcKind.WHOLE_OBJECT);
             log.error("Whole-object CRC32C mismatch: bucket={} key={} manifest={} stored={} actual={}",
-                    entity.getBucketName(), entity.getObjectKey(), entity.getId(), stored, actual);
+                    LogSafe.clean(entity.getBucketName()), LogSafe.clean(entity.getObjectKey()), entity.getId(), stored, actual);
             throw new ObjectCorruptedException(entity.getId(), entity.getBucketName(), entity.getObjectKey(),
                     stored, actual);
         }

@@ -13,6 +13,7 @@ import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.checksum.MultiDigest;
 import org.example.sectoriadb.checksum.MultiDigestOutputStream;
 import org.example.sectoriadb.checksum.UploadChecksums;
+import org.example.sectoriadb.logging.LogSafe;
 import org.example.sectoriadb.storage.ObjectReader;
 import org.example.sectoriadb.storage.ObjectWriter;
 import org.slf4j.Logger;
@@ -59,7 +60,8 @@ public class MultipartService {
         template.setInitiatedAt(now);
         template.setUpdatedAt(now);
         MultipartUpload created = repo.create(template);
-        log.debug("Multipart upload created: id={} bucket={} key={}", created.getUploadId(), created.getBucket(), created.getKey());
+        log.debug("Multipart upload {} created: bucket={} key={}", created.getUploadId(), LogSafe.clean(created.getBucket()),
+                LogSafe.clean(created.getKey()));
         return created;
     }
 
@@ -157,7 +159,7 @@ public class MultipartService {
     public MultipartRepository.CompleteResult complete(MultipartRepository.CompleteCommand command) {
         MultipartRepository.CompleteResult r = repo.complete(command);
         if (!r.replayed()) {
-            log.debug("Multipart upload completed: id={} bucket={} key={} etag={}", command.uploadId(), r.bucket(), r.key(), r.etag());
+            log.debug("Multipart upload {} completed: bucket={} key={}", command.uploadId(), LogSafe.clean(r.bucket()), LogSafe.clean(r.key()));
         }
         return r;
     }
@@ -165,7 +167,7 @@ public class MultipartService {
     /** AbortMultipartUpload; returns the number of parts released. */
     public int abort(String uploadId, String bucket, String key) {
         int parts = repo.abort(uploadId, bucket, key, System.currentTimeMillis());
-        log.debug("Multipart upload aborted: id={} bucket={} key={} parts={}", uploadId, bucket, key, parts);
+        log.debug("Multipart upload {} aborted: bucket={} key={}", uploadId, LogSafe.clean(bucket), LogSafe.clean(key));
         return parts;
     }
 

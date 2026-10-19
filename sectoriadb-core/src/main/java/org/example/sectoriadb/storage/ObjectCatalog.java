@@ -3,6 +3,7 @@ package org.example.sectoriadb.storage;
 import org.example.sectoriadb.audit.OperationLogService;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.logging.LogSafe;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,6 +68,6 @@ public class ObjectCatalog {
         opLog.success("DELETE", entity.getId(), entity.getSourceFileName(),
                 Map.of("blobFileId", blobId, "storageKind", entity.getStorageKind().name()),
                 System.currentTimeMillis() - t0);
-        log.debug("Object deleted: id={} name={}", entity.getId(), entity.getSourceFileName());
+        log.debug("Object deleted: id={} name={}", entity.getId(), LogSafe.clean(entity.getSourceFileName()));
     }
 }
