@@ -112,7 +112,7 @@ public class IamAuthorizer {
     }
 
     /** s3:prefix is "" when the request names none; s3:delimiter exists only when it is sent. */
-    private static Map<String, String> listContext(HttpServletRequest request) {
+    static Map<String, String> listContext(HttpServletRequest request) {
         String prefix = request.getParameter("prefix");
         String delimiter = request.getParameter("delimiter");
         return delimiter == null ? Map.of("s3:prefix", prefix == null ? "" : prefix)

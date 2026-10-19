@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.observability.OperationClassifier;
 import org.example.sectoriadb.s3.error.S3Exception;
 import org.example.sectoriadb.s3.http.UrlCodec;
 import org.example.sectoriadb.s3.xml.XmlSupport;
@@ -182,11 +183,16 @@ public class AccessControlService {
             if ("GET".equals(method) || "HEAD".equals(method)) {
                 // Bucket-level request (ListObjects / HeadBucket) -> s3:ListBucket
                 if (isBucketListRequest(uri, bucket)) {
-                    if (policyDecision(request, poolEntity, "s3:ListBucket", bucketArn) == BucketPolicyEvaluator.Decision.DENY) {
+                    // like the signed path: ?versions is ListBucketVersions, and s3:prefix / s3:delimiter reach the conditions
+                    String listAction = OperationClassifier.hasParam(queryString == null ? "" : queryString, "versions")
+                            ? "s3:ListBucketVersions" : "s3:ListBucket";
+                    var context = IamAuthorizer.listContext(request);
+                    var listDecision = policyEvaluator.evaluate(poolEntity.getPolicy(),
+                            new BucketPolicyEvaluator.Request(listAction, bucketArn, null, request.isSecure(), context));
+                    if (listDecision == BucketPolicyEvaluator.Decision.DENY) {
                         return false;
                     }
-                    return isPublicBucket(poolEntity)
-                            || policyDecision(request, poolEntity, "s3:ListBucket", bucketArn) == BucketPolicyEvaluator.Decision.ALLOW;
+                    return isPublicBucket(poolEntity) || listDecision == BucketPolicyEvaluator.Decision.ALLOW;
                 }
 
                 String key = extractKeyFromUri(uri, bucket);

@@ -217,4 +217,27 @@ class S3PublicAccessTest {
         assertEquals(200, status("GET", "/lst-bkt?list-type=2"));
         assertEquals(403, status("GET", "/lst-bkt/a.txt"));
     }
+
+    @Test
+    void anAnonymousListingEvaluatesPrefixConditionsOfADeny() throws Exception {
+        putObject("pfx-bkt", "private/a.txt");
+        poolService.setAcl("pfx-bkt", "public-read");
+        poolService.setPolicy("pfx-bkt", "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":\"*\","
+                + "\"Action\":\"s3:ListBucket\",\"Resource\":\"arn:aws:s3:::pfx-bkt\","
+                + "\"Condition\":{\"StringLike\":{\"s3:prefix\":\"private/*\"}}}]}");
+        assertEquals(403, status("GET", "/pfx-bkt?list-type=2&prefix=private/"), "the Deny with a prefix condition applies");
+        assertEquals(403, status("GET", "/pfx-bkt?list-type=2&prefix=private/a"));
+        assertEquals(200, status("GET", "/pfx-bkt?list-type=2&prefix=public/"), "other prefixes stay listable");
+        assertEquals(200, status("GET", "/pfx-bkt?list-type=2"));
+    }
+
+    @Test
+    void anAnonymousVersionsListingIsListBucketVersionsNotListBucket() throws Exception {
+        putObject("ver-bkt", "a.txt");
+        poolService.setAcl("ver-bkt", "public-read");
+        poolService.setPolicy("ver-bkt", "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":\"*\","
+                + "\"Action\":\"s3:ListBucketVersions\",\"Resource\":\"arn:aws:s3:::ver-bkt\"}]}");
+        assertEquals(403, status("GET", "/ver-bkt?versions"));
+        assertEquals(200, status("GET", "/ver-bkt?list-type=2"), "plain listing is not affected");
+    }
 }
