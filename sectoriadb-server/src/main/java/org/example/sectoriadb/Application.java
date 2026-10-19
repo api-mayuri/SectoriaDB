@@ -146,7 +146,7 @@ public class Application {
     }
 
     /**
-     * Seeds credentials declared in the environment ({@code SECTORIADB_S3_CREDENTIALS=ak:sk[:desc],...} and the legacy
+     * Seeds credentials declared in the environment ({@code SECTORIADB_S3_CREDENTIALS=ak:sk[|desc],...} and the legacy
      * access-key / secret-key pair). The environment is the source of truth for the keys it declares: an unknown key is
      * registered, a key whose secret changed gets the new secret (the enabled flag and description are kept), an
      * identical key is left alone silently. Keys not declared in the environment are never touched. Secrets are never
@@ -166,14 +166,19 @@ public class Application {
                 for (String cred : s3.getCredentials()) {
                     index++;
                     if (cred == null || cred.isBlank()) continue;
-                    String[] parts = cred.split(":", 3);
-                    if (parts.length < 2) {
-                        log.warn("Ignoring credential #{} from the environment: expected ACCESS:SECRET[:description]", index);
+                    String ak;
+                    String sk;
+                    String desc;
+                    try {
+                        EnvCredentials parsed = EnvCredentials.parse(cred);
+                        ak = parsed.accessKeyId();
+                        sk = parsed.secretKey();
+                        desc = parsed.description();
+                    } catch (IllegalArgumentException e) {
+                        // names the rule only, never the text of the entry
+                        log.warn("Ignoring credential #{} from the environment: {}", index, e.getMessage());
                         continue;
                     }
-                    String ak = parts[0].trim();
-                    String sk = parts[1].trim();
-                    String desc = parts.length > 2 ? parts[2].trim() : "env";
                     try {
                         var existing = credentialService.findByAccessKeyId(ak);
                         if (existing.isEmpty()) {
@@ -194,9 +199,13 @@ public class Application {
             String ak = s3.getAccessKey();
             String sk = s3.getSecretKey();
             if (ak != null && !ak.isBlank() && sk != null && !sk.isBlank()) {
-                var existing = credentialService.findByAccessKeyId(ak);
-                if (existing.isEmpty() || !existing.get().getSecretKey().equals(sk)) {
-                    credentialService.ensureCredential(ak, sk);
+                try {
+                    var existing = credentialService.findByAccessKeyId(ak);
+                    if (existing.isEmpty() || !existing.get().getSecretKey().equals(sk)) {
+                        credentialService.ensureCredential(ak, sk);   // same validation as register()
+                    }
+                } catch (IllegalArgumentException e) {
+                    log.warn("Ignoring the sectoriadb.s3.access-key / secret-key pair: {}", e.getMessage());
                 }
             }
         };

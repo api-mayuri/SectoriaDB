@@ -53,7 +53,7 @@
 | `sectoriadb.s3.region` | `us-east-1` | регион сервера (подпись, `GetBucketLocation`) |
 | `sectoriadb.s3.access-key` | не задан | устаревшая пара ключа из окружения (`SECTORIADB_S3_ACCESS_KEY`), применяется, если не задан `credentials` |
 | `sectoriadb.s3.secret-key` | не задан | секрет к `access-key` (не короче 16 символов) |
-| `sectoriadb.s3.credentials` | не задан | ключи через запятую `ACCESS:SECRET[:описание]`; для перечисленных ключей окружение — источник истины (сменили секрет — применится при старте) |
+| `sectoriadb.s3.credentials` | не задан | ключи через запятую `ACCESS:SECRET[|описание]`. Секрет не должен содержать `:`, `,` и `|`; прежняя форма `ACCESS:SECRET:описание` не принимается (запись отклоняется с сообщением, секрет не усекается и не удлиняется молча). Для перечисленных ключей окружение — источник истины (сменили секрет — применится при старте). Пара `access-key`/`secret-key` проверяется теми же правилами (ключ — 16–128 букв и цифр, секрет — от 16 символов). Описание на уровне INFO не пишется |
 | `sectoriadb.s3.auth.enabled` | `true` | проверка SigV4; `false` — только для разработки |
 | `sectoriadb.s3.auth.allow-open-setup` | `false` | при включённой авторизации и отсутствии ключей пропускать все запросы (иначе `403`) |
 | `sectoriadb.s3.auth.allow-unsigned-payload` | `true` | принимать `UNSIGNED-PAYLOAD` и `STREAMING-UNSIGNED-PAYLOAD-TRAILER`; `false` — требовать подписанное тело |

@@ -17,6 +17,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -43,7 +44,10 @@ class StartupSeedingTest {
         r.add("sectoriadb.upload-tmp-dir",      spool::toString);
         r.add("sectoriadb.auto-resize.enabled", () -> "false");
         r.add("sectoriadb.s3.auth.enabled",     () -> "true");
-        r.add("sectoriadb.s3.credentials",      () -> "ENVKEY0000000001:envsecret0123456789:from-env");
+        // the second entry uses the retired ACCESS:SECRET:description form and must be refused, not read as a longer secret
+        r.add("sectoriadb.s3.credentials",      () -> "ENVKEY0000000001:envsecret0123456789|from-env,OLDFORM000000001X:oldsecret0123456789:desc");
+        r.add("sectoriadb.s3.access-key",       () -> "SHORTSECRETKEY0001");
+        r.add("sectoriadb.s3.secret-key",       () -> "short");
         r.add("spring.shell.interactive.enabled", () -> "false");
     }
 
@@ -68,5 +72,9 @@ class StartupSeedingTest {
         assertTrue(keySeededBeforeFirstRunner.get(), "the env key must exist before the first application runner");
         assertTrue(staleSpoolFileGoneBeforeFirstRunner.get(), "stale spool files must be gone before the first runner");
         assertFalse(credentials.findByAccessKeyId("ENVKEY0000000001").isEmpty());
+        assertEquals("from-env", credentials.findByAccessKeyId("ENVKEY0000000001").orElseThrow().getDescription());
+        assertEquals("envsecret0123456789", credentials.findByAccessKeyId("ENVKEY0000000001").orElseThrow().getSecretKey());
+        assertTrue(credentials.findByAccessKeyId("OLDFORM000000001X").isEmpty(), "the retired three-part form is refused");
+        assertTrue(credentials.findByAccessKeyId("SHORTSECRETKEY0001").isEmpty(), "the legacy pair obeys the secret length rule");
     }
 }

@@ -66,7 +66,7 @@ $X disable-key --id ID                      # выключить; enable-key —
 $X rm-key --id ID1,ID2 --yes                # удалить
 ```
 
-Один ключ — одному приложению или человеку: любой можно отозвать, не ломая остальных. Ключи можно передать и через `SECTORIADB_S3_CREDENTIALS=ACCESS:SECRET:описание,…` ([.env.example](.env.example)).
+Один ключ — одному приложению или человеку: любой можно отозвать, не ломая остальных. Ключи можно передать и через `SECTORIADB_S3_CREDENTIALS=ACCESS:SECRET|описание,…` ([.env.example](.env.example)).
 
 ## Работа через AWS CLI
 

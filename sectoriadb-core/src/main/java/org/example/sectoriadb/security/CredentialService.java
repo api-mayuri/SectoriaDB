@@ -30,7 +30,8 @@ public class CredentialService {
         String secretKey   = generateSecretKey();
         CredentialEntity entity = new CredentialEntity(accessKeyId, secretKey, description, Instant.now());
         credentialRepo.save(entity);
-        log.info("Created credential: accessKeyId={} desc={}", accessKeyId, description);
+        log.info("Created credential: accessKeyId={}", accessKeyId);
+        log.debug("Created credential {} description: {}", accessKeyId, description);
         return entity;
     }
 
@@ -48,19 +49,25 @@ public class CredentialService {
 
     /** Registers a credential with provided keys (with validation). */
     public CredentialEntity register(String accessKeyId, String secretKey, String description) {
-        if (!ACCESS_KEY_PATTERN.matcher(accessKeyId).matches()) {
-            throw new IllegalArgumentException("Access Key ID must be 16-128 alphanumeric characters");
-        }
-        if (secretKey == null || secretKey.length() < 16) {
-            throw new IllegalArgumentException("Secret Key must be at least 16 characters");
-        }
+        validate(accessKeyId, secretKey);
         if (credentialRepo.existsByAccessKeyId(accessKeyId)) {
             throw new IllegalArgumentException("Access Key ID already exists: " + accessKeyId);
         }
         CredentialEntity entity = new CredentialEntity(accessKeyId, secretKey, description, Instant.now());
         credentialRepo.save(entity);
-        log.info("Registered credential: accessKeyId={} desc={}", accessKeyId, description);
+        log.info("Registered credential: accessKeyId={}", accessKeyId);
+        log.debug("Registered credential {} description: {}", accessKeyId, description);
         return entity;
+    }
+
+    /** The rules every credential obeys, whichever way it enters (shell, environment list, legacy pair). */
+    static void validate(String accessKeyId, String secretKey) {
+        if (accessKeyId == null || !ACCESS_KEY_PATTERN.matcher(accessKeyId).matches()) {
+            throw new IllegalArgumentException("Access Key ID must be 16-128 alphanumeric characters");
+        }
+        if (secretKey == null || secretKey.length() < 16) {
+            throw new IllegalArgumentException("Secret Key must be at least 16 characters");
+        }
     }
 
     public Optional<CredentialEntity> findByAccessKeyId(String accessKeyId) {
@@ -106,6 +113,7 @@ public class CredentialService {
 
     /** Creates or updates a credential with the given fixed access/secret key pair. */
     public void ensureCredential(String accessKeyId, String secretKey) {
+        validate(accessKeyId, secretKey);
         credentialRepo.findByAccessKeyId(accessKeyId).ifPresentOrElse(existing -> {
             existing.setSecretKey(secretKey);
             credentialRepo.save(existing);
