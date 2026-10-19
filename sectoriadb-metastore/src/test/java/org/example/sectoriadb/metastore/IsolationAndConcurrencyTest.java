@@ -132,6 +132,24 @@ class IsolationAndConcurrencyTest {
     }
 
     @Test
+    void theOldestOpenReaderIsReportedAndTreeStatsDescribeThePages() throws Exception {
+        store.writeVoid(tx -> {
+            BTree t = tx.tree("t");
+            for (int i = 0; i < 500; i++) t.put(k(i), v("value-" + i));
+        });
+        assertEquals(0, store.stats().oldestReaderMillis());
+        try (ReadTxn r = store.beginRead()) {
+            Thread.sleep(30);
+            assertTrue(store.stats().oldestReaderMillis() >= 25, "reported " + store.stats().oldestReaderMillis());
+        }
+        assertEquals(0, store.stats().oldestReaderMillis());
+        MetaStore.TreeStat t = store.treeStats().stream().filter(x -> x.name().equals("t")).findFirst().orElseThrow();
+        assertEquals(500, t.entries());
+        assertTrue(t.leafPages() > 1 && t.branchPages() >= 1);
+        assertTrue(t.leafFill() > 0.3 && t.leafFill() <= 1.0, "fill " + t.leafFill());
+    }
+
+    @Test
     void concurrentWritersAreSerialized() throws Exception {
         store.writeVoid(tx -> tx.tree("c").put(v("n"), ByteBuffer.allocate(8).putLong(0).array()));
         int threads = 8, perThread = 150;

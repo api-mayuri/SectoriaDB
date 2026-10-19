@@ -45,12 +45,12 @@ public class StorageGauges {
             long slotsActive, long slotsTotal, long slotsQuarantined, long cuckooTablesLoaded, long cuckooUsedBytes,
             long cuckooBlobs, long smallBlobs, long cuckooCapacityBytes,
             long smallLiveBytes, long smallDeadBytes, long smallLiveRecords, long smallDeadRecords, long smallBlobsOpen,
-            long metaFileBytes, long metaPages, long metaFreePages, long metaLastTxId, long metaLiveReaders, long metaPageSize,
+            long metaFileBytes, long metaPages, long metaFreePages, long metaLastTxId, long metaLiveReaders, long metaOldestReaderMillis, long metaPageSize,
             long gcQueue, long objects, long objectBytes,
             long chunksIndexed, long chunkRefs, long chunkGcQueue, long chunkOrphans, long poolBlobsMax,
             long dataFree, long dataTotal, long metaDirFree, long metaDirTotal, long uploadHolds, long oldSmallFilesPending,
             long multipartOpen) {
-        static final Snapshot EMPTY = new Snapshot(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        static final Snapshot EMPTY = new Snapshot(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     private final MeterRegistry registry;
@@ -114,6 +114,7 @@ public class StorageGauges {
         g("sectoriadb.metastore.free.pages", "Free (reusable or waiting for readers) metastore pages", null, s -> s.metaFreePages);
         g("sectoriadb.metastore.last.txid", "Id of the last committed metastore transaction", null, s -> s.metaLastTxId);
         g("sectoriadb.metastore.live.readers", "Open metastore read transactions", null, s -> s.metaLiveReaders);
+        g("sectoriadb.metastore.oldest.reader.seconds", "Age of the oldest open metastore read transaction; it keeps every page freed since from being reused", "seconds", s -> s.metaOldestReaderMillis / 1000.0);
         g("sectoriadb.metastore.page.size.bytes", "Metastore page size", "bytes", s -> s.metaPageSize);
         g("sectoriadb.gc.queue.length", "Retired manifests waiting for the garbage collector", null, s -> s.gcQueue);
         g("sectoriadb.objects.stored", "Current S3 object versions (maintained in the commit transactions)", null, s -> s.objects);
@@ -199,7 +200,7 @@ public class StorageGauges {
         long[] meta = space(props.getMetaDir());
         return new Snapshot(active, total, quarantined, loaded.size(), used, cuckooBlobs, smallBlobCount, capacity,
                 smallLive, smallDead, smallLiveRec, smallDeadRec, smallOpen,
-                ms.fileSize(), ms.pageCount(), ms.freePages(), ms.lastTxId(), ms.liveReaders(), ms.pageSize(),
+                ms.fileSize(), ms.pageCount(), ms.freePages(), ms.lastTxId(), ms.liveReaders(), ms.oldestReaderMillis(), ms.pageSize(),
                 gc, totals.objects(), totals.bytes(),
                 cs.chunks(), cs.refs(), cs.gcQueue(), cs.orphans(), poolBlobsMax,
                 data[0], data[1], meta[0], meta[1], chunkStore.gate().inFlight(), compactor.pendingFiles(),

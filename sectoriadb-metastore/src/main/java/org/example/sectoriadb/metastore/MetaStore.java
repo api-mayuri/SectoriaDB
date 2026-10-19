@@ -37,12 +37,17 @@ public final class MetaStore implements AutoCloseable {
     }
 
     /** Point-in-time counters. */
-    public record Stats(int pageSize, long pageCount, long freePages, long lastTxId, long fileSize, int liveReaders) {
+    public record Stats(int pageSize, long pageCount, long freePages, long lastTxId, long fileSize, int liveReaders,
+                        long oldestReaderMillis) {
     }
 
     /** Result of {@link #verify()}. */
     public record VerifyReport(int trees, long entries, long treePages, long overflowPages,
                                long freelistPages, long freePages) {
+    }
+
+    /** Page usage of one tree; {@code leafFill} is the share of leaf bytes in use (1.0 = full pages). */
+    public record TreeStat(String name, long entries, long branchPages, long leafPages, long overflowPages, double leafFill) {
     }
 
     final Pager pager;
@@ -54,6 +59,10 @@ public final class MetaStore implements AutoCloseable {
     private final Object stateLock = new Object();
     private final Object closeMonitor = new Object();
     private final TreeMap<Long, Integer> readers = new TreeMap<>();
+    private final java.util.Set<ReadTxn> liveReaders = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+    static final boolean TRACE_READERS = Boolean.getBoolean("sectoriadb.metastore.trace-readers");
+    /** A read transaction older than this when it closes is logged: it pinned every page freed meanwhile. */
+    private static final long LONG_READER_NANOS = TimeUnit.SECONDS.toNanos(5);
     private volatile Snapshot committed;
     private volatile boolean closed;
     /**
@@ -216,7 +225,9 @@ public final class MetaStore implements AutoCloseable {
             checkOpen();   // under the lock close() takes to set the flag: no reader registers after close began
             Snapshot s = committed;
             readers.merge(s.txId(), 1, Integer::sum);
-            return new ReadTxn(this, s, true);
+            ReadTxn tx = new ReadTxn(this, s, true);
+            liveReaders.add(tx);
+            return tx;
         }
     }
 
@@ -290,10 +301,26 @@ public final class MetaStore implements AutoCloseable {
         writer.release();
     }
 
-    void unregisterReader(long txId) {
+    void unregisterReader(ReadTxn tx) {
         synchronized (stateLock) {
-            readers.computeIfPresent(txId, (k, v) -> v == 1 ? null : v - 1);
+            readers.computeIfPresent(tx.snap.txId(), (k, v) -> v == 1 ? null : v - 1);
+            liveReaders.remove(tx);
         }
+        long age = System.nanoTime() - tx.startNanos;
+        if (age > LONG_READER_NANOS) {
+            log.warn("A read transaction was open for {} ms (snapshot {}); it kept every page freed meanwhile from being reused",
+                    TimeUnit.NANOSECONDS.toMillis(age), tx.snap.txId(), tx.origin);
+        }
+    }
+
+    /** Age in milliseconds of the oldest open read transaction, 0 if none. */
+    private long oldestReaderMillis() {
+        long now = System.nanoTime();
+        long oldest = 0;
+        synchronized (stateLock) {
+            for (ReadTxn r : liveReaders) oldest = Math.max(oldest, now - r.startNanos);
+        }
+        return TimeUnit.NANOSECONDS.toMillis(oldest);
     }
 
     /** Runs the body in a write transaction; commits on normal return, aborts on exception. */
@@ -491,7 +518,14 @@ public final class MetaStore implements AutoCloseable {
         synchronized (stateLock) {
             live = readers.values().stream().mapToInt(Integer::intValue).sum();
         }
-        return new Stats(pager.pageSize, s.pageCount(), freeCountApprox, s.txId(), size, live);
+        return new Stats(pager.pageSize, s.pageCount(), freeCountApprox, s.txId(), size, live, oldestReaderMillis());
+    }
+
+    /** Pages and leaf fill of every tree on the latest committed snapshot (diagnostics; reads only). */
+    public List<TreeStat> treeStats() {
+        try (ReadTxn tx = beginRead()) {
+            return TreeStats.collect(tx);
+        }
     }
 
     /**

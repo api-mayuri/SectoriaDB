@@ -21,12 +21,17 @@ public class ReadTxn implements AutoCloseable {
     final boolean registered;
     final Map<String, BTree> handles = new HashMap<>();
     boolean closed;
+    /** When the snapshot was taken (System.nanoTime); drives the long-reader diagnostics. */
+    final long startNanos = System.nanoTime();
+    /** Where a registered reader began; only recorded with -Dsectoriadb.metastore.trace-readers=true. */
+    final Throwable origin;
 
     ReadTxn(MetaStore store, MetaStore.Snapshot snap, boolean registered) {
         this.store = store;
         this.snap = snap;
         this.pager = store.pager;
         this.registered = registered;
+        this.origin = registered && MetaStore.TRACE_READERS ? new Throwable("read transaction began here") : null;
     }
 
     /** Id of the commit this snapshot corresponds to (0 for a freshly created store). */
@@ -135,6 +140,6 @@ public class ReadTxn implements AutoCloseable {
     public void close() {
         if (closed) return;
         closed = true;
-        if (registered) store.unregisterReader(snap.txId());
+        if (registered) store.unregisterReader(this);
     }
 }

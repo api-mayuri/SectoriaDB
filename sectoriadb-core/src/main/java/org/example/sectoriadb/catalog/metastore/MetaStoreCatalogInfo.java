@@ -15,6 +15,7 @@ public class MetaStoreCatalogInfo implements CatalogInfo {
     @Override
     public FileStats fileStats() {
         MetaStore.Stats s = stores.get().stats();
-        return new FileStats(s.pageSize(), s.pageCount(), s.freePages(), s.lastTxId(), s.fileSize(), s.liveReaders());
+        return new FileStats(s.pageSize(), s.pageCount(), s.freePages(), s.lastTxId(), s.fileSize(), s.liveReaders(),
+                s.oldestReaderMillis());
     }
 }

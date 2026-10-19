@@ -13,6 +13,7 @@ public interface CatalogInfo {
      * @param fileSize    bytes of the file
      * @param liveReaders open read transactions
      */
-    record FileStats(int pageSize, long pageCount, long freePages, long lastTxId, long fileSize, int liveReaders) {
+    record FileStats(int pageSize, long pageCount, long freePages, long lastTxId, long fileSize, int liveReaders,
+                     long oldestReaderMillis) {
     }
 }
