@@ -366,7 +366,9 @@ public class ObjectWriter {
             } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
-            return commit.get();
+            T result = commit.get();
+            chunkStore.committed(entity.getPoolId(), entity.getStagedChunks());
+            return result;
         } finally {
             if (hold != null) {
                 hold.release();
@@ -384,6 +386,14 @@ public class ObjectWriter {
             redirectStagedChunks(entity);
             try {
                 return commit.get();
+            } catch (ChunkRepository.UnverifiedCopyException unverified) {
+                // another upload indexed the same keys in another blob: compare the copies by bytes, then commit again
+                if (attempt >= 5) throw unverified;
+                try {
+                    entity.setStagedChunks(chunkStore.verifyCopies(entity.getPoolId(), entity.getStagedChunks(), unverified.keys()));
+                } catch (IOException io) {
+                    throw new UncheckedIOException(io);
+                }
             } catch (ChunkRepository.ChunkPlacementException e) {
                 // BLOB_GONE right after a resize committed: the replacement is registered a moment later, look again
                 if (e.reason() != ChunkRepository.ChunkPlacementException.Reason.BLOB_GONE

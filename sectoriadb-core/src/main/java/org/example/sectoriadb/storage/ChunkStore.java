@@ -144,6 +144,17 @@ public class ChunkStore {
         return gate;
     }
 
+    /**
+     * Called after an upload's chunks were committed: a read right after the PUT needs no index lookup. The hint names the
+     * copy the index holds, which is this upload's own unless the commit shared an indexed copy in another blob after
+     * comparing the bytes.
+     */
+    public void committed(String poolId, List<PlacedChunk> placed) {
+        for (PlacedChunk p : placed) {
+            if (!p.indexed()) locations.put(poolId, p.key(), p.verifiedAgainst() != null ? p.verifiedAgainst() : p.blobId());
+        }
+    }
+
     /** Drops the cached location of a chunk (after the collector freed it). */
     public void forget(String poolId, long chunkKey) {
         locations.remove(poolId, chunkKey);
@@ -257,7 +268,9 @@ public class ChunkStore {
             try {
                 String blobId = place(pool, chunkSize, key, data);
                 placed.put(key, new PlacedChunk(key, blobId, data.length, crc, false));
-                locations.put(pool.getId(), key, blobId);   // a read right after the PUT needs no index lookup
+                // no location hint yet: until this upload commits, another upload may index the same 64-bit key with other
+                // bytes (equal length and CRC32C) and a hint to this copy would misdirect readers of that chunk;
+                // committed() sets it
                 return key;
             } catch (KeyCollisionException collision) {
                 log.warn("{}", collision.getMessage());   // an uncommitted copy of another chunk sits under this key
@@ -332,6 +345,57 @@ public class ChunkStore {
                 Thread.currentThread().interrupt();
                 throw new IOException("interrupted while waiting for a resize", ie);
             }
+        }
+    }
+
+    /**
+     * Commit-time collision check by bytes. {@code keys} are chunks of an upload that another upload indexed first, in
+     * another blob than the one this upload wrote: the commit transaction cannot read blobs, and equal length plus CRC32C
+     * do not prove equal content (the 64-bit key is not collision resistant). Both copies are read (each CRC-checked by the
+     * table) and compared; equal bytes mark the chunk {@link PlacedChunk#verifiedAgainst verified} so the commit may share
+     * the indexed copy, different bytes are a genuine collision between uncommitted uploads.
+     *
+     * @return the placement with the verified chunks marked
+     * @throws ChunkRepository.ChunkPlacementException COLLISION if the copies differ or cannot be read (retry: staging
+     *         compares by bytes and re-keys)
+     */
+    public List<PlacedChunk> verifyCopies(String poolId, List<PlacedChunk> placed, List<Long> keys) throws IOException {
+        Set<Long> wanted = new HashSet<>(keys);
+        List<PlacedChunk> out = new ArrayList<>(placed.size());
+        for (PlacedChunk p : placed) {
+            ChunkEntry e = wanted.contains(p.key()) ? index.find(poolId, p.key()).orElse(null) : null;
+            if (e == null || e.blobId().equals(p.blobId())) {   // not in question, or the entry vanished: the commit decides again
+                out.add(p);
+                continue;
+            }
+            if (e.dataLength() != p.dataLength() || e.crc32c() != p.crc32c() || !sameBytes(p.blobId(), e.blobId(), p.key(), p.dataLength())) {
+                throw new ChunkRepository.ChunkPlacementException(ChunkRepository.ChunkPlacementException.Reason.COLLISION,
+                        "Chunk 0x" + Long.toHexString(p.key()) + " of pool " + poolId + ": the copy written by this upload"
+                        + " differs from (or cannot be compared with) the indexed copy under the same 64-bit key; retry the upload");
+            }
+            out.add(p.verifiedAgainst(e.blobId()));
+        }
+        return out;
+    }
+
+    private boolean sameBytes(String blobA, String blobB, long key, int length) throws IOException {
+        byte[] a = readCopy(blobA, key, length);
+        byte[] b = readCopy(blobB, key, length);
+        return a != null && b != null && Arrays.equals(a, b);
+    }
+
+    /** The bytes of a chunk in a blob; null if the blob is gone or has no such chunk or the copy is damaged. */
+    private byte[] readCopy(String blobId, long key, int length) throws IOException {
+        String target = blobGate.resolveRedirect(blobId);
+        try (ResidentHandle<CuckooHashTable> h = blobs.acquireTable(target)) {
+            var stored = h.get().readChunkByKey(key, length);
+            if (stored.isEmpty()) return null;
+            ByteBuffer b = stored.get();
+            byte[] bytes = new byte[b.remaining()];
+            b.get(bytes);
+            return bytes;
+        } catch (ChunkCorruptedException | BlobService.BlobGoneException | ClosedChannelException e) {
+            return null;
         }
     }
 

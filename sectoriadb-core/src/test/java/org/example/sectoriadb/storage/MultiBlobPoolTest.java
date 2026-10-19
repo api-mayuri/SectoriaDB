@@ -410,6 +410,118 @@ class MultiBlobPoolTest {
         }
     }
 
+    /** Chunks of exactly {@code TAIL} bytes all get key 42 at seed 0, everything else hashes for real. */
+    static final int TAIL = 5;
+    static final BytesHasher TAIL_COLLIDING = new BytesHasher() {
+        private final XxHash64BytesHasher real = new XxHash64BytesHasher();
+
+        @Override
+        public long hash64(ByteBuffer buffer, long seed) {
+            return seed == 0 && buffer.remaining() == TAIL ? 42L : real.hash64(buffer, seed);
+        }
+    };
+
+    /** Two different 5-byte strings with the same CRC32C (birthday search over 2^32 values: ~80 000 tries). */
+    private static byte[][] sameCrcTails() {
+        Map<Long, byte[]> seen = new HashMap<>();
+        Random rnd = new Random(5);
+        while (true) {
+            byte[] t = new byte[TAIL];
+            rnd.nextBytes(t);
+            var crc = new java.util.zip.CRC32C();
+            crc.update(t, 0, t.length);
+            byte[] other = seen.putIfAbsent(crc.getValue(), t);
+            if (other != null && !java.util.Arrays.equals(other, t)) return new byte[][]{other, t};
+        }
+    }
+
+    @Test
+    void aCommitDoesNotShareAnIndexedCopyInAnotherBlobWithoutComparingTheBytes() throws Exception {
+        rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
+        rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
+        List<BlobFileEntity> blobs = cuckoo();
+        assertEquals(2, blobs.size());
+        ChunkStore store = new ChunkStore(rig.chunks, rig.blobService, rig.cache, rig.blobGate, TAIL_COLLIDING, rig.props);
+        ObjectWriter writer = writerOver(store);
+        ObjectReader reader = readerOver(store);
+
+        byte[] common = bytes(CHUNK, 77);
+        byte[][] tails = sameCrcTails();
+        byte[] a = concat(common, tails[0]);
+        byte[] b = concat(common, tails[1]);
+
+        // two concurrent uploads, each into its own blob: A into the second, B into the first
+        rig.blobGate.freeze(blobs.get(0).getId());
+        ManifestEntity stagedA;
+        try {
+            stagedA = writer.stageStream(new ByteArrayInputStream(a), pool, "a", null, UploadChecksums.none());
+        } finally {
+            rig.blobGate.unfreeze(blobs.get(0).getId());
+        }
+        rig.blobGate.freeze(blobs.get(1).getId());
+        ManifestEntity stagedB;
+        try {
+            stagedB = writer.stageStream(new ByteArrayInputStream(b), pool, "b", null, UploadChecksums.none());
+        } finally {
+            rig.blobGate.unfreeze(blobs.get(1).getId());
+        }
+        long tailKeyA = stagedA.chunkKeyArray()[1];
+        long tailKeyB = stagedB.chunkKeyArray()[1];
+        assertEquals(42L, tailKeyA);
+        assertEquals(42L, tailKeyB, "both tails were keyed alike in different blobs, with equal length and CRC32C");
+        assertNotEquals(stagedA.getStagedChunks().get(1).blobId(), stagedB.getStagedChunks().get(1).blobId());
+
+        writer.commitObject(stagedA);
+        // before the fix this commit succeeded and B's tail resolved to A's bytes
+        var e = assertThrows(ChunkRepository.ChunkPlacementException.class, () -> writer.commitObject(stagedB));
+        assertEquals(ChunkRepository.ChunkPlacementException.Reason.COLLISION, e.reason());
+        assertTrue(rig.catalog.findObject("bkt", "b").isEmpty(), "nothing was committed");
+        writer.abortStaged(stagedB);
+
+        // the retry stages through the byte-comparing dedup path, re-keys the tail and commits
+        writer.storeStream(new ByteArrayInputStream(b), pool, "b", null);
+        ByteArrayOutputStream outA = new ByteArrayOutputStream();
+        reader.streamToOutput(rig.manifests.findCurrent("bkt", "a").orElseThrow(), outA);
+        assertArrayEquals(a, outA.toByteArray());
+        ByteArrayOutputStream outB = new ByteArrayOutputStream();
+        reader.streamToOutput(rig.manifests.findCurrent("bkt", "b").orElseThrow(), outB);
+        assertArrayEquals(b, outB.toByteArray());
+    }
+
+    @Test
+    void identicalContentWrittenToTwoBlobsIsStillSharedAfterAByteComparison() throws Exception {
+        rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
+        rig.blobService.create(pool, TINY_BUCKETS, CHUNK);
+        List<BlobFileEntity> blobs = cuckoo();
+        byte[] data = bytes(3 * CHUNK, 91);
+        rig.blobGate.freeze(blobs.get(0).getId());
+        ManifestEntity first;
+        try {
+            first = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "first", null, UploadChecksums.none());
+        } finally {
+            rig.blobGate.unfreeze(blobs.get(0).getId());
+        }
+        rig.blobGate.freeze(blobs.get(1).getId());
+        ManifestEntity second;
+        try {
+            second = rig.writer.stageStream(new ByteArrayInputStream(data), pool, "second", null, UploadChecksums.none());
+        } finally {
+            rig.blobGate.unfreeze(blobs.get(1).getId());
+        }
+        rig.writer.commitObject(first);
+        rig.writer.commitObject(second);   // equal bytes: compared at commit time, then shared
+        assertEquals(3, rig.chunks.stats().chunks());
+        assertEquals(6, rig.chunks.stats().refs());
+        assertArrayEquals(data, get("second"));
+    }
+
+    private static byte[] concat(byte[] x, byte[] y) {
+        byte[] r = new byte[x.length + y.length];
+        System.arraycopy(x, 0, r, 0, x.length);
+        System.arraycopy(y, 0, r, x.length, y.length);
+        return r;
+    }
+
     /** A ChunkRepository that counts the lookups the read path makes. */
     private ChunkRepository counting(AtomicInteger lookups) {
         return (ChunkRepository) Proxy.newProxyInstance(getClass().getClassLoader(),

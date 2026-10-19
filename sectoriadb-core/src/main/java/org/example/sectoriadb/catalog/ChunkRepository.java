@@ -81,4 +81,23 @@ public interface ChunkRepository {
             return reason;
         }
     }
+
+    /**
+     * Chunks of the commit are indexed (by another upload that committed first) in another blob than the one this upload
+     * wrote, and nobody compared the two copies by bytes: length and CRC32C equal do not prove equal content. Nothing was
+     * written. The writer compares the copies and commits again ({@code PlacedChunk#verifiedAgainst}); different bytes
+     * are a hash collision, the upload fails ({@code COLLISION}) and its retry re-keys the chunk.
+     */
+    class UnverifiedCopyException extends ChunkPlacementException {
+        private final java.util.List<Long> keys;
+
+        public UnverifiedCopyException(java.util.List<Long> keys, String message) {
+            super(Reason.COLLISION, message);
+            this.keys = java.util.List.copyOf(keys);
+        }
+
+        public java.util.List<Long> keys() {
+            return keys;
+        }
+    }
 }

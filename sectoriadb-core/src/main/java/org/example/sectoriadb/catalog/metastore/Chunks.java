@@ -99,6 +99,7 @@ final class Chunks {
         BTree byBlob = tx.tree(CHUNKS_BY_BLOB);
         BTree orphans = tx.tree(CHUNK_ORPHANS);
         long added = 0;
+        List<Long> unverified = new ArrayList<>();
         for (Map.Entry<Long, Integer> o : occurrences(keys).entrySet()) {
             long k = o.getKey();
             int n = o.getValue();
@@ -112,6 +113,11 @@ final class Chunks {
                             + poolId + " is indexed with length " + e.dataLength() + "/crc " + e.crc32c()
                             + " but this upload wrote length " + p.dataLength() + "/crc " + p.crc32c()
                             + " under the same key (hash collision between uncommitted uploads)");
+                }
+                if (p != null && !p.blobId().equals(e.blobId()) && !e.blobId().equals(p.verifiedAgainst())) {
+                    // another upload indexed this key in a different blob; equal length and CRC32C are not equal bytes
+                    unverified.add(k);
+                    continue;
                 }
                 if (e.refcount() == 0) removeGcRows(tx, poolId, k);   // revived: an upload deduplicated against a zombie
                 chunks.put(ck, ChunkCodec.encode(new ChunkEntry(e.blobId(), e.dataLength(), e.crc32c(), e.refcount() + n)));
@@ -140,6 +146,11 @@ final class Chunks {
                 orphans.delete(bk);                    // a recorded orphan copy in this very blob is the indexed one now
             }
             added += n;
+        }
+        if (!unverified.isEmpty()) {
+            throw new ChunkRepository.UnverifiedCopyException(unverified, unverified.size() + " chunk(s) of pool " + poolId
+                    + " are indexed in another blob than the one this upload wrote and were not compared by bytes"
+                    + " (first key 0x" + Long.toHexString(unverified.get(0)) + ")");
         }
         adjustRefs(tx, added);
     }
