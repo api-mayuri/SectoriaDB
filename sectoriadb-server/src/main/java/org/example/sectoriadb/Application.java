@@ -129,12 +129,19 @@ public class Application {
      * Not run in CLI mode: a command next to a running server must not delete that server's live uploads.
      */
     @Bean
-    public SmartInitializingSingleton cleanUploadSpool(ObjectWriter writer) {
+    public SmartInitializingSingleton cleanUploadSpool(ObjectWriter writer, StorageProperties props) {
         return () -> {
             if (System.getProperty("sectoriadb.metastore.lazy") != null) return;
+            // credentials*.tmp: the plaintext temp file of an interrupted credentials.json update
+            try (var files = Files.newDirectoryStream(Path.of(props.getMetaDir()), "credentials*.tmp")) {
+                for (Path f : files) Files.deleteIfExists(f);
+            } catch (IOException e) {
+                log.debug("No credentials temp files cleaned in {}: {}", props.getMetaDir(), e.toString());
+            }
             Path dir = writer.uploadTmpDir();
             int removed = 0;
-            try (var files = Files.newDirectoryStream(dir, "sectoriadb-{upload,copy}-*.tmp")) {
+            // upload (PutObject), copy (CopyObject), part (UploadPart), partcopy (UploadPartCopy)
+            try (var files = Files.newDirectoryStream(dir, "sectoriadb-{upload,copy,part,partcopy}-*.tmp")) {
                 for (Path f : files) {
                     if (Files.deleteIfExists(f)) removed++;
                 }

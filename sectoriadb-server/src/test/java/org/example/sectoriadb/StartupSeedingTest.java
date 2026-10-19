@@ -39,6 +39,10 @@ class StartupSeedingTest {
     static void props(DynamicPropertyRegistry r) throws Exception {
         Path spool = Files.createDirectories(tempRoot.resolve("spool"));
         Files.writeString(spool.resolve("sectoriadb-upload-stale.tmp"), "left behind by a crash");
+        Files.writeString(spool.resolve("sectoriadb-part-stale.tmp"), "an UploadPart left behind by a crash");
+        Files.writeString(spool.resolve("sectoriadb-partcopy-stale.tmp"), "an UploadPartCopy left behind by a crash");
+        Files.writeString(spool.resolve("keep-me.txt"), "not ours");
+        Files.writeString(Files.createDirectories(tempRoot.resolve("meta")).resolve("credentials123456.tmp"), "secrets of an interrupted update");
         r.add("sectoriadb.meta-dir",            () -> tempRoot.resolve("meta").toString());
         r.add("sectoriadb.data-dir",            () -> tempRoot.resolve("data").toString());
         r.add("sectoriadb.upload-tmp-dir",      spool::toString);
@@ -71,6 +75,10 @@ class StartupSeedingTest {
     void environmentKeysAndSpoolCleanupAreDoneBeforeAnyRunnerSuchAsTheInteractiveShell() {
         assertTrue(keySeededBeforeFirstRunner.get(), "the env key must exist before the first application runner");
         assertTrue(staleSpoolFileGoneBeforeFirstRunner.get(), "stale spool files must be gone before the first runner");
+        assertFalse(Files.exists(tempRoot.resolve("spool").resolve("sectoriadb-part-stale.tmp")));
+        assertFalse(Files.exists(tempRoot.resolve("spool").resolve("sectoriadb-partcopy-stale.tmp")));
+        assertTrue(Files.exists(tempRoot.resolve("spool").resolve("keep-me.txt")), "only our own spool files are removed");
+        assertFalse(Files.exists(tempRoot.resolve("meta").resolve("credentials123456.tmp")));
         assertFalse(credentials.findByAccessKeyId("ENVKEY0000000001").isEmpty());
         assertEquals("from-env", credentials.findByAccessKeyId("ENVKEY0000000001").orElseThrow().getDescription());
         assertEquals("envsecret0123456789", credentials.findByAccessKeyId("ENVKEY0000000001").orElseThrow().getSecretKey());
