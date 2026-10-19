@@ -1,3 +1,11 @@
+# Docker log rotation for every service: without it the json-file driver grows without bound and can fill the disk that
+# also holds the data volume (the server logs to the console, nginx logs every request).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "5"
+
 services:
   sectoriadb:
     build: .
@@ -5,6 +13,18 @@ services:
     container_name: sectoriadb
     stdin_open: true
     tty: true
+    logging: *logging
+    # Hardening: no capabilities (the server only needs to listen on 8080 and write its volume), no privilege gain, a
+    # read-only root filesystem (everything writable is the /data volume and /tmp). Add `mem_limit: 2g` (and `pids_limit`)
+    # to cap the container; the JVM takes 70 % of the limit, see the Dockerfile.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+    # mem_limit: 2g
     # The S3 port is NOT published: clients reach the server through the nginx service (TLS). For local development
     # without TLS add docker-compose.dev.yml.
     expose:
@@ -48,8 +68,21 @@ services:
   # TLS termination (deploy/nginx/sectoriadb.conf; certificate: deploy/certs/fullchain.pem + privkey.pem,
   # for a local test create it with deploy/gen-self-signed.sh)
   nginx:
-    image: nginx:1.27.5-alpine
+    image: nginx:1.30.6-alpine@sha256:970364228b1e4f932abc22d321932816782cca8a20b85a77552a7cfe9acfb3b5
     container_name: sectoriadb-nginx
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # the master process (root) starts workers as the nginx user and prepares its temp directories; ports 80/443 inside
+      # the container need no capability (Docker lowers net.ipv4.ip_unprivileged_port_start). DAC_OVERRIDE: reads the
+      # private key deploy/certs/privkey.pem (mode 600, owned by the host user)
+      - CHOWN
+      - SETUID
+      - SETGID
+      - DAC_OVERRIDE
     ports:
       - "${HTTPS_PORT:-443}:443"
       - "${HTTP_PORT:-80}:80"

@@ -1,5 +1,6 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
-FROM maven:3.9-eclipse-temurin-21 AS builder
+# Base images are pinned by digest (the tag stays for people; bump both together, e.g. with Renovate/Dependabot)
+FROM maven:3.9-eclipse-temurin-21@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320 AS builder
 
 WORKDIR /build
 
@@ -19,16 +20,17 @@ COPY sectoriadb-server/src/ sectoriadb-server/src/
 RUN mvn -B package -DskipTests -q
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
-FROM eclipse-temurin:21-jre-alpine
+FROM eclipse-temurin:21-jre-alpine@sha256:51ab5e3302e7141ce665ca3ea85e8b5cd648eafbc3c0c90dd79d6537684e4555
 
-# Unprivileged user; /data is what the volume below mounts over (a fresh named volume inherits this ownership)
+# Unprivileged user; /data is what the volume below mounts over (a fresh named volume inherits this ownership).
+# /app belongs to root and the jar is read-only: the server cannot rewrite its own code.
 RUN addgroup -S sectoria && adduser -S -G sectoria sectoria \
  && mkdir -p /app /data/meta /data/storage \
- && chown -R sectoria:sectoria /app /data
+ && chown -R sectoria:sectoria /data
 
 WORKDIR /app
 # The version is not hard-coded: the repackaged jar is the only *.jar of the target directory
-COPY --from=builder --chown=sectoria:sectoria /build/sectoriadb-server/target/SectoriaDB-*.jar /app/sectoriadb.jar
+COPY --from=builder --chown=root:root --chmod=444 /build/sectoriadb-server/target/SectoriaDB-*.jar /app/sectoriadb.jar
 
 # One volume for everything the server writes (/data/meta, /data/storage incl. the upload spool /data/storage/.tmp):
 # a snapshot of this single volume is consistent across metadata and blobs.
@@ -59,4 +61,6 @@ EXPOSE 8080 9464
 HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
   CMD wget -q -T 4 -O /dev/null "http://127.0.0.1:${MANAGEMENT_SERVER_PORT:-9464}/actuator/health" || exit 1
 
-ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/sectoriadb.jar"]
+# umask 027: files the server creates (sectoria.db, blobs, logs, spool) are not readable by other users of the host or of
+# a bind-mounted volume (credentials.json is 0600 regardless). `docker compose exec ... java -jar` bypasses the ENTRYPOINT.
+ENTRYPOINT ["sh", "-c", "umask 027 && exec java $JAVA_OPTS -jar /app/sectoriadb.jar"]

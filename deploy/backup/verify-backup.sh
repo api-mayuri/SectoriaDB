@@ -9,9 +9,10 @@
 # DIRECTORY is a copy or a mounted snapshot of the volume root (it contains meta/ and storage/); it is only read.
 # Environment: SECTORIADB_IMAGE (default: image of the compose service), BACKUP_IMAGE (debian:12-slim).
 set -euo pipefail
+umask 077
+src="$(realpath -m "${1:?usage: verify-backup.sh ARCHIVE|DIRECTORY}")"
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-src="${1:?usage: verify-backup.sh ARCHIVE|DIRECTORY}"
 BACKUP_IMAGE="${BACKUP_IMAGE:-debian:12-slim}"
 if [ -z "${SECTORIADB_IMAGE:-}" ]; then
   SECTORIADB_IMAGE="$(docker compose config --images 2>/dev/null | grep -m1 sectoriadb || true)"

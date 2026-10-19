@@ -25,3 +25,11 @@ output/
 
 # Docker files themselves (avoid infinite context)
 docker-compose.override.yml
+
+# Never send keys, certificates, secrets or backups to the build daemon (the Dockerfile copies only src/ and poms)
+deploy/
+**/*.pem
+**/.env*
+backups/
+*.tar.zst
+*.tar.gz

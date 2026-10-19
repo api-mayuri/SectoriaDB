@@ -1,7 +1,11 @@
 # Local development WITHOUT TLS, on top of docker-compose.yml:
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 # (or export COMPOSE_FILE=docker-compose.yml:docker-compose.dev.yml)
-# Publishes the plain S3 port on the host's loopback and starts the optional s3manager web UI.
+# Publishes the plain S3 port on the host's loopback. The s3manager web UI is OPT-IN (profile "s3manager"):
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml --profile s3manager up -d
+# WARNING: s3manager has no login of its own and acts with the S3 keys from .env; any local process or web page that can
+# reach 127.0.0.1:8081 (DNS rebinding, CSRF) can read and, with ALLOW_DELETE=true, delete your objects. It starts read-only
+# (ALLOW_DELETE=false) and should get a read-only key (deploy/iam/read-only.json) instead of the admin key.
 # Do not use on a server that other people can reach.
 services:
   sectoriadb:
@@ -14,6 +18,7 @@ services:
   s3manager:
     image: cloudlena/s3manager:v0.5.0
     container_name: s3manager
+    profiles: ["s3manager"]
     ports:
       # loopback only: the manager can delete objects with the S3 keys below
       - "127.0.0.1:8081:8080"
@@ -24,7 +29,7 @@ services:
       SECRET_ACCESS_KEY: ${SECTORIADB_S3_SECRET_KEY:-}
       USE_SSL: "false"
       SIGNATURE_TYPE: "V4"
-      ALLOW_DELETE: "true"
+      ALLOW_DELETE: ${S3MANAGER_ALLOW_DELETE:-false}
     depends_on:
       sectoriadb:
         condition: service_healthy
