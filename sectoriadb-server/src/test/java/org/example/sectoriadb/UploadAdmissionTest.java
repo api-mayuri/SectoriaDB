@@ -25,10 +25,15 @@ class UploadAdmissionTest {
     private static final Path META = Path.of("meta");
 
     private static UploadAdmission admission(AtomicLong spoolFree, AtomicLong metaFree, long floor) throws Exception {
+        return admission(spoolFree, metaFree, floor, Long.MAX_VALUE);
+    }
+
+    private static UploadAdmission admission(AtomicLong spoolFree, AtomicLong metaFree, long floor, long heapBudget) throws Exception {
         ToLongFunction<Path> usable = p -> p.equals(SPOOL) ? spoolFree.get() : metaFree.get();
-        Constructor<UploadAdmission> c = UploadAdmission.class.getDeclaredConstructor(Path.class, List.class, long.class, ToLongFunction.class);
+        Constructor<UploadAdmission> c = UploadAdmission.class.getDeclaredConstructor(Path.class, List.class, long.class,
+                ToLongFunction.class, long.class, long.class);
         c.setAccessible(true);
-        return c.newInstance(SPOOL, List.of(META), floor, usable);
+        return c.newInstance(SPOOL, List.of(META), floor, usable, 16_384L, heapBudget);
     }
 
     private static void finish(UploadAdmission admission, MockHttpServletRequest request) throws Exception {
@@ -87,6 +92,30 @@ class UploadAdmissionTest {
                     throw new IllegalStateException("handler failed");
                 }));
         assertEquals(0, admission.reservedBytes());
+    }
+
+    @Test
+    void theStagingHeapOfUploadsInFlightIsBoundedByTheBudget() throws Exception {
+        // a 5 GiB upload of 16 KiB chunks is estimated at 327681 * 256 B = about 80 MB; the budget holds two of them
+        long one = 80L << 20;
+        var admission = admission(new AtomicLong(1000 * GIB), new AtomicLong(1000 * GIB), GIB, 2 * one + one / 2);
+        var a = new MockHttpServletRequest();
+        var b = new MockHttpServletRequest();
+        admission.admit(a, 5 * GIB);
+        admission.admit(b, 5 * GIB);
+        S3Exception e = assertThrows(S3Exception.class, () -> admission.admit(new MockHttpServletRequest(), 5 * GIB));
+        assertEquals(503, e.getStatus().value());
+        assertEquals(10 * GIB, admission.reservedBytes(), "the refused one also gives back its disk reservation");
+        admission.admit(new MockHttpServletRequest(), 1L << 20);   // small uploads still fit next to them
+        finish(admission, a);
+        admission.admit(new MockHttpServletRequest(), 5 * GIB);
+    }
+
+    @Test
+    void theFirstUploadIsAlwaysAdmittedEvenIfItAloneExceedsTheHeapBudget() throws Exception {
+        var admission = admission(new AtomicLong(1000 * GIB), new AtomicLong(1000 * GIB), GIB, 1L << 20);
+        admission.admit(new MockHttpServletRequest(), 5 * GIB);
+        assertThrows(S3Exception.class, () -> admission.admit(new MockHttpServletRequest(), 5 * GIB));
     }
 
     // ── declared size ────────────────────────────────────────────────────────

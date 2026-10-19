@@ -32,6 +32,11 @@ import java.util.function.ToLongFunction;
  *   leave less than that on the spool, metadata or data volume is refused with {@code 507 InsufficientStorage} before
  *   the volume is full, because a full volume fails metastore commits and stops every write, deletes included.
  *   When only the other in-flight uploads stand in the way it is {@code 503 SlowDown} (retry later).</li>
+ *   <li>Heap: staging an upload keeps one entry per chunk (key, location, refcount bookkeeping) until it commits, about
+ *   250 bytes per chunk, i.e. roughly 80 MB for a 5 GiB object of unique data. The estimated heap of the uploads in
+ *   flight is a second counter against a budget of {@code sectoriadb.s3.limits.upload-heap-fraction} of the maximum
+ *   heap; above it a new upload gets {@code 503 SlowDown} (the first one is always admitted), so a swarm of 5 GiB uploads
+ *   cannot push the JVM into {@code OutOfMemoryError}.</li>
  * </ul>
  * Deletes are never refused here.
  */
@@ -41,7 +46,13 @@ public class UploadAdmission extends OncePerRequestFilter {
 
     private static final String HELD = UploadAdmission.class.getName() + ".held";
 
+    /** Heap held while a chunk of an upload is staged, per chunk (audit estimate: 5 GiB of 16 KiB chunks is about 80 MB). */
+    static final long HEAP_BYTES_PER_CHUNK = 256;
+
     private final AtomicLong reserved = new AtomicLong();
+    private final AtomicLong heapReserved = new AtomicLong();
+    private final long chunkSize;
+    private final long heapBudget;
     private final Path spool;
     private final List<Path> volumes;
     private final long floor;
@@ -50,13 +61,22 @@ public class UploadAdmission extends OncePerRequestFilter {
     @org.springframework.beans.factory.annotation.Autowired
     public UploadAdmission(StorageProperties props,
                            @Value("${sectoriadb.s3.limits.upload-free-space-reserve-bytes:67108864}") long reserve,
-                           @Value("${sectoriadb.storage.min-free-bytes:1073741824}") long minFree) {
+                           @Value("${sectoriadb.storage.min-free-bytes:1073741824}") long minFree,
+                           @Value("${sectoriadb.s3.limits.upload-heap-fraction:0.25}") double heapFraction) {
         this(props.uploadTmpPath(), List.of(Path.of(props.getMetaDir()), Path.of(props.getDataDir())),
-                Math.max(reserve, minFree), UploadAdmission::usable);
+                Math.max(reserve, minFree), UploadAdmission::usable, Math.max(1, props.getDefaultChunkSize()),
+                heapFraction <= 0 ? Long.MAX_VALUE : (long) (Runtime.getRuntime().maxMemory() * Math.min(heapFraction, 0.9)));
     }
 
-    /** @param floor free bytes that must stay on every volume after the admitted bytes are written */
-    UploadAdmission(Path spool, List<Path> volumes, long floor, ToLongFunction<Path> usableSpace) {
+    /**
+     * @param floor      free bytes that must stay on every volume after the admitted bytes are written
+     * @param chunkSize  chunk size of new buckets, to estimate the staging heap of an upload
+     * @param heapBudget bytes of heap that the staging of all uploads in flight may use together
+     */
+    UploadAdmission(Path spool, List<Path> volumes, long floor, ToLongFunction<Path> usableSpace,
+                    long chunkSize, long heapBudget) {
+        this.chunkSize = chunkSize;
+        this.heapBudget = heapBudget;
         this.spool = spool;
         this.volumes = volumes;
         this.floor = floor;
@@ -66,6 +86,21 @@ public class UploadAdmission extends OncePerRequestFilter {
     /** Bytes currently promised to admitted requests (a gauge for tests and diagnostics). */
     public long reservedBytes() {
         return reserved.get();
+    }
+
+    /** Estimated staging heap of the admitted requests. */
+    public long reservedHeapBytes() {
+        return heapReserved.get();
+    }
+
+    /** Heap held while {@code bytes} of payload are staged. */
+    long heapEstimate(long bytes) {
+        return (bytes / chunkSize + 1) * HEAP_BYTES_PER_CHUNK;
+    }
+
+    private static final class Held {
+        final AtomicLong disk = new AtomicLong();
+        final AtomicLong heap = new AtomicLong();
     }
 
     /**
@@ -87,12 +122,23 @@ public class UploadAdmission extends OncePerRequestFilter {
             }
             if (reserved.compareAndSet(promised, promised + bytes)) break;
         }
-        AtomicLong held = (AtomicLong) request.getAttribute(HELD);
+        long heap = heapEstimate(bytes);
+        while (true) {
+            long inFlight = heapReserved.get();
+            if (inFlight > 0 && inFlight + heap > heapBudget) {
+                reserved.addAndGet(-bytes);
+                throw new S3Exception(HttpStatus.SERVICE_UNAVAILABLE, "SlowDown",
+                        "Too many large uploads are being processed right now. Please retry later.");
+            }
+            if (heapReserved.compareAndSet(inFlight, inFlight + heap)) break;
+        }
+        Held held = (Held) request.getAttribute(HELD);
         if (held == null) {
-            held = new AtomicLong();
+            held = new Held();
             request.setAttribute(HELD, held);
         }
-        held.addAndGet(bytes);
+        held.disk.addAndGet(bytes);
+        held.heap.addAndGet(heap);
     }
 
     /** The free-space floor only, for writes that spool nothing (CreateBucket, CreateMultipartUpload). */
@@ -125,8 +171,9 @@ public class UploadAdmission extends OncePerRequestFilter {
             chain.doFilter(request, response);
         } finally {
             Object held = request.getAttribute(HELD);
-            if (held instanceof AtomicLong h) {
-                reserved.addAndGet(-h.getAndSet(0));
+            if (held instanceof Held h) {
+                reserved.addAndGet(-h.disk.getAndSet(0));
+                heapReserved.addAndGet(-h.heap.getAndSet(0));
             }
         }
     }
