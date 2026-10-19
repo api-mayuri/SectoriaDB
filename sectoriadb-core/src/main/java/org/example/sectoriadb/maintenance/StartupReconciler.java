@@ -35,7 +35,7 @@ public class StartupReconciler {
         if (!props.getMetastore().isLazy()) removeLegacyMultipartDirectory();
         if (!enabled) return;
         try {
-            int n = reaper.reconcileAtStartup();
+            int n = reaper.reconcileAtStartup(props.getGc().getGrace().toMillis());
             if (n > 0) log.warn("Startup reconciliation removed {} unregistered blob file(s)", n);
         } catch (RuntimeException e) {
             log.warn("Startup reconciliation of blob files failed (will be retried by the collector): {}", e.toString());

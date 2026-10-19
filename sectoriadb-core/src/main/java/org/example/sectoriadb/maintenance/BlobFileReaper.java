@@ -31,7 +31,8 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  *       commit leaves the old file (no longer registered). {@link #deleteUnregistered} removes files that no blob record
  *       names, are not being built ({@link #beginBuilding}), not resident in the cache and not waiting in the release
  *       queue; at startup ({@link #reconcileAtStartup}) there are no readers and no resize in flight, so every unregistered
- *       file goes at once, otherwise only files older than {@code max(minAge, 60 s)}.</li>
+ *       file goes at once (the server passes the garbage-collection grace and keeps younger files, see
+ *       {@link #reconcileAtStartup(long)}), otherwise only files older than {@code max(minAge, 60 s)}.</li>
  * </ul>
  */
 public class BlobFileReaper {
@@ -99,6 +100,17 @@ public class BlobFileReaper {
         return deleteUnregistered(0, true);
     }
 
+    /**
+     * Startup, production variant: as {@link #reconcileAtStartup()} but a file modified within the last
+     * {@code minAgeMillis} (the garbage-collection grace) stays. A file that young may belong to a metadata store that is
+     * older than the data directory (restored from a backup, or the wrong snapshot mounted): deleting it at boot would
+     * destroy data that was written after the backup, irreversibly. The periodic cleaner removes it later if it is
+     * really garbage.
+     */
+    public int reconcileAtStartup(long minAgeMillis) {
+        return deleteUnregistered(minAgeMillis, true);
+    }
+
     /** Periodic cleanup of leftovers older than {@code max(minAgeMillis, 60 s)}. */
     public int deleteUnregistered(long minAgeMillis) {
         return deleteUnregistered(minAgeMillis, false);
@@ -108,7 +120,9 @@ public class BlobFileReaper {
         int n = 0;
         Set<Path> keep = new HashSet<>(building);
         for (Pending f : pending) keep.add(f.path());
-        long cutoff = startup ? Long.MAX_VALUE : System.currentTimeMillis() - Math.max(minAgeMillis, MIN_FILE_AGE_MILLIS);
+        long cutoff = startup
+                ? (minAgeMillis <= 0 ? Long.MAX_VALUE : System.currentTimeMillis() - minAgeMillis)
+                : System.currentTimeMillis() - Math.max(minAgeMillis, MIN_FILE_AGE_MILLIS);
         for (PoolEntity pool : poolRepo.findAll()) {
             Set<String> registered = registeredNames();
             Path dir = Path.of(pool.getBasePath());
@@ -117,7 +131,7 @@ public class BlobFileReaper {
                 for (Path f : files) {
                     Path p = f.toAbsolutePath().normalize();
                     if (registered.contains(f.getFileName().toString()) || keep.contains(p) || building.contains(p)) continue;
-                    if (!startup && Files.getLastModifiedTime(f).toMillis() > cutoff) continue;
+                    if ((!startup || minAgeMillis > 0) && Files.getLastModifiedTime(f).toMillis() > cutoff) continue;
                     if (isResident(p)) continue;
                     // re-check the registry: a blob registered after the listing must survive
                     if (registeredNames().contains(f.getFileName().toString()) || building.contains(p)) continue;
