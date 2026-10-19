@@ -54,10 +54,13 @@ public class S3BucketController {
     private final S3Lookup lookup;
     private final AccessControlService accessControl;
     private final IamAuthorizer iamAuthorizer;
+    private final UploadAdmission admission;
 
     public S3BucketController(PoolService poolService, ManifestRepository manifestRepo,
                                ObjectCatalog catalog, S3Lookup lookup,
-                               AccessControlService accessControl, IamAuthorizer iamAuthorizer) {
+                               AccessControlService accessControl, IamAuthorizer iamAuthorizer,
+                              UploadAdmission admission) {
+        this.admission = admission;
         this.iamAuthorizer = iamAuthorizer;
         this.poolService   = poolService;
         this.manifestRepo  = manifestRepo;
@@ -80,6 +83,7 @@ public class S3BucketController {
         accessControl.resolveAcl(request, new byte[0]);
         // CreateBucket of an EXISTING bucket is idempotent and must never rewrite its ACL (that is PutBucketAcl's job)
         boolean existed = poolService.existsByName(bucket);
+        if (!existed) admission.requireWritable();
         PoolEntity pool = poolService.createBucket(bucket);
         if (!existed) accessControl.applyBucketAcl(request, new byte[0], pool);
         return ResponseEntity.ok()

@@ -170,16 +170,31 @@ class S3HardeningTest {
 
     @Test
     void aDeclaredSizeOverFiveGibIsRefusedBeforeTheBodyIsRead() throws Exception {
-        SigV4TestClient.Signed s = client.sign("PUT", "/hbkt/huge.bin", null, "UNSIGNED-PAYLOAD", Instant.now(),
+        // aws-chunked: the decoded length is the payload size
+        SigV4TestClient.Signed s = client.sign("PUT", "/hbkt/huge.bin", null, "STREAMING-AWS4-HMAC-SHA256-PAYLOAD", Instant.now(),
                 Map.of("x-amz-decoded-content-length", String.valueOf(6L * 1024 * 1024 * 1024)));
         HttpRequest r = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/hbkt/huge.bin"))
                 .header("Authorization", s.authorization()).header("x-amz-date", s.timestamp())
-                .header("x-amz-content-sha256", "UNSIGNED-PAYLOAD")
+                .header("x-amz-content-sha256", "STREAMING-AWS4-HMAC-SHA256-PAYLOAD").header("Content-Encoding", "aws-chunked")
                 .header("x-amz-decoded-content-length", String.valueOf(6L * 1024 * 1024 * 1024))
                 .PUT(HttpRequest.BodyPublishers.ofString("x")).build();
         var resp = client.http.send(r, HttpResponse.BodyHandlers.ofString());
         assertEquals(400, resp.statusCode(), resp.body());
         assertTrue(resp.body().contains("EntityTooLarge"), resp.body());
+    }
+
+    @Test
+    void theDecodedLengthHeaderOfAPlainBodyIsIgnored() throws Exception {
+        // not aws-chunked: x-amz-decoded-content-length must neither lower nor raise the size that admission sees
+        SigV4TestClient.Signed s = client.sign("PUT", "/hbkt/plain-decoded.bin", null, "UNSIGNED-PAYLOAD", Instant.now(),
+                Map.of("x-amz-decoded-content-length", "1"));
+        HttpRequest r = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/hbkt/plain-decoded.bin"))
+                .header("Authorization", s.authorization()).header("x-amz-date", s.timestamp())
+                .header("x-amz-content-sha256", "UNSIGNED-PAYLOAD").header("x-amz-decoded-content-length", "1")
+                .PUT(HttpRequest.BodyPublishers.ofString("0123456789")).build();
+        var resp = client.http.send(r, HttpResponse.BodyHandlers.ofString());
+        assertEquals(200, resp.statusCode(), resp.body());
+        assertEquals(10, manifestRepo.findCurrent("hbkt", "plain-decoded.bin").orElseThrow().getTotalBytes());
     }
 
     @Test

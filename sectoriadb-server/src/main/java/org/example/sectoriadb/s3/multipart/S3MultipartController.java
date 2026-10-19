@@ -90,6 +90,7 @@ public class S3MultipartController {
 
         String objectKey = S3Request.extractKey(request, bucket);
         lookup.validateObjectKey(objectKey);
+        bodies.requireWritable();
 
         ChecksumAlgorithm checksumAlg = S3Checksums.declaredAlgorithm(request);
         ChecksumType checksumType = S3Checksums.multipartType(request, checksumAlg);
@@ -174,6 +175,7 @@ public class S3MultipartController {
         ManifestEntity srcManifest = manifestRepo.findCurrent(source.bucket(), source.key())
                 .orElseThrow(() -> S3Exception.noSuchKey(source.bucket(), source.key()));
         ByteRange range = copyRange == null ? null : ByteRange.parseCopyRange(copyRange, srcManifest.getTotalBytes());
+        bodies.requireAcceptableCopy(request, range == null ? srcManifest.getTotalBytes() : range.length());
 
         MultipartPart part = multipart.uploadPartCopy(upload, partNumber, srcManifest,
                 range == null ? null : new long[]{range.first(), range.length()});

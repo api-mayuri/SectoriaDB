@@ -127,7 +127,7 @@ java -jar sectoriadb.jar key-policy --id ACCESS_KEY_ID --file /tmp/photos.json  
 - `PutObject`/`UploadPart` **обязаны** сообщить размер (`Content-Length` или `x-amz-decoded-content-length`): иначе `411 MissingContentLength`.
   Предел одного запроса — 5 ГиБ (`400 EntityTooLarge`); больше — только multipart. Тело сначала пишется во временный каталог
   (`sectoriadb.upload-tmp-dir`), поэтому там нужно свободное место не меньше объекта плюс запас
-  (`upload-free-space-reserve-bytes`, 64 МиБ); не хватает — `503 SlowDown`.
+  (`sectoriadb.storage.min-free-bytes`, 1 ГиБ) с учётом уже идущих загрузок; не хватает — `503 SlowDown` (занято другими загрузками) или `507 InsufficientStorage`. `x-amz-decoded-content-length` учитывается только у aws-chunked-тел. `CopyObject` и `UploadPartCopy` проходят ту же проверку по логическому размеру источника (диапазона) и не принимают источник больше 5 ГиБ (`400 InvalidRequest`).
 - Способ хранения выбирается по размеру: пустой объект — только метаданные; меньше 16 КиБ — одна запись в файле малых объектов;
   остальное — чанки с дедупликацией по всему бакету.
 - `GET`: одиночный диапазон `Range: bytes=a-b | a- | -n` (`206`, `Content-Range`); конец за пределами объекта обрезается, начало за пределами — `416 InvalidRange`;

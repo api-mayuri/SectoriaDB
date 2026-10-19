@@ -6,15 +6,12 @@ import org.example.sectoriadb.s3.auth.ChunkSigningContext;
 import org.example.sectoriadb.s3.error.S3Exception;
 import org.example.sectoriadb.s3.http.LimitedInputStream;
 import org.example.sectoriadb.s3.http.S3Checksums;
-import org.example.sectoriadb.storage.ObjectWriter;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.file.Files;
 import java.util.Locale;
 
 /**
@@ -30,13 +27,10 @@ public class RequestBodies {
     public static final long MAX_ACL_BYTES = 64 * 1024;
     public static final long MAX_XML_BYTES = 2L * 1024 * 1024;
 
-    private final ObjectWriter writer;
-    private final long freeSpaceReserve;
+    private final UploadAdmission admission;
 
-    public RequestBodies(ObjectWriter writer,
-                         @Value("${sectoriadb.s3.limits.upload-free-space-reserve-bytes:67108864}") long freeSpaceReserve) {
-        this.writer = writer;
-        this.freeSpaceReserve = freeSpaceReserve;
+    public RequestBodies(UploadAdmission admission) {
+        this.admission = admission;
     }
 
     /** Reads a small document; more than {@code max} bytes is refused with the given error before it is buffered. */
@@ -60,7 +54,7 @@ public class RequestBodies {
     /**
      * Admission check of an upload (PutObject / UploadPart) before a body byte is read: the size must be declared
      * (Content-Length, or x-amz-decoded-content-length for aws-chunked), within the 5 GiB limit, and fit on the volume
-     * the body is spooled to.
+     * the body is spooled to together with the uploads already in flight ({@link UploadAdmission}).
      */
     public void requireAcceptableUpload(HttpServletRequest request) {
         long declared = declaredSize(request);
@@ -72,21 +66,42 @@ public class RequestBodies {
             throw new S3Exception(HttpStatus.BAD_REQUEST, "EntityTooLarge",
                     "Your proposed upload exceeds the maximum allowed size (5 GiB for one request; use multipart upload)");
         }
-        try {
-            long usable = Files.getFileStore(writer.uploadTmpDir()).getUsableSpace();
-            if (usable < declared + freeSpaceReserve) {
-                throw new S3Exception(HttpStatus.SERVICE_UNAVAILABLE, "SlowDown",
-                        "The server does not have enough free space to accept this upload right now. Please retry later.");
-            }
-        } catch (IOException e) {
-            // the volume cannot be inspected: the upload itself will report a real problem
-        }
+        admission.admit(request, declared);
     }
 
-    /** Declared payload size, -1 when unknown. For aws-chunked it is the size without framing. */
+    /**
+     * Admission of a server-side copy (CopyObject, UploadPartCopy): the logical size of the source (or range) is
+     * spooled, so the same 5 GiB cap and the same disk reservation apply as for an upload.
+     */
+    public void requireAcceptableCopy(HttpServletRequest request, long logicalBytes) {
+        if (logicalBytes > MAX_SINGLE_UPLOAD_BYTES) {
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidRequest",
+                    "The specified copy source is larger than the maximum allowable size for a copy source: "
+                    + MAX_SINGLE_UPLOAD_BYTES);
+        }
+        admission.admit(request, logicalBytes);
+    }
+
+    /** Free-space floor for writes that spool nothing (CreateMultipartUpload): 507 when the volumes are nearly full. */
+    public void requireWritable() {
+        admission.requireWritable();
+    }
+
+    /** True for an aws-chunked body: {@code Content-Encoding: aws-chunked} or a STREAMING-* payload hash. */
+    static boolean isAwsChunked(HttpServletRequest request) {
+        String encoding = request.getHeader("Content-Encoding");
+        String sha = request.getHeader("x-amz-content-sha256");
+        return (encoding != null && encoding.toLowerCase(Locale.ROOT).contains("aws-chunked"))
+                || (sha != null && sha.startsWith("STREAMING-"));
+    }
+
+    /**
+     * Declared payload size, -1 when unknown. For aws-chunked it is the size without framing; on any other request
+     * x-amz-decoded-content-length means nothing (the body is stored as sent) and must not lower the size.
+     */
     static long declaredSize(HttpServletRequest request) {
         String decoded = request.getHeader("x-amz-decoded-content-length");
-        if (decoded != null) {
+        if (decoded != null && isAwsChunked(request)) {
             try {
                 long v = Long.parseLong(decoded.trim());
                 if (v < 0) throw new NumberFormatException();
@@ -104,12 +119,8 @@ public class RequestBodies {
      */
     public InputStream openBody(HttpServletRequest request, S3Checksums.Declared declared) throws IOException {
         InputStream raw = request.getInputStream();
-        String encoding = request.getHeader("Content-Encoding");
-        String sha = request.getHeader("x-amz-content-sha256");
-        boolean chunked = (encoding != null && encoding.toLowerCase(Locale.ROOT).contains("aws-chunked"))
-                || (sha != null && sha.startsWith("STREAMING-"));
         InputStream body = raw;
-        if (chunked) {
+        if (isAwsChunked(request)) {
             Object ctx = request.getAttribute(ChunkSigningContext.REQUEST_ATTRIBUTE);
             body = new AwsChunkedInputStream(raw, ctx instanceof ChunkSigningContext c ? c : null,
                     declared != null ? declared::acceptTrailers : null,

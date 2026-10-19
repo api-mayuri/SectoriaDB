@@ -68,7 +68,8 @@
 | `sectoriadb.s3.limits.max-inflight-writes-per-key` | `32` | одновременных `PUT`/`POST` на ключ доступа (сверх — `503 SlowDown`); `0` выключает |
 | `sectoriadb.s3.limits.max-inflight-reads-per-key` | `64` | одновременных `GET`/`HEAD`/`DELETE` на ключ доступа. Один ключ занимает не больше 96 из 200 потоков Tomcat (`server.tomcat.threads.max`); сумму по всем ключам держите ниже пула |
 | `sectoriadb.s3.limits.max-inflight-anonymous` | `16` | одновременных анонимных запросов (публичные объекты и бакеты) на весь сервер, общий бюджет; `0` выключает |
-| `sectoriadb.s3.limits.upload-free-space-reserve-bytes` | `67108864` | запас свободного места на томе спула: заявленный размер плюс запас должны поместиться, иначе `503` |
+| `sectoriadb.s3.limits.upload-free-space-reserve-bytes` | `67108864` | запас свободного места на томе спула; рабочий порог — большее из него и `sectoriadb.storage.min-free-bytes`. Заявленные размеры идущих загрузок и копий суммируются |
+| `sectoriadb.storage.min-free-bytes` | `1073741824` | порог свободного места (1 ГиБ): запись, после которой на томе спула, метаданных или данных осталось бы меньше (с учётом уже принятых загрузок), получает `507 InsufficientStorage` (`503 SlowDown`, если место занято другими загрузками). Защищает metastore: при полном томе не проходят даже удаления. Чтение и `DELETE` порогом не ограничиваются |
 | `sectoriadb.multipart.stale-after` | `7d` | брошенная загрузка без новых частей отменяется |
 | `sectoriadb.multipart.completed-retention` | `24h` | сколько хранится запись о завершённой/отменённой загрузке (повтор `Complete` получает прежний ответ) |
 | `sectoriadb.multipart.min-part-size` | `5MB` | каждая часть, кроме последней, не меньше (`400 EntityTooSmall` при `Complete`); `0` выключает |

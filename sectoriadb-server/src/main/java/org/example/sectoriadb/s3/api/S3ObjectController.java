@@ -379,6 +379,7 @@ public class S3ObjectController {
                 ? (contentType != null ? contentType : "application/octet-stream")
                 : srcEntity.getContentType();
 
+        bodies.requireAcceptableCopy(request, srcEntity.getTotalBytes());   // 5 GiB cap and disk reservation, before the spool exists
         Path tmp = Files.createTempFile(writer.uploadTmpDir(), "sectoriadb-copy-", ".tmp");
         try {
             try (OutputStream out = Files.newOutputStream(tmp)) {
