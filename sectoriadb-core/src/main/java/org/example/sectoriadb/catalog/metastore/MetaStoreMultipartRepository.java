@@ -52,8 +52,19 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
     private static final Pattern UPLOAD_ID = Pattern.compile(
             "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}");
 
+    /** The S3 limit of one object: 5 TiB. */
+    public static final long MAX_OBJECT_BYTES = 5L << 40;
+    /**
+     * Chunk keys an object manifest can hold: the manifest is one B+tree value of at most 64 MiB, 8 bytes per key, and
+     * 2 MiB are kept for the JSON part and the part segments (10 000 parts x ~60 bytes, user metadata). With 16 KiB chunks
+     * that is about 124 GiB; a larger multipart object is refused at Complete instead of failing in the commit.
+     */
+    public static final long MAX_MANIFEST_KEYS = (BTree.MAX_VALUE_SIZE - (2L << 20)) / 8;
+
     private final MetaStoreProvider stores;
     private final long minPartSize;
+    private long maxObjectBytes = MAX_OBJECT_BYTES;
+    private long maxManifestKeys = MAX_MANIFEST_KEYS;
 
     /** No minimum part size (tests with tiny parts). */
     public MetaStoreMultipartRepository(MetaStoreProvider stores) {
@@ -64,6 +75,17 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
     public MetaStoreMultipartRepository(MetaStoreProvider stores, long minPartSize) {
         this.stores = stores;
         this.minPartSize = minPartSize;
+    }
+
+    /** Lowers the size limits (tests); production uses {@link #MAX_OBJECT_BYTES} and {@link #MAX_MANIFEST_KEYS}. */
+    public MetaStoreMultipartRepository limits(long maxObjectBytes, long maxManifestKeys) {
+        this.maxObjectBytes = maxObjectBytes;
+        this.maxManifestKeys = maxManifestKeys;
+        return this;
+    }
+
+    private static MultipartException entityTooLarge(String why) {
+        return new MultipartException(Kind.ENTITY_TOO_LARGE, "Your proposed upload exceeds the maximum allowed object size: " + why);
     }
 
     private MetaStore store() {
@@ -318,6 +340,8 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
         List<byte[]> crc32cs = new ArrayList<>();
         byte[] md5Concat = new byte[16 * cmd.parts().size()];
         int at = 0;
+        long declaredBytes = 0;
+        long declaredKeys = 0;
         for (RequestedPart rp : cmd.parts()) {
             int pn = rp.partNumber();
             MultipartPart row = MultipartTrees.part(tx, uploadId, pn).orElseThrow(() ->
@@ -344,8 +368,18 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
             if (minPartSize > 0 && rows.size() < cmd.parts().size() - 1 && row.size() < minPartSize) {
                 throw MultipartException.entityTooSmall(pn, row.size(), minPartSize);
             }
+            // size caps first, from the part rows, before the key arrays of the part manifests are read into memory
+            declaredBytes += row.size();
+            if (declaredBytes > maxObjectBytes) {
+                throw entityTooLarge("more than " + maxObjectBytes + " bytes in " + cmd.parts().size() + " parts");
+            }
             ManifestEntity pm = Trees.manifest(tx, row.manifestId()).filter(m -> !m.isDeleted()).orElseThrow(() ->
                     new MultipartException(Kind.INVALID_PART, "Part " + pn + " has no stored data"));
+            declaredKeys += pm.getTotalChunks();
+            if (declaredKeys > maxManifestKeys) {
+                throw entityTooLarge("the chunk list of the object would not fit into its manifest (at most "
+                        + maxManifestKeys + " chunks, i.e. " + declaredKeys + " were reached); use a larger chunk size or smaller objects");
+            }
             rows.add(row);
             partManifests.add(pm);
             partLengths.add(row.size());
@@ -423,7 +457,7 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
         object.setChecksumType(finalType);
         List<PartSegment> segments = new ArrayList<>();
         long[][] keyLists = new long[partManifests.size()][];
-        int totalKeys = 0;
+        long totalKeys = 0;
         long totalBytes = 0;
         for (int i = 0; i < partManifests.size(); i++) {
             ManifestEntity pm = partManifests.get(i);
@@ -442,7 +476,7 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
             }
             totalBytes += pm.getTotalBytes();
         }
-        long[] keys = new long[totalKeys];
+        long[] keys = new long[Math.toIntExact(totalKeys)];   // bounded by maxManifestKeys above
         int pos = 0;
         for (long[] k : keyLists) {
             if (k == null) continue;

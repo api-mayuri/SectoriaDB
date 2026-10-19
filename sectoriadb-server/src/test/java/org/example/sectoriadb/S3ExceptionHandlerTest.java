@@ -30,6 +30,14 @@ class S3ExceptionHandlerTest {
     }
 
     @Test
+    void anOversizedMultipartObjectIsEntityTooLarge400() {
+        var r = handler.handleMultipart(new org.example.sectoriadb.catalog.MultipartException(
+                org.example.sectoriadb.catalog.MultipartException.Kind.ENTITY_TOO_LARGE, "too big"));
+        assertEquals(400, r.getStatusCode().value());
+        assertEquals("EntityTooLarge", r.getBody().getCode());
+    }
+
+    @Test
     void otherFailuresStayInternalError500() {
         ResponseEntity<?> r = handler.handleGeneral(new IOException("Input/output error"));
         assertEquals(500, r.getStatusCode().value());

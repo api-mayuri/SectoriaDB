@@ -155,6 +155,7 @@ public class S3ExceptionHandler {
             case INVALID_PART_ORDER -> code = "InvalidPartOrder";
             case ENTITY_TOO_SMALL -> code = "EntityTooSmall";
             case BAD_DIGEST -> code = "BadDigest";
+            case ENTITY_TOO_LARGE -> code = "EntityTooLarge";
             default -> code = "InvalidRequest";
         }
         log.debug("Multipart request refused [{}]: {} ({})", requestId, code, ex.getMessage());

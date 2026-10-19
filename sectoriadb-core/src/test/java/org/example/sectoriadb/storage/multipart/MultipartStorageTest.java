@@ -620,6 +620,35 @@ class MultipartStorageTest {
         assertEquals(1005, object("strict").getTotalBytes());
     }
 
+    @Test
+    void anObjectAboveTheSizeOrManifestLimitIsRefusedAtCompleteBeforeAnythingIsBuilt() throws Exception {
+        var limited = new MultipartService(
+                new MetaStoreMultipartRepository(MetaStoreProvider.of(rig.store)).limits(1000, Long.MAX_VALUE),
+                rig.pools, rig.writer, rig.reader);
+        var fewKeys = new MultipartService(
+                new MetaStoreMultipartRepository(MetaStoreProvider.of(rig.store)).limits(Long.MAX_VALUE, 3),
+                rig.pools, rig.writer, rig.reader);
+
+        MultipartUpload bytesCap = create("too-big");
+        MultipartPart a = upload(bytesCap, 1, bytes(600, 1));
+        MultipartPart b = upload(bytesCap, 2, bytes(600, 2));
+        var e = assertThrows(MultipartException.class, () -> strictComplete(limited, bytesCap, a, b));
+        assertEquals(MultipartException.Kind.ENTITY_TOO_LARGE, e.kind());
+        assertNull(rig.catalog.findObject("bkt", "too-big").orElse(null));
+        assertEquals(MultipartUpload.State.OPEN, rig.multipartRepo.find(bytesCap.getUploadId()).orElseThrow().getState());
+        strictComplete(limited, bytesCap, a);                      // within the limit it still works
+        assertEquals(600, object("too-big").getTotalBytes());
+
+        MultipartUpload keysCap = create("too-many-chunks");
+        MultipartPart c = upload(keysCap, 1, bytes(2 * CHUNK, 3));   // 2 chunks
+        MultipartPart d = upload(keysCap, 2, bytes(2 * CHUNK, 4));   // 2 more: 4 > 3
+        var e2 = assertThrows(MultipartException.class, () -> strictComplete(fewKeys, keysCap, c, d));
+        assertEquals(MultipartException.Kind.ENTITY_TOO_LARGE, e2.kind());
+        assertNull(rig.catalog.findObject("bkt", "too-many-chunks").orElse(null));
+        strictComplete(fewKeys, keysCap, c);
+        assertEquals(2 * CHUNK, object("too-many-chunks").getTotalBytes());
+    }
+
     private void strictComplete(MultipartService svc, MultipartUpload u, MultipartPart... parts) {
         List<RequestedPart> req = new ArrayList<>();
         for (MultipartPart p : parts) req.add(new RequestedPart(p.partNumber(), p.etag(), Map.of()));

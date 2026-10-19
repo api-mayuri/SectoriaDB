@@ -15,7 +15,9 @@ public class MultipartException extends RuntimeException {
         /** InvalidRequest */
         INVALID_REQUEST,
         /** BadDigest: a checksum given for a part or for the whole upload does not match */
-        BAD_DIGEST
+        BAD_DIGEST,
+        /** EntityTooLarge: the finished object would exceed the size limit or the room of its manifest */
+        ENTITY_TOO_LARGE
     }
 
     private final Kind kind;
