@@ -2,6 +2,7 @@ package org.example.sectoriadb.scheduler;
 
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.maintenance.gc.GarbageCollector;
+import org.example.sectoriadb.maintenance.gc.GcReports;
 import org.example.sectoriadb.maintenance.gc.GcReports.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,6 +30,9 @@ public class GarbageCollectionScheduler {
 
     private static final Logger log = LoggerFactory.getLogger(GarbageCollectionScheduler.class);
 
+    /** Passes in a row while the chunk cap keeps being hit; then the scheduler's pause applies, so other work gets its turn. */
+    private static final int MAX_BACK_TO_BACK = 20;
+
     private final GarbageCollector gc;
 
     public GarbageCollectionScheduler(GarbageCollector gc) {
@@ -38,7 +42,12 @@ public class GarbageCollectionScheduler {
     @Scheduled(fixedDelayString = "#{@gcSchedule.intervalMillis()}", initialDelayString = "#{@gcSchedule.initialDelayMillis()}")
     public void collect() {
         try {
-            gc.run(Options.defaults());
+            // a pass that stopped at its chunk cap with more due is followed at once: the interval is a pause for an idle
+            // collector, not a ceiling on how much garbage can be reclaimed per minute
+            for (int i = 0; i < MAX_BACK_TO_BACK; i++) {
+                GcReports.RunReport r = gc.run(Options.defaults());
+                if (!r.more || r.errors > 0 || Thread.currentThread().isInterrupted()) break;
+            }
         } catch (RuntimeException e) {
             log.error("Scheduled garbage collection failed: {}", e.toString(), e);
         }

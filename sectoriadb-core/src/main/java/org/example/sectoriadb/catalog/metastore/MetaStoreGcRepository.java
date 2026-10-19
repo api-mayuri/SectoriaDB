@@ -248,7 +248,9 @@ public class MetaStoreGcRepository implements GcRepository {
             try (Cursor c = tx.tree(Trees.DELETED_MANIFESTS).scan()) {
                 while (out.size() < limit && c.next()) {
                     long at = c.value().length >= 8 ? ByteBuffer.wrap(c.value()).getLong() : 0L;   // legacy rows: due
-                    if (at > queuedBeforeMillis) continue;
+                    // keys are (txId, manifest) and the queueing time grows with the txId: the first row that is not due
+                    // ends the due prefix, the rest of the (possibly very long) queue is not read
+                    if (at > queuedBeforeMillis) break;
                     Keys.Reader r = new Keys.Reader(c.key());
                     out.add(new Tombstone(r.longUnsigned(), r.string(), at));
                 }

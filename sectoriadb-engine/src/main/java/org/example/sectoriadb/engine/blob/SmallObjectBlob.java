@@ -449,8 +449,20 @@ public final class SmallObjectBlob implements AutoCloseable {
 
     // ── Delete ─────────────────────────────────────────────────────────────────
 
-    /** Marks the record DELETED. Returns false if it already was. Idempotent, crash-safe (one byte write). */
+    /** Marks the record DELETED and makes it durable. Returns false if it already was. Idempotent, crash-safe (one byte write). */
     public boolean markDeleted(long offset) throws IOException {
+        boolean changed = markDeletedUnsynced(offset);
+        if (changed) forceTimed();   // outside the append lock: a delete must not stall appenders for the duration of an fsync
+        return changed;
+    }
+
+    /**
+     * Like {@link #markDeleted} but without the {@code fsync}: the caller marks a batch of records and then makes them
+     * all durable with one {@link #sync()} (the collector flips thousands of records per pass, one forced write each
+     * was its dominant cost). Until {@code sync()} returns the mark may be lost in a crash, which is harmless because
+     * the flip is repeated as long as the tombstone of the manifest exists.
+     */
+    public boolean markDeletedUnsynced(long offset) throws IOException {
         lock.lock();
         try {
             ensureOpen();
@@ -470,11 +482,15 @@ public final class SmallObjectBlob implements AutoCloseable {
             deadRecords++;
             liveBytes -= span;
             deadBytes += span;
+            return true;
         } finally {
             lock.unlock();
         }
-        forceTimed();   // outside the append lock: a delete must not stall appenders for the duration of an fsync
-        return true;
+    }
+
+    /** Forces what {@link #markDeletedUnsynced} wrote. */
+    public void sync() throws IOException {
+        forceTimed();
     }
 
     // ── Scrub ──────────────────────────────────────────────────────────────────

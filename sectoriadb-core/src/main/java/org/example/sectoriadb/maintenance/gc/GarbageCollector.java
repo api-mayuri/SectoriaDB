@@ -40,10 +40,13 @@ import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
@@ -145,7 +148,7 @@ public class GarbageCollector {
             int max = o.maxChunks() != null ? o.maxChunks() : props.getGc().getMaxChunksPerRun();
             collectChunks(o.poolId(), cutoff, max, r);
             collectOrphans(o.poolId(), max, r);
-            collectTombstones(o.poolId(), cutoff, max, r);
+            collectTombstones(o.poolId(), cutoff, o.maxChunks(), r);
             // only an explicit grace of 0 releases every pending old file at once; any other grace keeps the files that are not yet due
             long releaseAt = o.graceMillis() != null && o.graceMillis() <= 0 ? Long.MAX_VALUE : now;
             r.filesDeleted += compactor.releaseOldFiles(releaseAt);
@@ -169,6 +172,7 @@ public class GarbageCollector {
 
     private void collectChunks(String poolId, long cutoff, int max, RunReport r) {
         List<ChunkRef> due = gcRepo.dueChunks(poolId, cutoff, max);
+        if (due.size() >= max) r.more = true;           // the cap cut the pass short: the scheduler comes back at once
         // The upload gate is per pool: group the due chunks by pool and run every batch under its pool's gate.
         Map<String, List<ChunkRef>> byPool = new LinkedHashMap<>();
         for (ChunkRef c : due) byPool.computeIfAbsent(c.poolId(), k -> new ArrayList<>()).add(c);
@@ -403,39 +407,74 @@ public class GarbageCollector {
 
     // ------------------------------------------------------------------ tombstones
 
-    private void collectTombstones(String poolId, long cutoff, int max, RunReport r) {
-        List<Tombstone> due = gcRepo.dueTombstones(cutoff, max);
+    /** Tombstones read per round of a pass: a short prefix scan of the queue, then batches of {@code batch-size * 8}. */
+    private static final int TOMBSTONE_SLICE = 2048;
+
+    /**
+     * Removes every due tombstone, slice by slice, until none is due (or, for a manual pass with an explicit limit, up
+     * to that many). The queue grows at the pace of deletes and overwrites, so a fixed number per pass would let it
+     * (and the manifests, indexes and dead small records behind it) grow without bound once that pace passed the cap.
+     * The work is split into short transactions, writers run in between.
+     */
+    private void collectTombstones(String poolId, long cutoff, Integer explicitMax, RunReport r) {
         int batch = props.getGc().getBatchSize() * 8;
-        for (int i = 0; i < due.size(); i += batch) {
-            List<Tombstone> part = due.subList(i, Math.min(due.size(), i + batch));
-            List<Tombstone> ready = new ArrayList<>(part.size());
-            long markedBefore = r.smallRecordsMarked;
-            for (Tombstone t : part) {
-                Optional<ManifestEntity> m = manifestRepo.findById(t.manifestId());
-                if (m.isPresent() && poolId != null && !poolId.equals(m.get().getPoolId())) continue;
-                if (m.isPresent() && m.get().isDeleted()
-                        && (m.get().getStorageKind() == StorageKind.SMALL || m.get().getStorageKind() == StorageKind.MULTIPART)) {
-                    switch (markSmallDeleted(m.get())) {
-                        case MARKED -> r.smallRecordsMarked++;
-                        case NOTHING_TO_DO -> { }
-                        case RETRY_LATER -> {
-                            r.error("could not mark the small-object record of " + t.manifestId() + " DELETED, retrying later");
+        long budget = explicitMax != null ? explicitMax : Long.MAX_VALUE;
+        long taken = 0;
+        while (taken < budget) {
+            List<Tombstone> due = gcRepo.dueTombstones(cutoff, (int) Math.min(TOMBSTONE_SLICE, budget - taken));
+            if (due.isEmpty()) return;
+            long progress = 0;
+            for (int i = 0; i < due.size(); i += batch) {
+                List<Tombstone> part = due.subList(i, Math.min(due.size(), i + batch));
+                List<Tombstone> ready = new ArrayList<>(part.size());
+                Map<String, List<Tombstone>> byBlob = new HashMap<>();   // tombstones whose marks wait for a sync of the blob
+                Map<String, BlobFileEntity> blobsToSync = new LinkedHashMap<>();
+                long markedBefore = r.smallRecordsMarked;
+                for (Tombstone t : part) {
+                    Optional<ManifestEntity> m = manifestRepo.findById(t.manifestId());
+                    if (m.isPresent() && poolId != null && !poolId.equals(m.get().getPoolId())) continue;
+                    if (m.isPresent() && m.get().isDeleted()
+                            && (m.get().getStorageKind() == StorageKind.SMALL || m.get().getStorageKind() == StorageKind.MULTIPART)) {
+                        Set<String> touched = new LinkedHashSet<>();
+                        switch (markSmallDeleted(m.get(), touched, blobsToSync)) {
+                            case MARKED -> r.smallRecordsMarked++;
+                            case NOTHING_TO_DO -> { }
+                            case RETRY_LATER -> {
+                                r.error("could not mark the small-object record of " + t.manifestId() + " DELETED, retrying later");
+                                metrics.gcError();
+                                continue;
+                            }
+                        }
+                        for (String b : touched) byBlob.computeIfAbsent(b, k -> new ArrayList<>()).add(t);
+                    }
+                    ready.add(t);
+                }
+                // one forced write per blob for the whole batch; the manifest rows go only after the marks are durable
+                for (Map.Entry<String, BlobFileEntity> e : blobsToSync.entrySet()) {
+                    try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(e.getValue())) {
+                        h.get().sync();
+                    } catch (IOException | RuntimeException ex) {
+                        if (blobRepo.findById(e.getKey()).isPresent()) {
+                            log.warn("Could not sync the DELETED marks of small-object file {}: {}", e.getKey(), ex.toString());
+                            r.error("could not sync " + e.getKey() + ", retrying later");
                             metrics.gcError();
-                            continue;
+                            ready.removeAll(byBlob.getOrDefault(e.getKey(), List.of()));
                         }
                     }
                 }
-                ready.add(t);
+                try {
+                    int removed = gcRepo.deleteTombstones(ready);
+                    r.tombstones += removed;
+                    progress += ready.size();
+                    if (removed > 0) metrics.gcTombstones(removed, r.smallRecordsMarked - markedBefore);
+                } catch (RuntimeException e) {
+                    r.error("tombstone batch failed: " + e);
+                    metrics.gcError();
+                    return;
+                }
             }
-            try {
-                int removed = gcRepo.deleteTombstones(ready);
-                r.tombstones += removed;
-                if (removed > 0) metrics.gcTombstones(removed, r.smallRecordsMarked - markedBefore);
-            } catch (RuntimeException e) {
-                r.error("tombstone batch failed: " + e);
-                metrics.gcError();
-                return;
-            }
+            taken += due.size();
+            if (progress == 0) return;   // everything left is filtered out or must wait: do not spin on the same rows
         }
     }
 
@@ -445,26 +484,30 @@ public class GarbageCollector {
      * The record of a retired small object is flipped to DELETED (one byte, forced) BEFORE its manifest row goes: a
      * crash in between repeats the (idempotent) flip, never leaves an ACTIVE record with no manifest to find it.
      */
-    private Marked markSmallDeleted(ManifestEntity m) {
+    private Marked markSmallDeleted(ManifestEntity m, Set<String> touched, Map<String, BlobFileEntity> blobsToSync) {
         if (m.getStorageKind() != StorageKind.MULTIPART) {
-            return markRecordDeleted(m.getId(), m.getSmallBlob(), m.getSmallOffset());
+            return markRecordDeleted(m.getId(), m.getSmallBlob(), m.getSmallOffset(), touched, blobsToSync);
         }
         // a retired multipart object: every SMALL segment is a record of its own
         Marked result = Marked.NOTHING_TO_DO;
         for (PartSegment sg : m.getSegments()) {
             if (sg.kind() != StorageKind.SMALL) continue;
-            Marked one = markRecordDeleted(m.getId(), m.getSegmentBlobs().get(sg.smallBlobId()), sg.smallOffset());
+            Marked one = markRecordDeleted(m.getId(), m.getSegmentBlobs().get(sg.smallBlobId()), sg.smallOffset(), touched, blobsToSync);
             if (one == Marked.RETRY_LATER) return one;
             if (one == Marked.MARKED) result = Marked.MARKED;
         }
         return result;
     }
 
-    private Marked markRecordDeleted(String manifestId, BlobFileEntity blob, long offset) {
+    private Marked markRecordDeleted(String manifestId, BlobFileEntity blob, long offset, Set<String> touched,
+                                     Map<String, BlobFileEntity> blobsToSync) {
         if (blob == null) return Marked.NOTHING_TO_DO;   // the blob is gone (compacted away, bucket deleted)
         try {
             try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(blob)) {
-                return h.get().markDeleted(offset) ? Marked.MARKED : Marked.NOTHING_TO_DO;
+                if (!h.get().markDeletedUnsynced(offset)) return Marked.NOTHING_TO_DO;
+                touched.add(blob.getId());
+                blobsToSync.putIfAbsent(blob.getId(), blob);
+                return Marked.MARKED;
             }
         } catch (SmallObjectCorruptedException e) {
             log.error("Small-object record of retired manifest {} is damaged and cannot be marked DELETED: {}", manifestId, e.getMessage());

@@ -255,6 +255,25 @@ class SmallObjectBlobTest {
     }
 
     @Test
+    void aBatchOfMarksNeedsOneSyncAndIsIdempotentLikeTheSingleMark() throws Exception {
+        Path p = newFile();
+        SmallObjectBlob.Location[] loc = new SmallObjectBlob.Location[5];
+        try (SmallObjectBlob b = open(p)) {
+            for (int i = 0; i < loc.length; i++) loc[i] = b.append(bytes(100 + i, i), i);
+            for (int i = 0; i < 4; i++) assertTrue(b.markDeletedUnsynced(loc[i].offset()));
+            assertFalse(b.markDeletedUnsynced(loc[0].offset()), "already marked");
+            b.sync();
+            assertEquals(1, b.stats().liveRecords());
+            assertEquals(4, b.stats().deadRecords());
+        }
+        try (SmallObjectBlob b = open(p)) {
+            assertEquals(1, b.stats().liveRecords());
+            assertEquals(4, b.stats().deadRecords());
+            assertArrayEquals(bytes(104, 4), b.read(loc[4].offset(), loc[4].length(), loc[4].crc32c()));
+        }
+    }
+
+    @Test
     void deletedLastRecordSurvivesRecoveryAsDeletedNotAsTornTail() throws Exception {
         Path p = newFile();
         SmallObjectBlob.Location a;

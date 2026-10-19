@@ -50,6 +50,8 @@ public final class GcReports {
         /** old small-object files deleted after the grace period */
         public long filesDeleted;
         public int errors;
+        /** the chunk cap of the pass was reached while more chunks were due: another pass should follow without waiting */
+        public boolean more;
         public final List<String> messages = new ArrayList<>();
 
         public void error(String message) {
