@@ -81,6 +81,7 @@ public class SigV4Filter extends OncePerRequestFilter {
     private final boolean requireSignedHeaders;
     private final int maxInflightWrites;
     private final int maxInflightReads;
+    private final Semaphore anonymousSlots;
     private final ConcurrentHashMap<String, Semaphore> writeSlots =
             new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Semaphore> readSlots =
@@ -96,8 +97,9 @@ public class SigV4Filter extends OncePerRequestFilter {
             @Value("${sectoriadb.s3.auth.allow-unsigned-payload:true}") boolean allowUnsignedPayload,
             @Value("${sectoriadb.s3.auth.enforce-region:true}") boolean enforceRegion,
             @Value("${sectoriadb.s3.auth.require-signed-headers:true}") boolean requireSignedHeaders,
-            @Value("${sectoriadb.s3.limits.max-inflight-writes-per-key:64}") int maxInflightWrites,
-            @Value("${sectoriadb.s3.limits.max-inflight-reads-per-key:128}") int maxInflightReads) {
+            @Value("${sectoriadb.s3.limits.max-inflight-writes-per-key:32}") int maxInflightWrites,
+            @Value("${sectoriadb.s3.limits.max-inflight-reads-per-key:64}") int maxInflightReads,
+            @Value("${sectoriadb.s3.limits.max-inflight-anonymous:16}") int maxInflightAnonymous) {
         this.credentialService = credentialService;
         this.accessControlService = accessControlService;
         this.iamAuthorizer = iamAuthorizer;
@@ -109,6 +111,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         this.requireSignedHeaders = requireSignedHeaders;
         this.maxInflightWrites = maxInflightWrites;
         this.maxInflightReads = maxInflightReads;
+        this.anonymousSlots = maxInflightAnonymous > 0 ? new Semaphore(maxInflightAnonymous) : null;
     }
 
     @Override
@@ -163,7 +166,7 @@ public class SigV4Filter extends OncePerRequestFilter {
         if (authHeader == null || !authHeader.startsWith(SigV4Utils.ALGORITHM)) {
             // Check if this is an anonymous request that should be allowed
             if (accessControlService.isAnonymousAllowed(request)) {
-                chain.doFilter(request, response);
+                proceed(request, response, chain, null);
                 return;
             }
             // Anonymous access denied
@@ -201,22 +204,39 @@ public class SigV4Filter extends OncePerRequestFilter {
 
     private static final String ACCESS_KEY_ATTRIBUTE = S3Request.ACCESS_KEY_ATTRIBUTE;
 
-    /** Runs the request under the per-access-key in-flight limit: one valid key cannot occupy every worker thread. */
+    /**
+     * Runs the request under the in-flight limit: one valid key cannot occupy every worker thread, and all anonymous
+     * requests (public objects, public-read-write buckets) share one small budget of their own ({@code accessKey == null}).
+     */
     private void proceed(HttpServletRequest request, HttpServletResponse response, FilterChain chain, String accessKey)
             throws IOException, ServletException {
+        if (accessKey == null) {
+            runLimited(request, response, chain, anonymousSlots,
+                    "Too many concurrent anonymous requests. Please reduce your request rate.");
+            return;
+        }
         String method = request.getMethod();
         boolean write = "PUT".equals(method) || "POST".equals(method);
         int limit = write ? maxInflightWrites : maxInflightReads;
-        if (limit <= 0 || accessKey == null) {
+        if (limit <= 0) {
             chain.doFilter(request, response);
             return;
         }
         var slots = (write ? writeSlots : readSlots)
                 .computeIfAbsent(accessKey, k -> new Semaphore(limit));
+        runLimited(request, response, chain, slots,
+                "Too many concurrent requests for this access key. Please reduce your request rate.");
+    }
+
+    private void runLimited(HttpServletRequest request, HttpServletResponse response, FilterChain chain,
+                            Semaphore slots, String tooManyMessage) throws IOException, ServletException {
+        if (slots == null) {   // limit switched off
+            chain.doFilter(request, response);
+            return;
+        }
         if (!slots.tryAcquire()) {
             response.setHeader("Retry-After", "1");
-            sendError(request, response, 503, "SlowDown",
-                    "Too many concurrent requests for this access key. Please reduce your request rate.");
+            sendError(request, response, 503, "SlowDown", tooManyMessage);
             return;
         }
         try {

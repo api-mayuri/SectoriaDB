@@ -19,8 +19,8 @@ import java.time.Duration;
 
 /**
  * Slow-body guard for every request: the body stream is wrapped so that a client that sends fewer than
- * {@code sectoriadb.s3.limits.min-body-bytes-per-second} bytes per second (averaged after
- * {@code ...min-body-rate-grace}) is answered 400 RequestTimeout instead of holding a worker thread for as long as it
+ * {@code sectoriadb.s3.limits.min-body-bytes-per-second} bytes per second (over the last
+ * {@code ...min-rate-window}, enforced after {@code ...min-body-rate-grace}) is answered 400 RequestTimeout instead of holding a worker thread for as long as it
  * trickles bytes. Runs before authentication so that signature verification and aws-chunked decoding read through it.
  */
 @Component
@@ -29,10 +29,13 @@ public class RequestBodyGuardFilter extends OncePerRequestFilter {
 
     private final long graceNanos;
     private final long minBytesPerSecond;
+    private final long windowNanos;
 
     public RequestBodyGuardFilter(
             @Value("${sectoriadb.s3.limits.min-body-rate-grace:30s}") Duration grace,
-            @Value("${sectoriadb.s3.limits.min-body-bytes-per-second:1024}") long minBytesPerSecond) {
+            @Value("${sectoriadb.s3.limits.min-body-bytes-per-second:1024}") long minBytesPerSecond,
+            @Value("${sectoriadb.s3.limits.min-rate-window:30s}") Duration window) {
+        this.windowNanos = window.toNanos();
         this.graceNanos = grace.toNanos();
         this.minBytesPerSecond = minBytesPerSecond;
     }
@@ -58,7 +61,7 @@ public class RequestBodyGuardFilter extends OncePerRequestFilter {
         public ServletInputStream getInputStream() throws IOException {
             if (stream == null) {
                 ServletInputStream raw = super.getInputStream();
-                MinRateInputStream guarded = new MinRateInputStream(raw, graceNanos, minBytesPerSecond);
+                MinRateInputStream guarded = new MinRateInputStream(raw, graceNanos, minBytesPerSecond, windowNanos, System::nanoTime);
                 stream = new ServletInputStream() {
                     @Override public int read() throws IOException { return guarded.read(); }
                     @Override public int read(byte[] b, int off, int len) throws IOException { return guarded.read(b, off, len); }

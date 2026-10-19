@@ -18,6 +18,7 @@ import org.example.sectoriadb.s3.error.S3Exception;
 import org.example.sectoriadb.s3.http.ByteRange;
 import org.example.sectoriadb.s3.http.CopySource;
 import org.example.sectoriadb.s3.http.HttpDates;
+import org.example.sectoriadb.s3.http.ResponseRateGuard;
 import org.example.sectoriadb.s3.http.S3Checksums;
 import org.example.sectoriadb.s3.http.S3Request;
 import org.example.sectoriadb.s3.xml.XmlSupport;
@@ -68,9 +69,11 @@ public class S3ObjectController {
     private final S3Lookup lookup;
     private final AccessControlService accessControl;
     private final RequestBodies bodies;
+    private final ResponseRateGuard responseGuard;
 
     public S3ObjectController(ObjectWriter writer, ObjectReader reader, ObjectCatalog catalog, S3Lookup lookup,
-                              AccessControlService accessControl, RequestBodies bodies) {
+                              AccessControlService accessControl, RequestBodies bodies, ResponseRateGuard responseGuard) {
+        this.responseGuard = responseGuard;
         this.writer        = writer;
         this.reader        = reader;
         this.catalog       = catalog;
@@ -210,7 +213,7 @@ public class S3ObjectController {
         if (!partial && S3Checksums.modeEnabled(request)) S3Checksums.addObjectHeaders(entity, response::setHeader);
 
         if (length == 0) return;
-        OutputStream out = response.getOutputStream();
+        OutputStream out = responseGuard.wrap(response.getOutputStream());
         try {
             if (partial) {
                 // Range reads rely on the per-chunk / per-record CRC32C only.

@@ -60,10 +60,14 @@
 | `sectoriadb.s3.auth.enforce-region` | `true` | регион в `Credential` должен совпадать с `sectoriadb.s3.region` |
 | `sectoriadb.s3.auth.require-signed-headers` | `true` | `host` и все `x-amz-*` обязаны входить в `SignedHeaders` |
 | `sectoriadb.s3.require-secure-transport` | `false` | `true` — запрос не по HTTPS получает `403 InsecureTransport` ещё до проверки подписи. Схема берётся из `X-Forwarded-Proto` TLS-прокси; ставьте `true` за прокси ([operations.md](operations.md#tls-через-nginx)). Это же значение видит условие `aws:SecureTransport` политик бакета |
-| `sectoriadb.s3.limits.min-body-bytes-per-second` | `1024` | минимальная средняя скорость тела запроса; медленнее — `400 RequestTimeout`; `0` выключает |
+| `sectoriadb.s3.limits.min-body-bytes-per-second` | `1024` | минимальная скорость тела запроса в скользящем окне `min-rate-window` (не средняя с начала: быстрый всплеск не покупает время простоя); медленнее — `400 RequestTimeout`; `0` выключает |
 | `sectoriadb.s3.limits.min-body-rate-grace` | `30s` | время разгона до начала проверки скорости |
-| `sectoriadb.s3.limits.max-inflight-writes-per-key` | `64` | одновременных `PUT`/`POST` на ключ доступа (сверх — `503 SlowDown`); `0` выключает |
-| `sectoriadb.s3.limits.max-inflight-reads-per-key` | `128` | одновременных `GET`/`HEAD`/`DELETE` на ключ доступа |
+| `sectoriadb.s3.limits.min-response-bytes-per-second` | `1024` | минимальная скорость, с которой клиент принимает тело ответа `GET` (окно `min-rate-window`); медленнее — соединение закрывается, поток освобождается; `0` выключает |
+| `sectoriadb.s3.limits.min-response-rate-grace` | `30s` | время разгона для проверки скорости ответа |
+| `sectoriadb.s3.limits.min-rate-window` | `30s` | окно, по которому считаются обе минимальные скорости |
+| `sectoriadb.s3.limits.max-inflight-writes-per-key` | `32` | одновременных `PUT`/`POST` на ключ доступа (сверх — `503 SlowDown`); `0` выключает |
+| `sectoriadb.s3.limits.max-inflight-reads-per-key` | `64` | одновременных `GET`/`HEAD`/`DELETE` на ключ доступа. Один ключ занимает не больше 96 из 200 потоков Tomcat (`server.tomcat.threads.max`); сумму по всем ключам держите ниже пула |
+| `sectoriadb.s3.limits.max-inflight-anonymous` | `16` | одновременных анонимных запросов (публичные объекты и бакеты) на весь сервер, общий бюджет; `0` выключает |
 | `sectoriadb.s3.limits.upload-free-space-reserve-bytes` | `67108864` | запас свободного места на томе спула: заявленный размер плюс запас должны поместиться, иначе `503` |
 | `sectoriadb.multipart.stale-after` | `7d` | брошенная загрузка без новых частей отменяется |
 | `sectoriadb.multipart.completed-retention` | `24h` | сколько хранится запись о завершённой/отменённой загрузке (повтор `Complete` получает прежний ответ) |

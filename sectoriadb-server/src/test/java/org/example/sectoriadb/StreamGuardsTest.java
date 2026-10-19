@@ -111,6 +111,48 @@ class StreamGuardsTest {
         for (int i = 0; i < 100_000; i++) guarded.read(buf, 0, buf.length);
     }
 
+    @Test
+    void aFastBurstDoesNotBuyIdleTimeForALaterTrickle() throws Exception {
+        AtomicLong now = new AtomicLong();
+        long sec = 1_000_000_000L;
+        // 64 MiB in the first second, then one byte every 20 simulated seconds
+        InputStream burstThenTrickle = new InputStream() {
+            long calls;
+            @Override public int read() { return 'x'; }
+            @Override public int read(byte[] b, int off, int len) {
+                if (calls++ == 0) { now.addAndGet(sec); return len; }
+                now.addAndGet(20 * sec);
+                b[off] = 'x';
+                return 1;
+            }
+        };
+        var guarded = new MinRateInputStream(burstThenTrickle, 30 * sec, 1024, 30 * sec, now::get);
+        byte[] buf = new byte[64 << 20];
+        guarded.read(buf, 0, buf.length);   // the burst: fine
+        S3Exception e = assertThrows(S3Exception.class, () -> { for (int i = 0; i < 100; i++) guarded.read(buf, 0, 1); });
+        assertEquals("RequestTimeout", e.getCode());
+        // with the old cumulative average this client would have been left alone for about 18 hours of trickling
+        assertTrue(now.get() < 200 * sec, "cut late: " + now.get() / sec + " s");
+    }
+
+    @Test
+    void aClientThatStopsReadingTheResponseIsCut() throws Exception {
+        AtomicLong now = new AtomicLong();
+        long sec = 1_000_000_000L;
+        java.io.OutputStream slowPeer = new java.io.OutputStream() {
+            @Override public void write(int b) { now.addAndGet(20 * sec); }
+            @Override public void write(byte[] b, int off, int len) { now.addAndGet(20 * sec); }
+        };
+        var out = new org.example.sectoriadb.s3.http.MinRateOutputStream(slowPeer, 30 * sec, 1024, 30 * sec, now::get);
+        assertThrows(org.example.sectoriadb.s3.error.ResponseAbortedException.class,
+                () -> { for (int i = 0; i < 100; i++) out.write(new byte[16], 0, 16); });
+        assertTrue(now.get() < 120 * sec, "cut late: " + now.get() / sec + " s");
+
+        AtomicLong t2 = new AtomicLong();
+        var fast = new org.example.sectoriadb.s3.http.MinRateOutputStream(java.io.OutputStream.nullOutputStream(), 30 * sec, 1024, 30 * sec, t2::get);
+        for (int i = 0; i < 100_000; i++) { t2.addAndGet(1_000_000L); fast.write(new byte[65536], 0, 65536); }
+    }
+
     // ── query decoding ───────────────────────────────────────────────────────
 
     @Test
