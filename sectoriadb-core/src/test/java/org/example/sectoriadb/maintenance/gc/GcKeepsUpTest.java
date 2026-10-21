@@ -115,4 +115,50 @@ class GcKeepsUpTest {
         assertTrue(sizeAtEnd <= sizeAfterWarmUp * 1.2,
                 "the file kept growing: " + sizeAfterWarmUp + " bytes after 15 rounds, " + sizeAtEnd + " after 60");
     }
+
+    private byte[] data(int size, long seed) {
+        byte[] b = new byte[size];
+        new Random(seed).nextBytes(b);
+        return b;
+    }
+
+    @Test
+    void reclamationGoesOnWhileAnUnrelatedUploadStaysInFlight() throws Exception {
+        rig.props.getGc().setSweepGateWait(java.time.Duration.ofMillis(100));
+        put("old", StorageRig.CHUNK * 3, 7);
+        rig.catalog.deleteObject("bkt", "old");
+        // a long upload: its chunks are written, the commit has not happened (it may take minutes for a big object)
+        var staged = rig.writer.stageStream(new ByteArrayInputStream(data(StorageRig.CHUNK * 4, 8)), pool, "slow", null,
+                org.example.sectoriadb.checksum.UploadChecksums.none());
+        assertEquals(1, rig.chunkStore.gate().inFlight());
+
+        RunReport r = gc0();
+        assertEquals(3, r.chunksFreed, "the upload never looked at the garbage chunks: no reason to wait for it");
+        assertEquals(0, r.deferred);
+
+        rig.writer.commitObject(staged);
+        assertEquals(1, rig.manifests.count() - rig.manifests.gcQueueSize());
+    }
+
+    @Test
+    void anUploadThatReliesOnAGarbageChunkKeepsItFromBeingFreedUntilItIsDone() throws Exception {
+        rig.props.getGc().setSweepGateWait(java.time.Duration.ofMillis(100));
+        byte[] same = data(StorageRig.CHUNK * 2, 9);
+        rig.writer.storeStream(new ByteArrayInputStream(same), pool, "a", "x/y");
+        rig.catalog.deleteObject("bkt", "a");
+        // the new upload deduplicates against the zero-reference chunks that are due for collection
+        var staged = rig.writer.stageStream(new ByteArrayInputStream(same), pool, "b", null,
+                org.example.sectoriadb.checksum.UploadChecksums.none());
+
+        RunReport r = gc0();
+        assertEquals(0, r.chunksFreed, "the chunks the upload relies on are not freed under it");
+        assertTrue(r.deferred > 0);
+
+        rig.writer.commitObject(staged);
+        r = gc0();
+        assertEquals(0, r.chunksFreed, "and after its commit they are referenced");
+        var out = new java.io.ByteArrayOutputStream();
+        rig.reader.streamToOutput(rig.catalog.findObject("bkt", "b").orElseThrow(), out);
+        org.junit.jupiter.api.Assertions.assertArrayEquals(same, out.toByteArray());
+    }
 }

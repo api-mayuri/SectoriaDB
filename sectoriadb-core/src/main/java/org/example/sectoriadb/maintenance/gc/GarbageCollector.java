@@ -183,15 +183,28 @@ public class GarbageCollector {
             for (int i = 0; i < list.size(); i += batch) {
                 List<ChunkRef> part = list.subList(i, Math.min(list.size(), i + batch));
                 // Freeing a slot happens before the metadata commit. If the commit failed after the slot was freed, an
-                // upload that deduplicated against the chunk meanwhile could commit a reference to a freed slot. The
-                // gate drains such uploads and blocks new ones for the duration of the batch, so a failed commit
-                // leaves nothing that relies on the chunk (the next pass repairs the index entry via the ABSENT path).
-                UploadGate.Sweep gate = chunkStore.gate().tryBegin(e.getKey(),
+                // upload that deduplicated against the chunk meanwhile could commit a reference to a freed slot. So the
+                // batch claims its chunk keys on the gate: uploads that touched one of them are waited for (the others
+                // are not, however long they run), uploads that want one wait for the batch. Chunks still touched at the
+                // deadline stay for the next pass.
+                long[] keys = part.stream().mapToLong(ChunkRef::chunkKey).toArray();
+                UploadGate.KeySweep gate = chunkStore.gate().tryBeginKeys(e.getKey(), keys,
                         props.getGc().getSweepGateWait().toMillis(), props.getGc().getUploadTicketTtl().toMillis());
                 if (gate == null) {
                     metrics.gcDeferred(StorageMetrics.GcDeferral.UPLOADS_IN_FLIGHT);
                     r.deferred += list.size() - i;
-                    break;                                    // this pool's remaining chunks wait for the next pass
+                    break;                                    // a full drain (compaction) or another batch runs: next pass
+                }
+                java.util.Set<Long> granted = new java.util.HashSet<>();
+                for (long k : gate.granted()) granted.add(k);
+                if (granted.size() < part.size()) {
+                    metrics.gcDeferred(StorageMetrics.GcDeferral.UPLOADS_IN_FLIGHT);
+                    r.deferred += part.size() - granted.size();
+                    part = part.stream().filter(c -> granted.contains(c.chunkKey())).toList();
+                }
+                if (part.isEmpty()) {
+                    gate.close();
+                    continue;
                 }
                 ChunkBatchResult res;
                 try {
@@ -257,26 +270,34 @@ public class GarbageCollector {
     }
 
     /**
-     * Frees stray copies of one blob in bounded batches. Each batch takes the upload gate of the pool (drains the uploads
-     * in flight, blocks new ones for the duration of one exclusive transaction), re-checks every key against the
-     * committed index inside the transaction and frees the slots. When the uploads do not drain within the gate wait the
-     * rest is left for the next pass.
+     * Frees stray copies of one blob in bounded batches. Each batch claims its keys on the upload gate of the pool (waits
+     * for the uploads that touched one of them, holds back only uploads that want one of them), re-checks every key
+     * against the committed index inside the transaction and frees the slots. Keys an upload still holds after the gate
+     * wait are left for the next pass.
      */
     private StrayOutcome freeStrays(String blobId, String poolId, long[] keys, String source) {
         int freed = 0, notStray = 0, deferred = 0;
+        boolean busy = false;
         long bytes = 0;
         int batch = props.getGc().getBatchSize();
         for (int i = 0; i < keys.length; i += batch) {
             long[] part = Arrays.copyOfRange(keys, i, Math.min(keys.length, i + batch));
-            UploadGate.Sweep gate = poolId == null ? null : chunkStore.gate().tryBegin(poolId,
+            UploadGate.KeySweep gate = poolId == null ? null : chunkStore.gate().tryBeginKeys(poolId, part,
                     props.getGc().getSweepGateWait().toMillis(), props.getGc().getUploadTicketTtl().toMillis());
             if (poolId != null && gate == null) {
                 metrics.gcDeferred(StorageMetrics.GcDeferral.UPLOADS_IN_FLIGHT);
                 return new StrayOutcome(freed, bytes, notStray, deferred + (keys.length - i), true, null);
             }
+            long[] use = part;
+            if (gate != null && gate.granted().length < part.length) {
+                metrics.gcDeferred(StorageMetrics.GcDeferral.UPLOADS_IN_FLIGHT);
+                deferred += part.length - gate.granted().length;   // copies an upload still relies on: not strays yet
+                busy = true;
+                use = gate.granted();
+            }
             StrayBatchResult res;
             try {
-                res = gcRepo.freeStrays(blobId, part, this::freeSlot);
+                res = use.length == 0 ? new StrayBatchResult(0, 0, 0, 0, null) : gcRepo.freeStrays(blobId, use, this::freeSlot);
             } finally {
                 if (gate != null) gate.close();
             }
@@ -287,10 +308,10 @@ public class GarbageCollector {
             if (res.freed() > 0) metrics.gcStraysFreed(source, res.freed(), res.bytes());
             if (res.deferred() > 0) metrics.gcDeferred(StorageMetrics.GcDeferral.BLOB_BUSY);
             if (res.error() != null) {
-                return new StrayOutcome(freed, bytes, notStray, deferred, false, res.error());
+                return new StrayOutcome(freed, bytes, notStray, deferred, busy, res.error());
             }
         }
-        return new StrayOutcome(freed, bytes, notStray, deferred, false, null);
+        return new StrayOutcome(freed, bytes, notStray, deferred, busy, null);
     }
 
     private void collectOrphans(String poolId, int max, RunReport r) {

@@ -212,7 +212,7 @@ public class ChunkStore {
                 }
                 Map<Long, ChunkEntry> indexed = index.findAll(pool.getId(), firstKeys);   // one read txn per window
                 for (int i = 0; i < n; i++) {
-                    keys[base + i] = storeChunk(pool, chunkSize, firstKeys[i], data[i], indexed, placed);
+                    keys[base + i] = storeChunk(pool, chunkSize, firstKeys[i], data[i], indexed, placed, hold);
                 }
             }
         }
@@ -220,7 +220,8 @@ public class ChunkStore {
     }
 
     private long storeChunk(PoolEntity pool, int chunkSize, long firstKey, byte[] data,
-                            Map<Long, ChunkEntry> indexed, Map<Long, PlacedChunk> placed) throws IOException {
+                            Map<Long, ChunkEntry> indexed, Map<Long, PlacedChunk> placed,
+                            UploadGate.Hold hold) throws IOException {
         int crc = crc32c(data);
         long key = firstKey;
         for (int attempt = 0; attempt < MAX_KEY_ATTEMPTS; attempt++) {
@@ -229,6 +230,7 @@ public class ChunkStore {
                 key = hasher.hash64(data, attempt);
                 log.warn("Chunk key collision in pool {}: re-keying chunk (attempt {})", pool.getName(), attempt);
             }
+            hold.touch(key);   // from here the collector leaves this key alone until the upload is done
             PlacedChunk mine = placed.get(key);
             if (mine != null) {
                 // the key is already used by a chunk of this very upload: a repeat of it, or a collision

@@ -47,6 +47,8 @@ public final class UploadGate {
 
     private static final class PoolGate {
         final Set<Hold> holds = new HashSet<>();
+        /** chunk keys a collector batch is freeing right now: holds wait before they rely on one of them */
+        final Set<Long> collecting = new HashSet<>();
         boolean sweeping;
     }
 
@@ -56,6 +58,7 @@ public final class UploadGate {
         private final String poolId;
         private final long startedNanos = System.nanoTime();
         private int state = ACTIVE;   // guarded by gate
+        private final LongSet touched = new LongSet();   // chunk keys this upload looked at or wrote; guarded by gate
 
         private Hold(PoolGate gate, String poolId) {
             this.gate = gate;
@@ -64,6 +67,30 @@ public final class UploadGate {
 
         public String poolId() {
             return poolId;
+        }
+
+        /**
+         * The upload is about to rely on the chunk stored under {@code key} (deduplicate against it, reuse or write its
+         * slot). Waits while a collector batch is freeing that very key (milliseconds); afterwards the collector sees the
+         * key as touched and leaves it alone until this hold is released. This is what lets the collector ignore every
+         * upload that never looked at the chunks it frees, however long it runs.
+         */
+        public void touch(long key) {
+            boolean interrupted = false;
+            try {
+                synchronized (gate) {
+                    while (gate.collecting.contains(key)) {
+                        try {
+                            gate.wait();
+                        } catch (InterruptedException e) {
+                            interrupted = true;
+                        }
+                    }
+                    touched.add(key);
+                }
+            } finally {
+                if (interrupted) Thread.currentThread().interrupt();
+            }
         }
 
         @Override
@@ -110,6 +137,30 @@ public final class UploadGate {
         }
     }
 
+    /** The keyed exclusive side: the chunks of {@link #granted()} may be freed until it is closed. */
+    public final class KeySweep implements AutoCloseable {
+        private final PoolGate gate;
+        private final long[] granted;
+
+        private KeySweep(PoolGate gate, long[] granted) {
+            this.gate = gate;
+            this.granted = granted;
+        }
+
+        /** The requested keys that no live upload has touched; the others are left for a later pass. */
+        public long[] granted() {
+            return granted;
+        }
+
+        @Override
+        public void close() {
+            synchronized (gate) {
+                for (long k : granted) gate.collecting.remove(k);
+                gate.notifyAll();
+            }
+        }
+    }
+
     private PoolGate gate(String poolId) {
         return pools.computeIfAbsent(poolId, k -> new PoolGate());
     }
@@ -145,7 +196,7 @@ public final class UploadGate {
         PoolGate g = gate(poolId);
         long deadline = System.nanoTime() + waitMillis * 1_000_000L;
         synchronized (g) {
-            if (g.sweeping) return null;
+            if (g.sweeping || !g.collecting.isEmpty()) return null;
             g.sweeping = true;
             try {
                 while (true) {
@@ -167,6 +218,64 @@ public final class UploadGate {
             g.sweeping = false;
             g.notifyAll();
             return null;
+        }
+    }
+
+    /**
+     * Claims chunk keys for the collector (freeing zero-reference chunks, stray and orphan copies) without draining the
+     * pool: new touches of these keys wait for the batch, uploads that already touched one of them are waited for up to
+     * {@code waitMillis} (holds older than {@code ttlMillis} that are not committing are revoked), and the keys that are
+     * still touched at the deadline are dropped from the grant. Uploads that never looked at the keys do not matter, so
+     * a stream of long uploads cannot keep the collector away. Returns {@code null} when a full drain or another batch
+     * is running; the result's {@code granted()} may be empty.
+     */
+    public KeySweep tryBeginKeys(String poolId, long[] keys, long waitMillis, long ttlMillis) {
+        PoolGate g = gate(poolId);
+        long deadline = System.nanoTime() + waitMillis * 1_000_000L;
+        synchronized (g) {
+            if (g.sweeping || !g.collecting.isEmpty()) return null;
+            for (long k : keys) g.collecting.add(k);
+            try {
+                while (true) {
+                    long now = System.nanoTime();
+                    for (Hold h : new ArrayList<>(g.holds)) {
+                        if (h.state == ACTIVE && now - h.startedNanos > ttlMillis * 1_000_000L) {
+                            h.state = REVOKED;
+                            g.holds.remove(h);
+                        }
+                    }
+                    boolean conflict = false;
+                    for (long k : keys) {
+                        for (Hold h : g.holds) {
+                            if (h.touched.contains(k)) {
+                                conflict = true;
+                                break;
+                            }
+                        }
+                        if (conflict) break;
+                    }
+                    long left = deadline - now;
+                    if (!conflict || left <= 0) break;
+                    g.wait(Math.max(1, left / 1_000_000L));
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            long[] granted = new long[keys.length];
+            int n = 0;
+            for (long k : keys) {
+                boolean touched = false;
+                for (Hold h : g.holds) {
+                    if (h.touched.contains(k)) {
+                        touched = true;
+                        break;
+                    }
+                }
+                if (touched) g.collecting.remove(k);
+                else granted[n++] = k;
+            }
+            g.notifyAll();
+            return new KeySweep(g, java.util.Arrays.copyOf(granted, n));
         }
     }
 

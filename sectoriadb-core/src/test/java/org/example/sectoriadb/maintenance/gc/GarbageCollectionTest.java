@@ -435,7 +435,7 @@ class GarbageCollectionTest {
         CompletableFuture<SweepReport> sweep = CompletableFuture.supplyAsync(() -> rig.gc.sweep(pool));
         Thread.sleep(300);
         assertFalse(sweep.isDone(), "the sweep waits for the in-flight upload");
-        // while the sweep drains, a new upload is held back: it starts after the sweep's batch
+        // an unrelated new upload is not held back by the sweep: only uploads that touch the claimed keys wait
         CompletableFuture<ManifestEntity> late = CompletableFuture.supplyAsync(() -> {
             try {
                 return stage("late", content(1, 36));
@@ -443,15 +443,15 @@ class GarbageCollectionTest {
                 throw new RuntimeException(e);
             }
         });
-        Thread.sleep(100);
-        assertFalse(late.isDone(), "new uploads wait while the gate is being drained");
+        ManifestEntity lateStaged = late.get(5, TimeUnit.SECONDS);
+        assertFalse(sweep.isDone(), "the sweep still waits for the upload it cannot ignore");
 
         rig.writer.commitObject(staged);
         SweepReport s = sweep.get(10, TimeUnit.SECONDS);
         assertEquals(0, s.freed, "the candidates were committed meanwhile: the in-transaction re-check keeps them");
         assertTrue(s.notStray > 0, "the sweep had seen the in-flight chunks as candidates");
         assertFalse(s.deferred);
-        rig.writer.commitObject(late.get(10, TimeUnit.SECONDS));
+        rig.writer.commitObject(lateStaged);
         assertArrayEquals(data, get("x"));
         assertEquals(6, physical());
     }
