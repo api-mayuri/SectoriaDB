@@ -35,7 +35,7 @@
 | `guide/` | `recommendations`, `s3-usage`, `admin-shell`, `operations`, `configuration`, `monitoring`, `development` |
 | `architecture/` | `overview`, `storage-engine`, `metastore`, `metadata-model`, `garbage-collection`, `integrity`, `security`, `observability` |
 | `testing/` | `benchmarking`, `compatibility`, `fault-injection` |
-| `reports/` | `sandbox-results` (измерения с датами и оговоркой о железе) |
+| `reports/` | `sandbox-results` (измерения с датами и оговоркой о железе), `critical-review` (пробелы безопасности и оптимизации, статус исправлений) |
 | `history/` | `01-…`–`14-…`, `ROADMAP` — исторические документы этапов, могут расходиться с кодом |
 
 Консистентность проверяет `DocsConsistencyTest` (ссылки, метрики, свойства).
