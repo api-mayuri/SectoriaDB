@@ -21,6 +21,7 @@ RUN mvn -B package -DskipTests -q
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
 FROM eclipse-temurin:21-jre-alpine@sha256:51ab5e3302e7141ce665ca3ea85e8b5cd648eafbc3c0c90dd79d6537684e4555
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 # Unprivileged user; /data is what the volume below mounts over (a fresh named volume inherits this ownership).
 # /app belongs to root and the jar is read-only: the server cannot rewrite its own code.
@@ -31,6 +32,8 @@ RUN addgroup -S sectoria && adduser -S -G sectoria sectoria \
 WORKDIR /app
 # The version is not hard-coded: the repackaged jar is the only *.jar of the target directory
 COPY --from=builder --chown=root:root --chmod=444 /build/sectoriadb-server/target/SectoriaDB-*.jar /app/sectoriadb.jar
+# the licence and the copyright notice travel with every copy of the software
+COPY --chown=root:root --chmod=444 LICENSE NOTICE /app/
 
 # One volume for everything the server writes (/data/meta, /data/storage incl. the upload spool /data/storage/.tmp):
 # a snapshot of this single volume is consistent across metadata and blobs.

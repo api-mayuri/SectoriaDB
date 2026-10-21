@@ -19,6 +19,14 @@
     <name>SectoriaDB</name>
     <description>S3-compatible object storage built on a Cuckoo hash table blob store</description>
 
+    <licenses>
+        <license>
+            <name>Apache License, Version 2.0</name>
+            <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+            <distribution>repo</distribution>
+        </license>
+    </licenses>
+
     <modules>
         <module>sectoriadb-metastore</module>
         <module>sectoriadb-engine</module>
