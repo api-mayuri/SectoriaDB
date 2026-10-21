@@ -68,12 +68,71 @@ def docker_exec(container, cmd):
         return ""
 
 
+TREE_COLS = ["ts_utc", "elapsed_s", "tree", "entries", "branch_pages", "leaf_pages", "overflow_pages", "leaf_fill"]
+TXN_COLS = ["ts_utc", "elapsed_s", "txn", "commits", "pages", "max_pages", "seconds"]
+
+
+def side_writer(path, cols):
+    """A CSV next to soak.csv (trees.csv, commits.csv): one row per tree / per transaction kind and sample."""
+    new = not os.path.exists(path) or os.path.getsize(path) == 0
+    f = open(path, "a", newline="")
+    w = csv.writer(f)
+    if new:
+        w.writerow(cols)
+    return f, w
+
+
+def by_label(samples, name, label):
+    out = {}
+    for n, l, v in samples:
+        if n == name and label in l and not math.isnan(v):
+            out[l[label]] = out.get(l[label], 0.0) + v
+    return out
+
+
+def write_trees(w, s, ts, elapsed):
+    """Entries per metadata tree (every sample) and its pages (refreshed by the server every tree-pages-interval)."""
+    entries = by_label(s, "sectoriadb_metastore_tree_entries", "tree")
+    pages = {}
+    for n, l, v in s:
+        if n == "sectoriadb_metastore_tree_pages" and "tree" in l:
+            pages.setdefault(l["tree"], {})[l.get("kind", "")] = v
+    fill = by_label(s, "sectoriadb_metastore_tree_leaf_fill", "tree")
+    for tree in sorted(entries):
+        pg = pages.get(tree, {})
+        w.writerow([ts, elapsed, tree, int(entries[tree]), int(pg["branch"]) if "branch" in pg else "", int(pg["leaf"]) if "leaf" in pg else "",
+                    int(pg["overflow"]) if "overflow" in pg else "", round(fill[tree], 3) if tree in fill else ""])
+
+
+def txn_totals(s):
+    """Cumulative commits, pages and seconds per transaction kind, plus the largest commit seen (the summary's max)."""
+    out = {}
+    for n, l, v in s:
+        t = l.get("txn")
+        if t is None or math.isnan(v):
+            continue
+        d = out.setdefault(t, {"commits": 0.0, "pages": 0.0, "max": 0.0, "seconds": 0.0})
+        if n == "sectoriadb_metastore_commit_txn_pages_count":
+            d["commits"] += v
+        elif n == "sectoriadb_metastore_commit_txn_pages_sum":
+            d["pages"] += v
+        elif n == "sectoriadb_metastore_commit_txn_pages_max":
+            d["max"] = max(d["max"], v)
+        elif n == "sectoriadb_metastore_commit_txn_seconds_sum":
+            d["seconds"] += v
+    return out
+
+
 def sample(a):
     new = not os.path.exists(a.csv) or os.path.getsize(a.csv) == 0
     f = open(a.csv, "a", newline="")
     w = csv.writer(f)
     if new:
         w.writerow(COLS)
+    base = os.path.dirname(os.path.abspath(a.csv))
+    tf, tw = side_writer(os.path.join(base, "trees.csv"), TREE_COLS)
+    cf, cw = side_writer(os.path.join(base, "commits.csv"), TXN_COLS)
+    prev_txn = None
     start = time.time()
     t0 = a.t0 or start  # elapsed_s counts from t0 (soak.sh passes its own start so the final row continues the series)
     prev = None
@@ -107,6 +166,18 @@ def sample(a):
                     p = quantile(0.99, cur[k], prev[k])
                     row[col] = None if p is None else round(p * 1000, 1)
             prev = cur
+            write_trees(tw, s, row["ts_utc"], row["elapsed_s"])
+            txn = txn_totals(s)
+            if prev_txn is not None:   # per interval: commits, pages and time of every transaction kind since the last sample
+                for t in sorted(txn):
+                    p0 = prev_txn.get(t, {"commits": 0, "pages": 0, "seconds": 0})
+                    dc = txn[t]["commits"] - p0["commits"]
+                    if dc > 0:
+                        cw.writerow([row["ts_utc"], row["elapsed_s"], t, int(dc), int(txn[t]["pages"] - p0["pages"]), int(txn[t]["max"]),
+                                     round(txn[t]["seconds"] - p0["seconds"], 3)])
+            prev_txn = txn
+            tf.flush()
+            cf.flush()
         except Exception as e:  # server down / scrape failure: the row says up=0
             print(f"scrape failed: {e}", file=sys.stderr)
             prev = None
@@ -184,7 +255,56 @@ def report(a):
         flag = ("  <-- WARN: monotonic growth" + (" (follows the data set, check against the object count)" if expected else "")) if grows else flag
         rc |= bool(grows and not expected)
         print(f"    {col:18s} {a1:10.1f} -> {b1:10.1f}   tau={tau:+.2f}{flag}")
+    rc |= report_trees(os.path.join(os.path.dirname(os.path.abspath(a.csv)), "trees.csv"), t_first + warm)
+    report_commits(os.path.join(os.path.dirname(os.path.abspath(a.csv)), "commits.csv"), t_first)
     return rc
+
+
+def report_trees(path, after):
+    """Which metadata tree grows: entries (and pages) after warm-up, first third against last third, largest growth first."""
+    if not os.path.exists(path):
+        return 0
+    series = {}
+    for r in csv.DictReader(open(path)):
+        if float(r["elapsed_s"]) >= after and r["entries"]:
+            series.setdefault(r["tree"], []).append((int(r["entries"]), int(r["leaf_pages"]) + int(r["branch_pages"]) + int(r["overflow_pages"] or 0)
+                                                     if r["leaf_pages"] else None))
+    rows = []
+    for tree, xs in series.items():
+        ent = [e for e, _ in xs]
+        if len(ent) < 6:
+            continue
+        t = len(ent) // 3
+        a1, b1, tau = mean(ent[:t]), mean(ent[-t:]), kendall(ent)
+        pg = [p for _, p in xs if p is not None]
+        rows.append((b1 - a1, tree, a1, b1, tau, (pg[0], pg[-1]) if len(pg) >= 2 else None))
+    if not rows:
+        return 0
+    print("  metadata trees after warm-up (entries first third -> last third; pages first -> last refresh), largest growth first:")
+    rc = 0
+    for growth, tree, a1, b1, tau, pg in sorted(rows, reverse=True)[:12]:
+        grows = b1 > a1 * 1.10 + 10 and tau >= 0.6
+        rc |= grows
+        pages = f"   pages {pg[0]} -> {pg[1]}" if pg else ""
+        print(f"    {tree:28s} {a1:12.0f} -> {b1:12.0f}   tau={tau:+.2f}{pages}{'  <-- WARN: keeps growing' if grows else ''}")
+    return rc
+
+
+def report_commits(path, after):
+    """Which transactions write the most pages (and the largest single commit of each kind) while under load."""
+    if not os.path.exists(path):
+        return
+    agg = {}
+    for r in csv.DictReader(open(path)):
+        if float(r["elapsed_s"]) < after:
+            continue
+        d = agg.setdefault(r["txn"], [0, 0, 0, 0.0])
+        d[0] += int(r["commits"]); d[1] += int(r["pages"]); d[2] = max(d[2], int(r["max_pages"])); d[3] += float(r["seconds"])
+    if not agg:
+        return
+    print("  metastore commits by transaction kind (commits, pages written, largest commit, time in commit), most pages first:")
+    for txn, (n, pages, mx, sec) in sorted(agg.items(), key=lambda kv: -kv[1][1])[:10]:
+        print(f"    {txn:18s} commits {n:9d}   pages {pages:11d} ({pages / max(n, 1):7.1f}/commit)   largest {mx:8d}   {sec:8.1f} s")
 
 
 ap = argparse.ArgumentParser()

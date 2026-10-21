@@ -27,6 +27,12 @@ public interface MetaStoreListener {
     /** A commit became durable and visible; {@code nanos} is its total duration. */
     default void onCommit(long nanos) { }
 
+    /**
+     * A commit became durable: the transaction's {@code label} (see {@link WriteTxn#label}), the pages it wrote (tree,
+     * overflow and free-list pages) and its total duration. Called in addition to {@link #onCommit(long)}.
+     */
+    default void onCommitDetail(String label, long pages, long nanos) { }
+
     /** An attempt to recover the write side after a failed commit finished. */
     default void onRecovery(boolean success) { }
 

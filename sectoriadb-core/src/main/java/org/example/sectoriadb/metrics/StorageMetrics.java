@@ -126,6 +126,12 @@ public interface StorageMetrics {
     /** A metastore commit (pages, fsync, meta page, fsync) took {@code nanos}. */
     void metaCommit(long nanos);
 
+    /**
+     * The same commit, by kind: the write transaction's label ({@code gc.tombstones}, {@code compaction.swap},
+     * {@code group}, ...: a small fixed set), the pages it wrote and its duration.
+     */
+    default void metaCommitDetail(String txn, long pages, long nanos) { }
+
     /** A group commit batch of {@code bodies} write bodies (rolled back ones included) wrote {@code pages} pages. */
     default void metaGroupBatch(int bodies, int pages) { }
 

@@ -60,3 +60,6 @@ backups/
 ### TLS: certificates and keys (deploy/gen-self-signed.sh, certbot, corporate CA) ###
 deploy/certs/*
 !deploy/certs/.gitkeep
+
+# Python bytecode of the bench scripts
+__pycache__/

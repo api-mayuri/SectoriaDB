@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 import java.time.Duration;
 import java.util.EnumMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -70,7 +71,12 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     private final Counter gcErrors;
     private final AtomicLong gcLastRunSeconds = new AtomicLong();
 
+    private final MeterRegistry registry;
+    private final Map<String, DistributionSummary> commitPagesByTxn = new ConcurrentHashMap<>();
+    private final Map<String, Timer> commitTimeByTxn = new ConcurrentHashMap<>();
+
     public MicrometerStorageMetrics(MeterRegistry r) {
+        this.registry = r;
         for (Target t : Target.values()) {
             readTimer.put(t, timer(r, "sectoriadb.storage.disk.read", "Duration of one positional disk read", Buckets.DISK_IO, "target", t.label()));
             writeTimer.put(t, timer(r, "sectoriadb.storage.disk.write", "Duration of one disk write (into the page cache, before fsync)", Buckets.DISK_IO, "target", t.label()));
@@ -188,6 +194,16 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     @Override public void smallAppendLockWait(long nanos) { smallLockWait.record(nanos, TimeUnit.NANOSECONDS); }
     @Override public void metaWriterLockWait(long nanos) { metaWriterWait.record(nanos, TimeUnit.NANOSECONDS); }
     @Override public void metaCommit(long nanos) { metaCommit.record(nanos, TimeUnit.NANOSECONDS); }
+
+    @Override public void metaCommitDetail(String txn, long pages, long nanos) {
+        // the labels are constants in the code (a few dozen at most), so one series per label is bounded
+        commitPagesByTxn.computeIfAbsent(txn, t -> DistributionSummary.builder("sectoriadb.metastore.commit.txn.pages")
+                .description("Pages written by one metastore commit, by transaction kind")
+                .tag("txn", t).serviceLevelObjectives(Buckets.COMMIT_PAGES).register(registry)).record(pages);
+        commitTimeByTxn.computeIfAbsent(txn, t -> timer(registry, "sectoriadb.metastore.commit.txn",
+                "Duration of one metastore commit, by transaction kind", Buckets.FSYNC, "txn", t))
+                .record(nanos, TimeUnit.NANOSECONDS);
+    }
 
     @Override public void metaGroupBatch(int bodies, int pages) {
         groupBatchSize.record(bodies);

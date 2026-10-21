@@ -19,6 +19,7 @@ import org.example.sectoriadb.storage.HashTableCache;
 import org.example.sectoriadb.storage.SmallBlobCache;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
@@ -26,6 +27,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.ToDoubleFunction;
 
 /**
@@ -65,6 +68,13 @@ public class StorageGauges {
     private final StorageProperties props;
     private final long ttlNanos;
 
+    private final long treePagesIntervalMs;
+    /** Entries per metadata tree, refreshed with the snapshot; a gauge is registered the first time a tree shows up. */
+    private volatile Map<String, Long> treeEntries = Map.of();
+    private volatile Map<String, CatalogInfo.TreePages> treePages = Map.of();
+    private final Set<String> treeGauges = ConcurrentHashMap.newKeySet();
+    private final Set<String> treePageGauges = ConcurrentHashMap.newKeySet();
+
     private volatile Snapshot cached = Snapshot.EMPTY;
     private volatile long cachedAt;
     private volatile boolean everComputed;
@@ -85,6 +95,7 @@ public class StorageGauges {
         this.compactor = compactor;
         this.props = props;
         this.ttlNanos = Math.max(0, obs.getGaugeCacheMs()) * 1_000_000L;
+        this.treePagesIntervalMs = obs.getTreePagesIntervalMs();
     }
 
     @PostConstruct
@@ -152,6 +163,7 @@ public class StorageGauges {
             if (everComputed && now - cachedAt < ttlNanos) return cached;
             try {
                 cached = compute();
+                refreshTreeEntries();
             } catch (RuntimeException e) {
                 log.debug("Could not refresh storage gauges, keeping the previous values: {}", e.toString());
             }
@@ -204,6 +216,61 @@ public class StorageGauges {
                 cs.chunks(), cs.refs(), cs.gcQueue(), cs.orphans(), poolBlobsMax,
                 data[0], data[1], meta[0], meta[1], chunkStore.gate().inFlight(), compactor.pendingFiles(),
                 multipart.openCount());
+    }
+
+    /**
+     * Entries of every metadata tree. A tree that only ever grows while the object count stays flat (a queue the
+     * collector does not keep up with, an index nobody cleans) is the first thing to look for when sectoria.db grows.
+     */
+    private void refreshTreeEntries() {
+        Map<String, Long> now = catalog.treeEntries();
+        treeEntries = now;
+        for (String tree : now.keySet()) {
+            if (treeGauges.add(tree)) {
+                Gauge.builder("sectoriadb.metastore.tree.entries", this, o -> {
+                            o.snapshot();
+                            return o.treeEntries.getOrDefault(tree, 0L);
+                        })
+                        .description("Entries of one metadata tree (tree names are fixed in the code)")
+                        .tag("tree", tree).strongReference(true).register(registry);
+            }
+        }
+    }
+
+    /**
+     * Pages of every metadata tree, recomputed in the background every {@code tree-pages-interval-ms}. Together with the
+     * entries it tells growth by data (more entries) from growth by bloat (more pages per entry, low leaf fill).
+     */
+    @Scheduled(initialDelayString = "${sectoriadb.observability.tree-pages-initial-delay-ms:60000}",
+            fixedDelayString = "${sectoriadb.observability.tree-pages-interval-ms:600000}")
+    void refreshTreePages() {
+        if (treePagesIntervalMs <= 0) return;
+        long t0 = System.nanoTime();
+        try {
+            Map<String, CatalogInfo.TreePages> now = new HashMap<>();
+            for (CatalogInfo.TreePages t : catalog.treePages()) now.put(t.tree(), t);
+            treePages = now;
+            for (String tree : now.keySet()) {
+                if (!treePageGauges.add(tree)) continue;
+                treePageGauge(tree, "branch", t -> t.branch());
+                treePageGauge(tree, "leaf", t -> t.leaf());
+                treePageGauge(tree, "overflow", t -> t.overflow());
+                Gauge.builder("sectoriadb.metastore.tree.leaf.fill", this,
+                                o -> o.treePages.containsKey(tree) ? o.treePages.get(tree).leafFill() : 0)
+                        .description("Average used fraction of the leaf pages of one metadata tree")
+                        .tag("tree", tree).strongReference(true).register(registry);
+            }
+            log.debug("Metadata tree pages recomputed in {} ms", (System.nanoTime() - t0) / 1_000_000);
+        } catch (RuntimeException e) {
+            log.debug("Could not recompute the metadata tree pages: {}", e.toString());
+        }
+    }
+
+    private void treePageGauge(String tree, String kind, ToDoubleFunction<CatalogInfo.TreePages> f) {
+        Gauge.builder("sectoriadb.metastore.tree.pages", this,
+                        o -> o.treePages.containsKey(tree) ? f.applyAsDouble(o.treePages.get(tree)) : 0)
+                .description("Pages of one metadata tree by kind (branch, leaf, overflow), recomputed every tree-pages-interval-ms")
+                .tag("tree", tree).tag("kind", kind).strongReference(true).register(registry);
     }
 
     /** {usable, total} bytes of the file system holding {@code dir} (or its nearest existing parent). */

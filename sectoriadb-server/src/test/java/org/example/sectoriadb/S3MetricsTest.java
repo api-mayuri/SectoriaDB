@@ -69,6 +69,8 @@ class S3MetricsTest {
         r.add("sectoriadb.s3.access-key",       () -> AK);
         r.add("sectoriadb.s3.secret-key",       () -> SK);
         r.add("sectoriadb.observability.gauge-cache-ms", () -> "0");
+        r.add("sectoriadb.observability.tree-pages-interval-ms", () -> "200");
+        r.add("sectoriadb.observability.tree-pages-initial-delay-ms", () -> "0");
         r.add("sectoriadb.observability.slow-request-ms", () -> "1");   // every request is "slow": exercises the WARN log
         r.add("spring.shell.interactive.enabled", () -> "false");
     }
@@ -220,7 +222,7 @@ class S3MetricsTest {
         // every label NAME used by sectoriadb_* series is on the allow-list
         Matcher labelNames = Pattern.compile("^sectoriadb_[a-z0-9_]+\\{([^}]*)}", Pattern.MULTILINE).matcher(after);
         Set<String> allowed = Set.of("application", "operation", "status_class", "code", "reason", "target",
-                "kind", "result", "dir", "le");
+                "kind", "result", "dir", "le", "txn", "tree");   // txn and tree: fixed sets of names in the code
         while (labelNames.find()) {
             for (String pair : labelNames.group(1).split(",(?=[a-z_]+=\")")) {
                 assertTrue(allowed.contains(pair.substring(0, pair.indexOf('='))), "unexpected label in " + labelNames.group());
@@ -349,6 +351,20 @@ class S3MetricsTest {
                 "sectoriadb_gc_upload_holds", "sectoriadb_gc_old_small_files_pending"}) {
             assertFalse(Double.isNaN(sample(text, name)), name);
         }
+        // what grows and who writes: entries and pages per metadata tree, commits per transaction kind
+        for (int i = 0; i < 50 && !text.contains("sectoriadb_metastore_tree_pages{"); i++) {
+            Thread.sleep(100);
+            text = scrape();
+        }
+        assertEquals(1, sample(text, "sectoriadb_metastore_tree_entries", "tree=objects"), "one current object");
+        assertTrue(sample(text, "sectoriadb_metastore_tree_entries", "tree=manifests") >= 1);
+        assertTrue(sampleOr0(text, "sectoriadb_metastore_tree_pages", "tree=objects", "kind=leaf") >= 1, "the tree walk ran");
+        assertFalse(Double.isNaN(sample(text, "sectoriadb_metastore_tree_leaf_fill", "tree=objects")));
+        assertTrue(sampleOr0(text, "sectoriadb_metastore_commit_txn_pages_count", "txn=group") >= 3, "object commits are grouped");
+        assertTrue(sampleOr0(text, "sectoriadb_metastore_commit_txn_pages_sum", "txn=group") >= 3, "each commit writes pages");
+        String commitLines = text.lines().filter(l -> l.startsWith("sectoriadb_metastore_commit_txn_pages_count")).toList().toString();
+        assertTrue(sampleOr0(text, "sectoriadb_metastore_commit_txn_pages_count", "txn=gc.tombstones") >= 1, "the collector's own commit: " + commitLines);
+        assertTrue(sampleOr0(text, "sectoriadb_metastore_commit_txn_seconds_count", "txn=gc.tombstones") >= 1);
         assertTrue(sample(text, "sectoriadb_metastore_file_bytes") > 0);
         assertTrue(sample(text, "sectoriadb_metastore_pages") > 2);
         assertTrue(sample(text, "sectoriadb_metastore_last_txid") >= 3);

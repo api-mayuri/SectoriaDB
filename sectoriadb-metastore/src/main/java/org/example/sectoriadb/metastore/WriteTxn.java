@@ -39,6 +39,24 @@ public final class WriteTxn extends ReadTxn {
         super(store, snap, false);
         this.newTxId = snap.txId() + 1;
         this.hwm = snap.pageCount();
+        this.pagesWrittenAtStart = store.pager.pagesWritten;
+    }
+
+    /** Pager counter when the transaction began: the commit reports how many pages this transaction wrote. */
+    final long pagesWrittenAtStart;
+    private String label = "other";
+
+    /**
+     * Names the transaction for the commit metrics and the large-commit log (a short constant such as
+     * {@code "gc.tombstones"}; not user data). Returns this transaction.
+     */
+    public WriteTxn label(String label) {
+        this.label = label == null || label.isBlank() ? "other" : label;
+        return this;
+    }
+
+    public String label() {
+        return label;
     }
 
     /**

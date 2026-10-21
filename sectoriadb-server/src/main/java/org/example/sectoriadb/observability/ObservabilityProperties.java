@@ -15,6 +15,16 @@ public class ObservabilityProperties {
     public long getSlowRequestMs() { return slowRequestMs; }
     public void setSlowRequestMs(long v) { this.slowRequestMs = v; }
 
+    /**
+     * How often the per-tree page gauges ({@code sectoriadb_metastore_tree_pages}) are recomputed. Walking the trees reads
+     * the whole metadata file and keeps one read transaction open meanwhile, so it runs in the background and rarely;
+     * 0 turns it off. The per-tree entry counts are cheap and follow the normal gauge cache instead.
+     */
+    private long treePagesIntervalMs = 600_000;
+
+    public long getTreePagesIntervalMs() { return treePagesIntervalMs; }
+    public void setTreePagesIntervalMs(long v) { this.treePagesIntervalMs = v; }
+
     public long getGaugeCacheMs() { return gaugeCacheMs; }
     public void setGaugeCacheMs(long v) { this.gaugeCacheMs = v; }
 }

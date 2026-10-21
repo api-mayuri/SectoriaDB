@@ -36,6 +36,9 @@ public final class Buckets {
     public static final double[] GROUP_BATCH_SIZE = {1, 2, 4, 8, 16, 32, 64, 128, 256};
 
     /** Pages written per group commit (max-batch-pages defaults to 1024): powers of two, 12 buckets. */
+    /** Pages written by one metastore commit: a single object is a handful, a batch hundreds, a runaway one far more. */
+    public static final double[] COMMIT_PAGES = {1, 4, 16, 64, 256, 1024, 4096, 16_384, 65_536, 262_144};
+
     public static final double[] GROUP_BATCH_PAGES = {1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048};
 
     private static Duration[] ms(double... millis) {

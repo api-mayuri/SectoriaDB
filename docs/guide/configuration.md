@@ -77,6 +77,8 @@
 | `sectoriadb.multipart.cleanup-interval-ms` | `3600000` | период очистки загрузок, мс |
 | `sectoriadb.observability.slow-request-ms` | `2000` | запросы не короче пишутся в лог на WARN и в `sectoriadb_s3_requests_slow_total`; `0` выключает |
 | `sectoriadb.observability.gauge-cache-ms` | `15000` | как долго кэшируются gauge состояния между скрейпами |
+| `sectoriadb.observability.tree-pages-interval-ms` | `600000` | как часто пересчитываются страницы деревьев метаданных (`sectoriadb_metastore_tree_pages`); обход читает весь `sectoria.db` и держит одну читающую транзакцию, `0` — выключено |
+| `sectoriadb.observability.tree-pages-initial-delay-ms` | `60000` | задержка первого пересчёта страниц деревьев после старта |
 
 ## Свойства Spring, которые задаёт поставка
 

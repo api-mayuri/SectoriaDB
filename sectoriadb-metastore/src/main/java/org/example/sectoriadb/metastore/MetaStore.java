@@ -71,6 +71,7 @@ public final class MetaStore implements AutoCloseable {
      */
     private volatile Throwable poisoned;
     private final long recoveryBackoffNanos;
+    private final int largeCommitPages;
     private volatile long nextRecoveryAt;      // System.nanoTime() from which a recovery may be attempted again
     private volatile int dirtyMetaSlot = -1;   // slot a commit started writing its meta page to and has not finished
     private volatile long freeCountApprox;
@@ -90,6 +91,7 @@ public final class MetaStore implements AutoCloseable {
     private MetaStore(FileChannel channel, FileLock lock, Pager pager, Snapshot snap, MetaStoreOptions opts) {
         this.listener = opts.listener();
         this.recoveryBackoffNanos = TimeUnit.MILLISECONDS.toNanos(opts.recoveryBackoffMillis());
+        this.largeCommitPages = opts.largeCommitPages();
         this.committer = new GroupCommitter(this, opts);
         this.channel = channel;
         this.fileLock = lock;
@@ -422,8 +424,15 @@ public final class MetaStore implements AutoCloseable {
             throw t;
         }
         // the commit is durable and published: a failing metrics sink must not make it look failed
+        long nanos = System.nanoTime() - t0;
+        long pages = pager.pagesWritten - w.pagesWrittenAtStart;
+        if (largeCommitPages > 0 && pages >= largeCommitPages) {
+            log.warn("Large metadata commit: txn={} pages={} ({} MiB) commit={} ms file={} MiB", w.label(), pages,
+                    pages * pager.pageSize >> 20, nanos / 1_000_000, pager.pageSize * committed.pageCount() >> 20);
+        }
         try {
-            listener.onCommit(System.nanoTime() - t0);
+            listener.onCommit(nanos);
+            listener.onCommitDetail(w.label(), pages, nanos);
         } catch (RuntimeException | Error e) {
             log.warn("Metrics callback failed after a successful commit: {}", e.toString());
         }
@@ -519,6 +528,18 @@ public final class MetaStore implements AutoCloseable {
             live = readers.values().stream().mapToInt(Integer::intValue).sum();
         }
         return new Stats(pager.pageSize, s.pageCount(), freeCountApprox, s.txId(), size, live, oldestReaderMillis());
+    }
+
+    /**
+     * Entries of every tree on the latest committed snapshot. Cheap: the counts live in the catalog, no tree is walked
+     * (unlike {@link #treeStats()}), so it can back a metrics gauge that is read every scrape.
+     */
+    public Map<String, Long> treeSizes() {
+        try (ReadTxn tx = beginRead()) {
+            Map<String, Long> out = new TreeMap<>();
+            for (String name : tx.treeNames()) out.put(name, tx.tree(name).size());
+            return out;
+        }
     }
 
     /** Pages and leaf fill of every tree on the latest committed snapshot (diagnostics; reads only). */

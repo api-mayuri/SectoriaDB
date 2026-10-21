@@ -139,7 +139,7 @@ final class GroupCommitter {
     private boolean runBatch(ArrayDeque<Task> local, boolean alreadyStopping) throws InterruptedException {
         WriteTxn tx;
         try {
-            tx = store.beginWriteInternal();
+            tx = store.beginWriteInternal().label("group");
         } catch (Throwable t) {                 // closed, or the store could not recover from a failed commit: fail with that cause
             Throwable cause = t instanceof IllegalStateException ? t : new IllegalStateException(t);
             for (Task x : local) x.future.completeExceptionally(cause);

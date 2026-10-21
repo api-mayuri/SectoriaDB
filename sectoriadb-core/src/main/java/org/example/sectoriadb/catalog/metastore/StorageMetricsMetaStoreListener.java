@@ -43,6 +43,11 @@ public final class StorageMetricsMetaStoreListener implements MetaStoreListener 
     }
 
     @Override
+    public void onCommitDetail(String label, long pages, long nanos) {
+        metrics.metaCommitDetail(label, pages, nanos);
+    }
+
+    @Override
     public void onRecovery(boolean success) {
         metrics.metaRecovery(success);
     }

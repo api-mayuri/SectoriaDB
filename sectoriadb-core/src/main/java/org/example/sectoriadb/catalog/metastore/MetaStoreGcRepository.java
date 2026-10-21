@@ -105,7 +105,7 @@ public class MetaStoreGcRepository implements GcRepository {
         long bytes = 0;
         List<ChunkRef> removed = new ArrayList<>();
         IOException error = null;
-        try (WriteTxn tx = store().beginWrite()) {
+        try (WriteTxn tx = store().beginWrite().label("gc.chunks")) {
             boolean changed = false;
             BTree chunks = tx.tree(Chunks.CHUNKS);
             BTree byBlob = tx.tree(Chunks.CHUNKS_BY_BLOB);
@@ -208,7 +208,7 @@ public class MetaStoreGcRepository implements GcRepository {
         int freed = 0, notStray = 0, deferred = 0;
         long bytes = 0;
         IOException error = null;
-        try (WriteTxn tx = store().beginWrite()) {
+        try (WriteTxn tx = store().beginWrite().label("gc.strays")) {
             boolean changed = false;
             BTree orphans = tx.tree(Chunks.CHUNK_ORPHANS);
             Optional<BlobFileEntity> blob = Trees.blob(tx, blobId, false);
@@ -277,7 +277,7 @@ public class MetaStoreGcRepository implements GcRepository {
     public int deleteTombstones(List<Tombstone> tombstones) {
         if (tombstones.isEmpty()) return 0;
         int removed = 0;
-        try (WriteTxn tx = store().beginWrite()) {
+        try (WriteTxn tx = store().beginWrite().label("gc.tombstones")) {
             BTree queue = tx.tree(Trees.DELETED_MANIFESTS);
             for (Tombstone t : tombstones) {
                 Optional<ManifestEntity> m = Trees.manifest(tx, t.manifestId());
@@ -297,7 +297,7 @@ public class MetaStoreGcRepository implements GcRepository {
 
     @Override
     public CompactionSwap swapSmallBlob(String oldBlobId, String newBlobId, Map<String, SmallMove> moves) {
-        try (WriteTxn tx = store().beginWrite()) {
+        try (WriteTxn tx = store().beginWrite().label("compaction.swap")) {
             Optional<BlobFileEntity> oldBlob = Trees.blob(tx, oldBlobId, false);
             Optional<BlobFileEntity> newBlob = Trees.blob(tx, newBlobId, false);
             if (oldBlob.isEmpty()) return new CompactionSwap(false, "the old blob no longer exists", 0, List.of());

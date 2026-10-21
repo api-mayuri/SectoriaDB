@@ -137,7 +137,7 @@ public class MetaStorePoolRepository implements PoolRepository {
      * started meanwhile (the caller discards it and tries again).
      */
     private Optional<List<BlobFileEntity>> unregister(String poolId) {
-        try (WriteTxn tx = store().beginWrite()) {
+        try (WriteTxn tx = store().beginWrite().label("bucket.delete")) {
             PoolEntity pool = Trees.pool(tx, poolId)
                     .orElseThrow(() -> new IllegalArgumentException("Pool not found: " + poolId));
             long objects = countObjects(tx, pool.getName());

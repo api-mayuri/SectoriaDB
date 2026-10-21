@@ -84,7 +84,7 @@ public class MetaStoreBlobFileRepository implements BlobFileRepository {
 
     @Override
     public void deleteUnreferenced(String blobId) {
-        try (WriteTxn tx = store().beginWrite()) {
+        try (WriteTxn tx = store().beginWrite().label("blob.delete")) {
             Optional<BlobFileEntity> blob = Trees.blob(tx, blobId, false);
             if (blob.isEmpty()) return;
             long live = 0;
@@ -105,7 +105,7 @@ public class MetaStoreBlobFileRepository implements BlobFileRepository {
 
     @Override
     public int replaceBlob(String oldBlobId, BlobFileEntity replacement) {
-        try (WriteTxn tx = store().beginWrite()) {
+        try (WriteTxn tx = store().beginWrite().label("resize.replace")) {
             BlobFileEntity old = Trees.blob(tx, oldBlobId, false)
                     .orElseThrow(() -> new IllegalStateException("Blob not found: " + oldBlobId));
             Trees.putBlob(tx, replacement);

@@ -69,8 +69,12 @@ final class Pager {
         return p;
     }
 
+    /** Pages written so far (tree, overflow and free-list pages; not the meta pages). Written by the single writer only. */
+    volatile long pagesWritten;
+
     /** Computes the checksum into the page and writes it. */
     void write(long id, byte[] p) {
+        pagesWritten++;
         ByteBuffer.wrap(p).putInt(0, crc(p, 4, pageSize - 4));
         writeRaw(id * pageSize, p);
     }
