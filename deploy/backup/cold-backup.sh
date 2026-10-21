@@ -18,7 +18,7 @@ OUT="$(realpath -m "${1:-${SECTORIADB_BACKUP_DIR:-$HOME/sectoriadb-backups}}")"
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 SERVICE="${SERVICE:-sectoriadb}"
-BACKUP_IMAGE="${BACKUP_IMAGE:-debian:12-slim}"
+BACKUP_IMAGE="${BACKUP_IMAGE:-debian:12-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587}"
 
 cid="$(docker compose ps -aq "$SERVICE")"
 [ -n "$cid" ] || { echo "error: no container of service '$SERVICE' (docker compose up -d first)" >&2; exit 2; }

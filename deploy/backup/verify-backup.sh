@@ -13,7 +13,7 @@ umask 077
 src="$(realpath -m "${1:?usage: verify-backup.sh ARCHIVE|DIRECTORY}")"
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
-BACKUP_IMAGE="${BACKUP_IMAGE:-debian:12-slim}"
+BACKUP_IMAGE="${BACKUP_IMAGE:-debian:12-slim@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587}"
 if [ -z "${SECTORIADB_IMAGE:-}" ]; then
   SECTORIADB_IMAGE="$(docker compose config --images 2>/dev/null | grep -m1 sectoriadb || true)"
   SECTORIADB_IMAGE="${SECTORIADB_IMAGE:-sectoriadb:latest}"
