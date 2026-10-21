@@ -208,7 +208,7 @@ public class GarbageCollector {
                 }
                 ChunkBatchResult res;
                 try {
-                    res = gcRepo.collectChunks(part, cutoff, this::freeSlot);
+                    res = gcRepo.collectChunks(part, cutoff, new BatchFreer());
                 } catch (RuntimeException ex) {
                     r.error("chunk batch failed: " + ex);
                     metrics.gcError();
@@ -240,6 +240,30 @@ public class GarbageCollector {
      * writer gate (the one inserts and the resize freeze use), so a resize that froze the blob never has a slot freed
      * under its migration. A frozen or replaced blob is left alone (DEFERRED).
      */
+    /** Frees slots without a force each; {@link #flush} makes the whole batch durable with one barrier per touched blob. */
+    private final class BatchFreer implements GcRepository.SlotFreer {
+        private final Set<String> touched = new LinkedHashSet<>();
+
+        @Override
+        public SlotFree free(String poolId, String blobId, long chunkKey) throws IOException {
+            SlotFree r = freeSlot(poolId, blobId, chunkKey);
+            if (r.result() == SlotFree.Result.FREED) touched.add(blobId);
+            return r;
+        }
+
+        @Override
+        public void flush() throws IOException {
+            for (String blobId : touched) {
+                try (ResidentHandle<CuckooHashTable> h = blobs.acquireTable(blobId)) {
+                    h.get().barrier();
+                } catch (BlobService.BlobGoneException | ClosedChannelException gone) {
+                    // the blob went away (replaced or deleted): its file is no longer authoritative
+                }
+            }
+            touched.clear();
+        }
+    }
+
     private SlotFree freeSlot(String poolId, String blobId, long key) throws IOException {
         if (blobGate.isFrozen(blobId) || blobGate.isReplaced(blobId)) return SlotFree.DEFERRED;
         ResidentHandle<CuckooHashTable> handle;
@@ -253,7 +277,7 @@ public class GarbageCollector {
             gate.lock();
             try {
                 if (blobGate.isFrozen(blobId)) return SlotFree.DEFERRED;
-                int len = handle.get().freeSlot(key);
+                int len = handle.get().freeSlotDeferred(key);
                 return len < 0 ? SlotFree.ABSENT : SlotFree.freed(len);
             } catch (ClosedChannelException replaced) {
                 return SlotFree.DEFERRED;
@@ -297,7 +321,7 @@ public class GarbageCollector {
             }
             StrayBatchResult res;
             try {
-                res = use.length == 0 ? new StrayBatchResult(0, 0, 0, 0, null) : gcRepo.freeStrays(blobId, use, this::freeSlot);
+                res = use.length == 0 ? new StrayBatchResult(0, 0, 0, 0, null) : gcRepo.freeStrays(blobId, use, new BatchFreer());
             } finally {
                 if (gate != null) gate.close();
             }

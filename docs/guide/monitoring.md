@@ -82,7 +82,7 @@ curl -s localhost:9464/actuator/prometheus | grep ^sectoriadb_s3_requests_second
 | `sectoriadb_cuckoo_eviction_path_length` (Г), `..._table_full_total`, `..._dedup_hits_total`, `..._rekeys_total` | длина пути вытеснений; отказы по переполнению; дедупликация; настоящие коллизии 64-битного хэша |
 | `sectoriadb_blobs` (`kind`) | зарегистрированные блобы |
 | `sectoriadb_small_live_bytes`, `..._dead_bytes`, `..._live_records`, `..._dead_records`, `..._blobs_open` | файлы малых объектов (по открытым) |
-| `sectoriadb_metastore_file_bytes`, `..._pages`, `..._free_pages`, `..._last_txid`, `..._live_readers`, `..._page_size_bytes` | состояние `sectoria.db` |
+| `sectoriadb_metastore_file_bytes`, `..._pages`, `..._free_pages`, `..._last_txid`, `..._live_readers`, `..._oldest_reader_seconds`, `..._page_size_bytes` | состояние `sectoria.db`; `oldest_reader_seconds` — возраст самой старой открытой читающей транзакции (она не даёт переиспользовать все страницы, освобождённые после неё; в норме секунды, минуты — повод искать утечку читателя; в логе также `WARN A read transaction was open for … ms`) |
 | `sectoriadb_chunks_indexed`, `..._chunks_refs`, `..._chunks_gc_queue_length`, `..._chunks_orphans` | индекс чанков: записи, ссылки, очередь на освобождение, сироты |
 | `sectoriadb_pool_blobs_max`, `..._pool_dedup_hits_total`, `..._pool_placement_fallbacks_total`, `..._pool_grown_total` | пулы: наибольшее число блобов, дедупликация, отказы первого выбора HRW, рост |
 | `sectoriadb_resize_seconds` (Г, `result`), `sectoriadb_auto_resize_runs_total` | расширение блоба; проходы проверки роста |

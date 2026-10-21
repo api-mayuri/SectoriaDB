@@ -153,9 +153,20 @@ public class MetaStoreGcRepository implements GcRepository {
                 removed.add(ref);
                 changed = true;
             }
-            if (changed) tx.commit();
+            if (changed) {
+                flush(freer);                                              // the freed slots are durable before their entries go
+                tx.commit();
+            }
         }
         return new ChunkBatchResult(freed, bytes, absent, revived, gone, tooNew, deferred, removed, error);
+    }
+
+    private static void flush(SlotFreer freer) {
+        try {
+            freer.flush();
+        } catch (IOException io) {
+            throw new java.io.UncheckedIOException(io);   // nothing is committed: the entries stay, the next pass repairs the slots
+        }
     }
 
     // ------------------------------------------------------------------ strays and orphans
@@ -234,7 +245,10 @@ public class MetaStoreGcRepository implements GcRepository {
                 orphans.delete(orphanKey);
                 changed = true;
             }
-            if (changed) tx.commit();
+            if (changed) {
+                flush(freer);
+                tx.commit();
+            }
         }
         return new StrayBatchResult(freed, bytes, notStray, deferred, error);
     }

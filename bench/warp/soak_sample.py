@@ -13,7 +13,7 @@ import argparse, csv, math, os, re, subprocess, sys, time, urllib.request
 from datetime import datetime, timezone
 
 COLS = ["ts_utc", "elapsed_s", "up", "rss_mb", "heap_used_mb", "nonheap_mb", "open_fds", "threads", "meta_file_mb", "meta_pages",
-        "meta_free_pages", "gc_queue", "disk_free_gb", "store_du_mb", "rps", "p99_put_ms", "p99_get_ms", "err_5xx_pct", "gc_pause_ms_per_s"]
+        "meta_free_pages", "gc_queue", "tombstones", "oldest_reader_s", "disk_free_gb", "store_du_mb", "rps", "p99_put_ms", "p99_get_ms", "err_5xx_pct", "gc_pause_ms_per_s"]
 LINE = re.compile(r'^([a-zA-Z_:][a-zA-Z0-9_:]*)(?:\{(.*)\})?\s+(\S+)')
 LABEL = re.compile(r'(\w+)="((?:[^"\\]|\\.)*)"')
 
@@ -91,6 +91,8 @@ def sample(a):
             row["meta_pages"] = int(total(s, "sectoriadb_metastore_pages"))
             row["meta_free_pages"] = int(total(s, "sectoriadb_metastore_free_pages"))
             row["gc_queue"] = int(total(s, "sectoriadb_chunks_gc_queue_length"))
+            row["tombstones"] = int(total(s, "sectoriadb_gc_queue_length"))              # retired manifests waiting for the collector
+            row["oldest_reader_s"] = round(total(s, "sectoriadb_metastore_oldest_reader_seconds"), 1)
             row["disk_free_gb"] = round(total(s, "sectoriadb_disk_free_bytes", dir="data") / 2**30, 2)
             cur = {"count": total(s, "sectoriadb_s3_requests_seconds_count"),
                    "err": total(s, "sectoriadb_s3_requests_seconds_count", status_class="5xx"),
@@ -166,7 +168,7 @@ def report(a):
     print(f"  5xx: {'none in any interval' if not errs else f'{len(errs)} intervals with errors, max {max(errs):.3f} %'}")
     print("  growth after warm-up (first third vs last third of the samples; Kendall tau = 1 means strictly rising):")
     body = [r for r in rows if float(r["elapsed_s"]) >= t_first + warm]
-    for col in ("rss_mb", "heap_used_mb", "nonheap_mb", "open_fds", "threads", "meta_file_mb", "meta_pages", "meta_free_pages", "gc_queue",
+    for col in ("rss_mb", "heap_used_mb", "nonheap_mb", "open_fds", "threads", "meta_file_mb", "meta_pages", "meta_free_pages", "gc_queue", "tombstones",
                 "store_du_mb", "gc_pause_ms_per_s"):
         xs = [x for x in (num(r, col) for r in body) if x is not None]
         if len(xs) < 6:

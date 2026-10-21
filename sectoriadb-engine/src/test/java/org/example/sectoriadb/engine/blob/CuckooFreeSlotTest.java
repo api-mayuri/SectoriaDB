@@ -89,6 +89,23 @@ class CuckooFreeSlotTest {
     }
 
     @Test
+    void aBatchOfDeferredFreesIsDurableAfterOneBarrier() throws IOException {
+        long a = put(table, 1), b = put(table, 2), c = put(table, 3);
+        table.barrier();
+        assertEquals(CHUNK, table.freeSlotDeferred(a));
+        assertEquals(CHUNK, table.freeSlotDeferred(b));
+        assertEquals(-1, table.freeSlotDeferred(a), "idempotent");
+        assertEquals(1, table.getFillStats().activeSlots(), "counters and lookups see the frees at once");
+        assertFalse(table.contains(a));
+        assertTrue(table.hasUnforcedWrites());
+        table.barrier();
+        assertFalse(table.hasUnforcedWrites());
+        CuckooHashTable again = open();
+        assertEquals(1, again.getFillStats().activeSlots());
+        assertTrue(again.contains(c));
+    }
+
+    @Test
     void freedStateSurvivesReload() throws IOException {
         long a = put(table, 1), b = put(table, 2);
         table.freeSlot(a);

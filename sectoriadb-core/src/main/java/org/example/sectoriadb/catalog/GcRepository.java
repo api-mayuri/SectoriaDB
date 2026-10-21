@@ -124,6 +124,13 @@ public interface GcRepository {
     @FunctionalInterface
     interface SlotFreer {
         SlotFree free(String poolId, String blobId, long chunkKey) throws IOException;
+
+        /**
+         * Makes the frees of the batch durable; called once before the metadata commit of the batch (an implementation
+         * that forces each free itself has nothing to do).
+         */
+        default void flush() throws IOException {
+        }
     }
 
     /** Result of {@link SlotFreer#free}. */

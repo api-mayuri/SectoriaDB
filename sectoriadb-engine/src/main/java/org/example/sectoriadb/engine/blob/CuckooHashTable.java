@@ -451,6 +451,28 @@ public class CuckooHashTable implements AutoCloseable {
         }
     }
 
+    /**
+     * Like {@link #freeSlot} but the change is forced later, by one {@link #barrier()} for a whole batch (the collector
+     * frees up to a batch of slots per transaction; one fsync each held the writer slot for as long as they took). The caller
+     * must call {@code barrier()} before the metadata commit that drops the chunk's index entry, exactly as it would have
+     * been durable before with {@code freeSlot}.
+     */
+    public int freeSlotDeferred(long chunkKey) throws IOException {
+        lock.writeLock().lock();
+        try {
+            int idx = findActiveSlot(chunkKey);
+            if (idx < 0) {
+                return -1;
+            }
+            int len = lengthMeta[idx];
+            writeMeta(idx, chunkKey, DELETED, 0, 0, false);
+            forceBarrier.written();
+            return len;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
     /** True if an ACTIVE slot holds the key (no IO). */
     public boolean contains(long chunkKey) {
         lock.readLock().lock();
