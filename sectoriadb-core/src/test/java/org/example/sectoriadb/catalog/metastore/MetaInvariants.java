@@ -77,10 +77,6 @@ public final class MetaInvariants {
                     if (m.isDeleted()) deleted.add(m.getId());
                     else if (m.getBucketName() != null) liveS3.add(m.getId());
                     if (m.getStorageKind() == StorageKind.MULTIPART && !m.isDeleted()) checkMultipartLayout(m);
-                    if (m.getStorageKind() == StorageKind.MULTIPART && m.isDeleted()) {
-                        assertTrue(m.getSegments().stream().allMatch(sg -> sg.kind() == StorageKind.SMALL),
-                                "a retired multipart manifest keeps only its small segments: " + m.getId());
-                    }
                     if (m.isMultipartPart()) hiddenParts.put(m.getId(), m);
                 }
             }
@@ -95,7 +91,9 @@ public final class MetaInvariants {
                     assertTrue(queued.add(id), "manifest queued once: " + id);
                 }
             }
-            assertEquals(deleted, queued, "deleted manifests == GC queue");
+            // a retired version leaves no manifest record, only its queue row (which carries its small records)
+            assertEquals(Set.of(), deleted, "no retired manifest record is kept");
+            for (String id : queued) assertTrue(Trees.manifest(tx, id).isEmpty(), "a queued version has no live record: " + id);
             assertEquals(queued.size(), tx.tree(Trees.DELETED_BY_POOL).size(), "every queue row has its by-pool row and vice versa");
             try (Cursor c = tx.tree(Trees.DELETED_BY_POOL).scan()) {
                 while (c.next()) {

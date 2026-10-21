@@ -1,7 +1,9 @@
 package org.example.sectoriadb.catalog.metastore;
 
 import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.GcRepository;
 import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PartSegment;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.metastore.BTree;
@@ -223,14 +225,72 @@ final class Trees {
         for (String b : blobsOf(m)) byBlob.delete(pairKey(b, m.getId()));
     }
 
-    static void enqueueDeleted(WriteTxn tx, ManifestEntity m) {
-        // the value is the queueing time (the collector waits for the grace period before it removes the tombstone),
-        // then the pool id, which lets the queue row be dropped together with its by-pool row
+    /** Marks a tombstone value that carries its small-object records (older values are the time, then the pool id). */
+    private static final byte TOMBSTONE_WITH_REFS = 0x01;
+
+    /**
+     * Queues the tombstone of a retired version. The value is the queueing time (the collector waits for the grace period),
+     * the pool id (the queue row is dropped together with its by-pool row) and the small-object records the collector
+     * must mark DELETED: {@code time(8) 0x01 poolLen(2) pool n(4) n × [blobLen(2) blob offset(8)]}. A pool id is a UUID
+     * string, so its first byte is never 0x01 and the old {@code time pool} values stay readable.
+     */
+    static void enqueueDeleted(WriteTxn tx, ManifestEntity m, List<GcRepository.SmallRef> refs) {
         long txId = tx.txId() + 1;
         byte[] pool = m.getPoolId() == null ? new byte[0] : bytes(m.getPoolId());
-        tx.tree(DELETED_MANIFESTS).put(gcKey(txId, m.getId()),
-                ByteBuffer.allocate(8 + pool.length).putLong(System.currentTimeMillis()).put(pool).array());
+        int size = 8 + 1 + 2 + pool.length + 4;
+        List<byte[]> blobs = new ArrayList<>(refs.size());
+        for (GcRepository.SmallRef r : refs) {
+            byte[] b = bytes(r.blobId());
+            blobs.add(b);
+            size += 2 + b.length + 8;
+        }
+        ByteBuffer v = ByteBuffer.allocate(size).putLong(System.currentTimeMillis()).put(TOMBSTONE_WITH_REFS)
+                .putShort((short) pool.length).put(pool).putInt(refs.size());
+        for (int i = 0; i < refs.size(); i++) v.putShort((short) blobs.get(i).length).put(blobs.get(i)).putLong(refs.get(i).offset());
+        tx.tree(DELETED_MANIFESTS).put(gcKey(txId, m.getId()), v.array());
         tx.tree(DELETED_BY_POOL).put(deletedByPoolKey(m.getPoolId(), m.getId()), ByteBuffer.allocate(8).putLong(txId).array());
+    }
+
+    /** Pool id of a queue row's value ("" if the row predates it). */
+    static String tombstonePool(byte[] value) {
+        if (value == null || value.length <= 8) return "";
+        if (value[8] == TOMBSTONE_WITH_REFS) {
+            ByteBuffer b = ByteBuffer.wrap(value, 9, value.length - 9);
+            byte[] pool = new byte[b.getShort() & 0xFFFF];
+            b.get(pool);
+            return new String(pool, StandardCharsets.UTF_8);
+        }
+        return new String(value, 8, value.length - 8, StandardCharsets.UTF_8);
+    }
+
+    /** Small-object records of a queue row's value, or {@code null} for a row of the old format (read the manifest). */
+    static List<GcRepository.SmallRef> tombstoneRefs(byte[] value) {
+        if (value == null || value.length <= 8 || value[8] != TOMBSTONE_WITH_REFS) return null;
+        ByteBuffer b = ByteBuffer.wrap(value, 9, value.length - 9);
+        b.position(b.position() + 2 + (b.getShort(b.position()) & 0xFFFF));   // skip the pool
+        int n = b.getInt();
+        List<GcRepository.SmallRef> out = new ArrayList<>(n);
+        for (int i = 0; i < n; i++) {
+            byte[] blob = new byte[b.getShort() & 0xFFFF];
+            b.get(blob);
+            out.add(new GcRepository.SmallRef(new String(blob, StandardCharsets.UTF_8), b.getLong()));
+        }
+        return out;
+    }
+
+    /** The small-object records a version occupies: its own record, or the SMALL segments of a multipart object. */
+    static List<GcRepository.SmallRef> smallRefs(ManifestEntity m) {
+        List<GcRepository.SmallRef> out = new ArrayList<>();
+        if (m.getStorageKind() == StorageKind.SMALL && m.getSmallBlobId() != null) {
+            out.add(new GcRepository.SmallRef(m.getSmallBlobId(), m.getSmallOffset()));
+        } else if (m.getStorageKind() == StorageKind.MULTIPART) {
+            for (PartSegment sg : m.getSegments()) {
+                if (sg.kind() == StorageKind.SMALL && sg.smallBlobId() != null) {
+                    out.add(new GcRepository.SmallRef(sg.smallBlobId(), sg.smallOffset()));
+                }
+            }
+        }
+        return out;
     }
 
     static byte[] deletedByPoolKey(String poolId, String manifestId) {
@@ -244,8 +304,7 @@ final class Trees {
             Keys.Reader r = new Keys.Reader(queueKey);
             r.longUnsigned();
             String manifestId = r.string();
-            String poolId = value.length == 8 ? "" : new String(value, 8, value.length - 8, StandardCharsets.UTF_8);
-            tx.tree(DELETED_BY_POOL).delete(deletedByPoolKey(poolId, manifestId));
+            tx.tree(DELETED_BY_POOL).delete(deletedByPoolKey(tombstonePool(value), manifestId));
         }
     }
 
@@ -260,28 +319,30 @@ final class Trees {
     }
 
     /**
-     * Marks a live manifest as no longer current: sets {@code deleted} and puts it on the GC queue. A CHUNKED manifest
-     * releases its chunk references in the same transaction and becomes a tombstone without its chunk list (the
-     * references are gone, so keeping the list would only invite a second release; a 1 GiB object is 512 KiB of keys).
-     * Returns the manifest with resolved blobs, or empty if it does not exist or is already retired.
+     * Takes a version out of service in the caller's transaction: its chunk references are released (chunks that drop to
+     * zero go to {@code chunk_gc}, which has its own grace period) and its manifest record is REMOVED at once. A reader that
+     * is still streaming the old version holds it in its snapshot, so the record is not needed to finish; the grace period
+     * protects the data (chunks and small-object records), not the record. Only a version with small-object records gets
+     * a tombstone, which carries those records for the collector to mark DELETED after the grace period.
+     * Keeping whole retired manifests until the grace period was over cost a full manifest per delete or overwrite for 15
+     * minutes (most of sectoria.db under churn) and deepened every tree a commit has to copy.
+     * Returns the retired manifest (with resolved blobs, flagged deleted), or empty if it does not exist or is already retired.
      */
     static Optional<ManifestEntity> retire(WriteTxn tx, String manifestId) {
         Optional<ManifestEntity> found = manifest(tx, manifestId);
         if (found.isEmpty() || found.get().isDeleted()) return Optional.empty();
         ManifestEntity m = found.get();
-        m.setDeleted(true);
+        ManifestEntity resolved = resolve(tx, m);
+        List<GcRepository.SmallRef> refs = smallRefs(m);
         if ((m.getStorageKind() == StorageKind.CHUNKED || m.getStorageKind() == StorageKind.MULTIPART)
                 && m.getPoolId() != null && m.chunkKeyArray().length > 0) {
             Chunks.releaseRefs(tx, m.getPoolId(), m.chunkKeyArray());
-            m.setChunkKeyArray(new long[0]);
         }
-        if (m.getStorageKind() == StorageKind.MULTIPART) {
-            // the tombstone keeps the small records (the collector marks them DELETED), not the chunk segments
-            m.setSegments(m.getSegments().stream().filter(s -> s.kind() == StorageKind.SMALL).toList());
-        }
-        putManifest(tx, m);
-        enqueueDeleted(tx, m);
-        return Optional.of(resolve(tx, m));
+        deleteManifestRecord(tx, m);
+        enqueueDeleted(tx, m, refs);
+        resolved.setDeleted(true);
+        resolved.setChunkKeyArray(new long[0]);
+        return Optional.of(resolved);
     }
 
     static List<String> manifestIdsOfBlob(ReadTxn tx, String blobId) {

@@ -476,7 +476,33 @@ public class GarbageCollector {
                 Map<String, List<Tombstone>> byBlob = new HashMap<>();   // tombstones whose marks wait for a sync of the blob
                 Map<String, BlobFileEntity> blobsToSync = new LinkedHashMap<>();
                 long markedBefore = r.smallRecordsMarked;
+                Map<String, Optional<BlobFileEntity>> blobById = new HashMap<>();   // one registry lookup per blob and batch
                 for (Tombstone t : part) {
+                    if (t.smallRefs() != null) {
+                        // the tombstone carries its records: no manifest to read (it went when the version was retired)
+                        if (poolId != null && !poolId.equals(t.poolId())) continue;
+                        Set<String> touched = new LinkedHashSet<>();
+                        Marked marked = Marked.NOTHING_TO_DO;
+                        for (GcRepository.SmallRef ref : t.smallRefs()) {
+                            BlobFileEntity blob = blobById.computeIfAbsent(ref.blobId(), blobRepo::findById).orElse(null);
+                            Marked one = markRecordDeleted(t.manifestId(), blob, ref.offset(), touched, blobsToSync);
+                            if (one == Marked.RETRY_LATER) {
+                                marked = one;
+                                break;
+                            }
+                            if (one == Marked.MARKED) marked = Marked.MARKED;
+                        }
+                        if (marked == Marked.RETRY_LATER) {
+                            r.error("could not mark the small-object record of " + t.manifestId() + " DELETED, retrying later");
+                            metrics.gcError();
+                            continue;
+                        }
+                        if (marked == Marked.MARKED) r.smallRecordsMarked++;
+                        for (String b : touched) byBlob.computeIfAbsent(b, k -> new ArrayList<>()).add(t);
+                        ready.add(t);
+                        continue;
+                    }
+                    // a tombstone of the old format: the retired manifest record says what to mark
                     Optional<ManifestEntity> m = manifestRepo.findById(t.manifestId());
                     if (m.isPresent() && poolId != null && !poolId.equals(m.get().getPoolId())) continue;
                     if (m.isPresent() && m.get().isDeleted()

@@ -266,7 +266,7 @@ public class MetaStoreGcRepository implements GcRepository {
                     // ends the due prefix, the rest of the (possibly very long) queue is not read
                     if (at > queuedBeforeMillis) break;
                     Keys.Reader r = new Keys.Reader(c.key());
-                    out.add(new Tombstone(r.longUnsigned(), r.string(), at));
+                    out.add(new Tombstone(r.longUnsigned(), r.string(), at, Trees.tombstonePool(c.value()), Trees.tombstoneRefs(c.value())));
                 }
             }
             return out;
@@ -280,10 +280,15 @@ public class MetaStoreGcRepository implements GcRepository {
         try (WriteTxn tx = store().beginWrite().label("gc.tombstones")) {
             BTree queue = tx.tree(Trees.DELETED_MANIFESTS);
             for (Tombstone t : tombstones) {
-                Optional<ManifestEntity> m = Trees.manifest(tx, t.manifestId());
-                if (m.isPresent() && m.get().isDeleted()) {
-                    Trees.deleteManifestRecord(tx, m.get());
-                    removed++;
+                if (t.smallRefs() != null) {
+                    removed++;   // the manifest record went when the version was retired: only the queue rows are left
+                } else {
+                    // a row of the old format: the retired manifest record is still there and goes now
+                    Optional<ManifestEntity> m = Trees.manifest(tx, t.manifestId());
+                    if (m.isPresent() && m.get().isDeleted()) {
+                        Trees.deleteManifestRecord(tx, m.get());
+                        removed++;
+                    }
                 }
                 byte[] queueKey = Trees.gcKey(t.txId(), t.manifestId());
                 Trees.dropQueueRow(tx, queueKey, queue.get(queueKey).orElse(null));
@@ -303,16 +308,11 @@ public class MetaStoreGcRepository implements GcRepository {
             if (oldBlob.isEmpty()) return new CompactionSwap(false, "the old blob no longer exists", 0, List.of());
             if (newBlob.isEmpty()) return new CompactionSwap(false, "the new blob does not exist", 0, List.of());
             Map<String, ManifestEntity> live = new LinkedHashMap<>();
-            List<ManifestEntity> dead = new ArrayList<>();
-            Set<String> retired = new LinkedHashSet<>();
+            Set<String> liveKeys = new LinkedHashSet<>();
             for (String id : Trees.manifestIdsOfBlob(tx, oldBlobId)) {
                 Optional<ManifestEntity> m = Trees.manifest(tx, id);
                 if (m.isEmpty()) continue;
-                if (m.get().isDeleted()) {
-                    for (String key : recordKeys(m.get(), oldBlobId)) if (moves.containsKey(key)) retired.add(key);
-                    dead.add(m.get());
-                    continue;
-                }
+                if (m.get().isDeleted()) continue;   // a tombstone of the old format: purged below with the old blob
                 for (Map.Entry<String, SmallRecord> rec : recordsIn(m.get(), oldBlobId).entrySet()) {
                     SmallMove mv = moves.get(rec.getKey());
                     if (mv == null) {
@@ -322,6 +322,7 @@ public class MetaStoreGcRepository implements GcRepository {
                     if (r.offset() != mv.oldOffset() || r.length() != mv.length() || r.crc32c() != mv.crc32c()) {
                         return new CompactionSwap(false, "manifest " + id + " changed during the copy", 0, List.of());
                     }
+                    liveKeys.add(rec.getKey());
                 }
                 live.put(id, m.get());
             }
@@ -345,20 +346,13 @@ public class MetaStoreGcRepository implements GcRepository {
                 }
                 Trees.putManifest(tx, m);                                  // manifests_by_blob follows
             }
-            for (ManifestEntity m : dead) {
-                // a retired multipart manifest may also name records of other blobs: keep it for them
-                if (m.getStorageKind() != StorageKind.MULTIPART) continue;
-                List<PartSegment> rest = m.getSegments().stream()
-                        .filter(sg -> !(sg.kind() == StorageKind.SMALL && oldBlobId.equals(sg.smallBlobId()))).toList();
-                if (!rest.isEmpty()) {
-                    m.setSegments(rest);
-                    Trees.putManifest(tx, m);
-                }
-            }
+            // a copied record whose version was retired since the copy: its copy in the new blob is dead
+            List<String> retired = new ArrayList<>();
+            for (String key : moves.keySet()) if (!liveKeys.contains(key)) retired.add(key);
             Trees.purgeManifests(tx, List.of(oldBlobId));            // tombstones that still name the old blob
             Trees.deleteBlobRecord(tx, oldBlob.get());
             tx.commit();
-            return new CompactionSwap(true, null, records, new ArrayList<>(retired));
+            return new CompactionSwap(true, null, records, retired);
         }
     }
 

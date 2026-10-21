@@ -86,7 +86,25 @@ public interface GcRepository {
      */
     int deleteTombstones(List<Tombstone> tombstones);
 
-    record Tombstone(long txId, String manifestId, long queuedAtMillis) {
+    /**
+     * A retired object version waiting for the grace period. The manifest record itself is removed when the version is
+     * retired (readers of the old version see it in their snapshot); the tombstone keeps only what the collector still
+     * has to do: the small-object records to mark DELETED.
+     *
+     * @param poolId     pool of the retired version ("" if unknown)
+     * @param smallRefs  records to mark DELETED; {@code null} for a row written before tombstones carried them (then the
+     *                   retired manifest record is still there and the collector reads it)
+     */
+    record Tombstone(long txId, String manifestId, long queuedAtMillis, String poolId, List<SmallRef> smallRefs) {
+
+        /** A tombstone of the old format: only the manifest id, the record says what to mark. */
+        public Tombstone(long txId, String manifestId, long queuedAtMillis) {
+            this(txId, manifestId, queuedAtMillis, "", null);
+        }
+    }
+
+    /** A small-object record of a retired version: its file and its offset there. */
+    record SmallRef(String blobId, long offset) {
     }
 
     // ---- small-object compaction ------------------------------------------------------------------------------

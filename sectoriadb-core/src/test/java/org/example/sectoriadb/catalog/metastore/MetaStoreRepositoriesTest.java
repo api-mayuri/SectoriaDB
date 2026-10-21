@@ -277,17 +277,17 @@ class MetaStoreRepositoriesTest {
         assertEquals("v2", r.current().getId());
         assertEquals("v1", r.superseded().orElseThrow().getId());
         assertEquals("v2", manifests.findCurrent("bkt", "k").orElseThrow().getId());
-        assertTrue(manifests.findById("v1").orElseThrow().isDeleted(), "old manifest is kept, flagged deleted");
+        assertTrue(r.superseded().orElseThrow().isDeleted(), "the superseded version comes back flagged deleted");
+        assertTrue(manifests.findById("v1").isEmpty(), "its record is gone at once, only the queue row stays");
         assertEquals(List.of("v1"), manifests.gcQueue(10).stream().map(ManifestRepository.GcEntry::manifestId).toList());
         assertEquals(List.of("v2"), manifests.findAllLive().stream().map(ManifestEntity::getId).toList());
-        assertEquals(2, manifests.count());
+        assertEquals(1, manifests.count());
         // v1's chunk lost its only reference: it stays in the index (bytes are still in the blob), queued for the collector
         assertEquals(0, chunks.find("p", 1).orElseThrow().refcount());
         assertEquals(1, chunks.find("p", 2).orElseThrow().refcount());
         assertEquals(List.of(1L), chunks.gcQueue(10).stream().map(ChunkRepository.GcRow::chunkKey).toList());
         assertEquals(2, chunks.countByBlob("blob"));
         assertEquals(1, chunks.countReferencedByBlob("p", "blob"));
-        assertTrue(manifests.findById("v1").orElseThrow().chunkKeyArray().length == 0, "the tombstone has no chunk list");
 
         // committing the same manifest again (e.g. a retry) neither queues it nor loses the entry
         manifests.commitObject(r.current());
