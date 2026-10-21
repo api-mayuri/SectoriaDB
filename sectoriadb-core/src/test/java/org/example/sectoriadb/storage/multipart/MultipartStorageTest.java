@@ -233,6 +233,7 @@ class MultipartStorageTest {
 
         assertTrue(rig.verifier.verify(m).ok(), rig.verifier.verify(m).details().toString());
         assertEquals(0, rig.multipartRepo.countByState().get(MultipartUpload.State.OPEN));
+        assertEquals(0, rig.multipartRepo.openCount());
     }
 
     @Test
@@ -440,6 +441,8 @@ class MultipartStorageTest {
         MultipartUpload done = create("done");
         complete(done, upload(done, 1, bytes(CHUNK, 93)));
 
+        assertEquals(2, rig.multipartRepo.openCount(), "the stale and the fresh upload are open, the completed one is not");
+        assertEquals(rig.multipartRepo.countByState().get(MultipartUpload.State.OPEN), rig.multipartRepo.openCount());
         long now = System.currentTimeMillis();
         var none = rig.multipartRepo.cleanup(now, 3_600_000, 3_600_000);
         assertEquals(0, none.expired());
@@ -456,6 +459,7 @@ class MultipartStorageTest {
         var again = rig.multipartRepo.cleanup(now + 40L * 24 * 3600 * 1000, 7L * 24 * 3600 * 1000, 24L * 3600 * 1000);
         assertEquals(2, again.recordsRemoved(), "the ABORTED records go after their retention too");
         assertTrue(rig.multipartRepo.countByState().values().stream().allMatch(c -> c == 0));
+        assertEquals(0, rig.multipartRepo.openCount());
     }
 
     @Test
@@ -529,8 +533,13 @@ class MultipartStorageTest {
         assertThrows(IllegalStateException.class, () -> rig.poolService.deleteBucket("bkt"), "an object is still there");
         rig.catalog.deleteObject("bkt", "complete-me");
         rig.poolService.deleteBucket("bkt");
-        assertEquals(0, rig.multipartRepo.countByState().values().stream().mapToLong(Long::longValue).sum());
+        assertEquals(0, rig.multipartRepo.openCount());
         assertTrue(rig.multipartRepo.find(u.getUploadId()).isEmpty());
+        // the finished record of the other upload is not hunted down (that would read every upload of every bucket): the
+        // retention sweep removes it like any finished record
+        assertEquals(1, rig.multipartRepo.countByState().values().stream().mapToLong(Long::longValue).sum());
+        rig.multipartRepo.cleanup(System.currentTimeMillis() + 3L * 24 * 3600 * 1000, 7L * 24 * 3600 * 1000, 24L * 3600 * 1000);
+        assertEquals(0, rig.multipartRepo.countByState().values().stream().mapToLong(Long::longValue).sum());
         pool = rig.bucket("bkt");   // the name is reusable and starts empty
         assertFalse(rig.multipartRepo.hasOpenUploads("bkt"));
     }

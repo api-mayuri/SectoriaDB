@@ -280,24 +280,42 @@ final class Chunks {
         deletePrefix(tx.tree(CHUNK_ORPHANS), Keys.of(blobId));
     }
 
-    /** Bucket deletion: the whole index of the pool. */
-    static void purgePool(WriteTxn tx, String poolId, List<String> blobIds) {
-        long dropped = 0;
+    /**
+     * One slice of a bucket deletion: removes at most about {@code budget} rows of the pool's chunk index (entries, queue
+     * rows, by-blob rows, orphan records). Returns true when nothing of it is left. The caller repeats it in short
+     * transactions instead of holding the writer slot for the whole index of the pool.
+     */
+    static boolean purgePoolSlice(WriteTxn tx, String poolId, List<String> blobIds, int budget) {
+        int left = budget;
         BTree chunks = tx.tree(CHUNKS);
         List<byte[]> keys = new ArrayList<>();
+        long dropped = 0;
         try (Cursor c = chunks.scanPrefix(Keys.of(poolId))) {
-            while (c.next()) {
+            while (keys.size() < left && c.next()) {
                 keys.add(c.key());
                 dropped += ChunkCodec.decode(c.value()).refcount();
             }
         }
         for (byte[] k : keys) chunks.delete(k);
         adjustRefs(tx, -dropped);
-        deletePrefix(tx.tree(CHUNK_GC), Keys.of(poolId));
+        left -= keys.size();
+        left -= deleteSome(tx.tree(CHUNK_GC), Keys.of(poolId), left);
         for (String blobId : blobIds) {
-            deletePrefix(tx.tree(CHUNKS_BY_BLOB), Keys.of(blobId));
-            deletePrefix(tx.tree(CHUNK_ORPHANS), Keys.of(blobId));
+            left -= deleteSome(tx.tree(CHUNKS_BY_BLOB), Keys.of(blobId), left);
+            left -= deleteSome(tx.tree(CHUNK_ORPHANS), Keys.of(blobId), left);
         }
+        return left > 0;
+    }
+
+    /** Deletes up to {@code limit} rows under the prefix; returns how many. */
+    private static int deleteSome(BTree tree, byte[] prefix, int limit) {
+        if (limit <= 0) return 0;
+        List<byte[]> keys = new ArrayList<>();
+        try (Cursor c = tree.scanPrefix(prefix)) {
+            while (keys.size() < limit && c.next()) keys.add(c.key());
+        }
+        for (byte[] k : keys) tree.delete(k);
+        return keys.size();
     }
 
     private static void deletePrefix(BTree tree, byte[] prefix) {

@@ -145,6 +145,7 @@ public class GarbageCollector {
             r.startedAtMillis = now;
             r.graceMillis = o.graceMillis() != null ? Math.max(0, o.graceMillis()) : props.getGc().getGrace().toMillis();
             long cutoff = now - r.graceMillis;
+            poolRepo.finishDeletions();   // a bucket deletion that a crash interrupted
             int max = o.maxChunks() != null ? o.maxChunks() : props.getGc().getMaxChunksPerRun();
             collectChunks(o.poolId(), cutoff, max, r);
             collectOrphans(o.poolId(), max, r);

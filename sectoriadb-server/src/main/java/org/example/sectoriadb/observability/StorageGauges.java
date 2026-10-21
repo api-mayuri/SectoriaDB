@@ -10,7 +10,6 @@ import org.example.sectoriadb.catalog.CatalogInfo;
 import org.example.sectoriadb.catalog.ChunkRepository;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.MultipartRepository;
-import org.example.sectoriadb.catalog.MultipartUpload;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.engine.blob.CuckooHashTable;
 import org.example.sectoriadb.engine.blob.SmallObjectBlob;
@@ -204,7 +203,7 @@ public class StorageGauges {
                 gc, totals.objects(), totals.bytes(),
                 cs.chunks(), cs.refs(), cs.gcQueue(), cs.orphans(), poolBlobsMax,
                 data[0], data[1], meta[0], meta[1], chunkStore.gate().inFlight(), compactor.pendingFiles(),
-                multipart.countByState().getOrDefault(MultipartUpload.State.OPEN, 0L));
+                multipart.openCount());
     }
 
     /** {usable, total} bytes of the file system holding {@code dir} (or its nearest existing parent). */

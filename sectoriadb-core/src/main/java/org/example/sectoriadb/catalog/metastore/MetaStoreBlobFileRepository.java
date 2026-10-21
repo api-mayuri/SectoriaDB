@@ -97,7 +97,7 @@ public class MetaStoreBlobFileRepository implements BlobFileRepository {
             }
             if (live > 0) throw new BlobInUseException(blobId, live);
             Trees.deleteBlobRecord(tx, blob.get());
-            Trees.purgeManifests(tx, List.of(blobId), null);
+            Trees.purgeManifests(tx, List.of(blobId));
             if (blob.get().getKind() == BlobKind.CUCKOO) Chunks.purgeBlob(tx, blob.get().getPoolId(), blobId);
             tx.commit();
         }

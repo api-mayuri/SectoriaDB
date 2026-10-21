@@ -12,6 +12,7 @@ import org.example.sectoriadb.catalog.PoolRepository;
 import org.example.sectoriadb.catalog.StorageKind;
 import org.example.sectoriadb.checksum.ChecksumAlgorithm;
 import org.example.sectoriadb.checksum.ChecksumType;
+import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
 import org.junit.jupiter.api.AfterEach;
@@ -409,6 +410,54 @@ class MetaStoreRepositoriesTest {
         assertEquals("keep", manifests.findCurrent("other", "k").orElseThrow().getId());
         assertEquals(1, blobs.countByPoolId("q"));
         assertThrows(IllegalArgumentException.class, () -> pools.deleteBucket("p"));
+    }
+
+    @Test
+    void deleteBucketOfAHeavyPoolRunsInShortTransactionsAndLeavesOtherPoolsAlone() {
+        PoolEntity p = pool("p", "bkt");
+        PoolEntity other = pool("q", "other");
+        blob("c", "p", BlobKind.CUCKOO);
+        blob("oc", "q", BlobKind.CUCKOO);
+        manifests.commitObject(manifest("keep", other, "oc", "k", 1));
+        // 1200 objects over two chunks each, then overwritten and deleted: thousands of rows in the chunk index, the
+        // tombstone queue and the manifests, far above the 1000 rows a slice removes
+        for (int i = 0; i < 1200; i++) manifests.commitObject(manifest("a" + i, p, "c", "k" + i, 10L + 2 * i, 11L + 2 * i));
+        for (int i = 0; i < 1200; i++) manifests.deleteObject("bkt", "k" + i);
+        assertEquals(1200, manifests.gcQueueSize());
+        long txBefore = store.stats().lastTxId();
+
+        pools.deleteBucket("p");
+
+        assertTrue(store.stats().lastTxId() - txBefore >= 4,
+                "the deletion was split into several transactions: " + (store.stats().lastTxId() - txBefore));
+        assertFalse(pools.existsById("p"));
+        assertEquals(0, manifests.gcQueueSize(), "the tombstones of the pool went with it, those of other pools did not exist");
+        assertTrue(manifests.findById("a0").isEmpty() && manifests.findById("a1199").isEmpty());
+        assertEquals(new ChunkRepository.Stats(1, 1, 0, 0), chunks.stats());
+        assertTrue(chunks.find("q", 1).isPresent());
+        assertEquals("keep", manifests.findCurrent("other", "k").orElseThrow().getId());
+    }
+
+    @Test
+    void anInterruptedBucketDeletionIsFinishedLater() {
+        PoolEntity p = pool("p", "bkt");
+        blob("c", "p", BlobKind.CUCKOO);
+        for (int i = 0; i < 30; i++) manifests.commitObject(manifest("a" + i, p, "c", "k" + i, 100L + i));
+        for (int i = 0; i < 30; i++) manifests.deleteObject("bkt", "k" + i);
+        // what a crash after the short transaction would leave: pool and blob records gone, a purge record, the rest in place
+        store.writeVoid(tx -> {
+            Trees.deleteBlobRecord(tx, Trees.blob(tx, "c", false).orElseThrow());
+            Trees.deletePoolRecord(tx, Trees.pool(tx, "p").orElseThrow());
+            tx.tree(Trees.POOL_PURGES).put(Keys.of("p"), Trees.bytes("c"));
+        });
+        assertEquals(30, manifests.gcQueueSize());
+        assertTrue(chunks.stats().chunks() > 0);
+
+        assertEquals(1, pools.finishDeletions());
+
+        assertEquals(0, manifests.gcQueueSize());
+        assertEquals(0, chunks.stats().chunks());
+        assertEquals(0, pools.finishDeletions(), "nothing left to finish");
     }
 
     @Test

@@ -37,14 +37,22 @@ public interface PoolRepository {
     Optional<PoolEntity> updateByName(String name, Consumer<PoolEntity> mutator);
 
     /**
-     * S3 DeleteBucket in one transaction: verifies that the bucket has no objects, then removes the pool, its blob
-     * records, every manifest (live shell-stored, superseded or deleted) of those blobs and of the pool, and the pool's
-     * whole chunk index (entries, collection queue, orphan records).
-     * The caller deletes the blob files after the commit.
+     * S3 DeleteBucket: verifies that the bucket has no objects, discards its open multipart uploads, then in one short
+     * transaction removes the pool and its blob records (the bucket is gone from here on) and records a purge; the rest
+     * (every manifest, live shell-stored, superseded or deleted, of those blobs and of the pool, and the pool's whole
+     * chunk index: entries, collection queue, orphan records) is removed in transactions of about a thousand rows each,
+     * so that a large bucket never holds the single writer slot for long. A crash in between is finished by
+     * {@link #finishDeletions()}. The caller deletes the blob files afterwards.
      *
      * @return the removed blob records
      * @throws IllegalStateException {@code BucketNotEmpty: ...} if the {@code objects} index has entries for the bucket
      * @throws IllegalArgumentException if the pool does not exist
      */
     List<BlobFileEntity> deleteBucket(String poolId);
+
+    /**
+     * Completes bucket deletions that a crash interrupted: the pool is gone but rows of its chunk index, manifests or
+     * tombstones are still being removed. Returns the number of deletions it found. Cheap when there are none.
+     */
+    int finishDeletions();
 }

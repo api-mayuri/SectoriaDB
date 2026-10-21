@@ -96,6 +96,16 @@ public final class MetaInvariants {
                 }
             }
             assertEquals(deleted, queued, "deleted manifests == GC queue");
+            assertEquals(queued.size(), tx.tree(Trees.DELETED_BY_POOL).size(), "every queue row has its by-pool row and vice versa");
+            try (Cursor c = tx.tree(Trees.DELETED_BY_POOL).scan()) {
+                while (c.next()) {
+                    Keys.Reader r = new Keys.Reader(c.key());
+                    r.string();
+                    String id = r.string();
+                    assertTrue(queued.contains(id), "by-pool row of a queued manifest: " + id);
+                }
+            }
+            assertEquals(0, tx.tree(Trees.POOL_PURGES).size(), "no bucket deletion is left half done");
 
             // objects -> live manifests, one entry per live S3 manifest
             Set<String> pointedAt = new HashSet<>();

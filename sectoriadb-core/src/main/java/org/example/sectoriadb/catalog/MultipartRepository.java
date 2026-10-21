@@ -135,4 +135,10 @@ public interface MultipartRepository {
 
     /** Number of uploads per state, for the status gauges and tests. */
     Map<MultipartUpload.State, Long> countByState();
+
+    /**
+     * Number of OPEN uploads in O(1): the size of the by-bucket index, which holds exactly the open uploads. The
+     * status gauge reads this on every scrape; {@link #countByState()} loads every upload record ever kept.
+     */
+    long openCount();
 }

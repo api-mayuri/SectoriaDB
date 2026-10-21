@@ -271,7 +271,8 @@ public class MetaStoreGcRepository implements GcRepository {
                     Trees.deleteManifestRecord(tx, m.get());
                     removed++;
                 }
-                queue.delete(Trees.gcKey(t.txId(), t.manifestId()));
+                byte[] queueKey = Trees.gcKey(t.txId(), t.manifestId());
+                Trees.dropQueueRow(tx, queueKey, queue.get(queueKey).orElse(null));
             }
             tx.commit();
         }
@@ -340,7 +341,7 @@ public class MetaStoreGcRepository implements GcRepository {
                     Trees.putManifest(tx, m);
                 }
             }
-            Trees.purgeManifests(tx, List.of(oldBlobId), null);            // tombstones that still name the old blob
+            Trees.purgeManifests(tx, List.of(oldBlobId));            // tombstones that still name the old blob
             Trees.deleteBlobRecord(tx, oldBlob.get());
             tx.commit();
             return new CompactionSwap(true, null, records, new ArrayList<>(retired));

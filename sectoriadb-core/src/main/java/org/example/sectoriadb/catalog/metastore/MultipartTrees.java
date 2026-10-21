@@ -100,19 +100,35 @@ final class MultipartTrees {
         return out;
     }
 
-    /**
-     * Bucket deletion: every upload of the bucket in any state disappears with its parts. The part manifests are
-     * removed by the pool purge (they are indexed by pool), the chunk index with the pool's whole chunk index.
-     */
-    static int purgeBucket(WriteTxn tx, String bucket) {
-        int n = 0;
-        for (MultipartUpload u : allUploads(tx)) {
-            if (!bucket.equals(u.getBucket())) continue;
-            deleteParts(tx, u.getUploadId());
-            unindex(tx, u);
-            tx.tree(UPLOADS).delete(uploadKey(u.getUploadId()));
-            n++;
+    /** Up to {@code limit} OPEN uploads of the bucket, from the by-bucket index (which holds exactly the open ones). */
+    static List<MultipartUpload> openUploadsOfBucket(ReadTxn tx, String bucket, int limit) {
+        List<String> ids = new ArrayList<>();
+        try (Cursor c = tx.tree(BY_BUCKET).scanPrefix(Keys.of(bucket))) {
+            while (ids.size() < limit && c.next()) {
+                Keys.Reader r = new Keys.Reader(c.key());
+                r.string();
+                r.string();
+                r.longUnsigned();
+                ids.add(r.string());
+            }
         }
+        List<MultipartUpload> out = new ArrayList<>();
+        for (String id : ids) upload(tx, id).ifPresent(out::add);
+        return out;
+    }
+
+    /** Retires every part, drops the rows and marks the upload ABORTED. Returns the number of parts retired. */
+    static int discard(WriteTxn tx, MultipartUpload up, long now) {
+        int n = 0;
+        for (MultipartPart p : parts(tx, up.getUploadId())) {
+            if (Trees.retire(tx, p.manifestId()).isPresent()) n++;
+        }
+        deleteParts(tx, up.getUploadId());
+        unindex(tx, up);
+        up.setState(MultipartUpload.State.ABORTED);
+        up.setAbortedAt(now);
+        up.setUpdatedAt(now);
+        putUpload(tx, up);
         return n;
     }
 }

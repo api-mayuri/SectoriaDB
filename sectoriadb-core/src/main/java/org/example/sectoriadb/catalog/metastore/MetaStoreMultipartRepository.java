@@ -510,19 +510,8 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
         });
     }
 
-    /** Retires every part, drops the rows and marks the upload ABORTED. Returns the number of parts retired. */
     private static int discard(WriteTxn tx, MultipartUpload up, long now) {
-        int n = 0;
-        for (MultipartPart p : MultipartTrees.parts(tx, up.getUploadId())) {
-            if (Trees.retire(tx, p.manifestId()).isPresent()) n++;
-        }
-        MultipartTrees.deleteParts(tx, up.getUploadId());
-        MultipartTrees.unindex(tx, up);
-        up.setState(MultipartUpload.State.ABORTED);
-        up.setAbortedAt(now);
-        up.setUpdatedAt(now);
-        MultipartTrees.putUpload(tx, up);
-        return n;
+        return MultipartTrees.discard(tx, up, now);
     }
 
     @Override
@@ -573,5 +562,10 @@ public class MetaStoreMultipartRepository implements MultipartRepository {
             for (MultipartUpload u : MultipartTrees.allUploads(tx)) out.merge(u.getState(), 1L, Long::sum);
             return out;
         });
+    }
+
+    @Override
+    public long openCount() {
+        return store().read(tx -> tx.tree(MultipartTrees.BY_BUCKET).size());
     }
 }

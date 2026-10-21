@@ -46,6 +46,15 @@ final class Trees {
     static final String MANIFESTS_BY_POOL = "manifests_by_pool";
     /** (deletingTxId u64, manifestId) -> empty: superseded / deleted manifests waiting for the garbage collector */
     static final String DELETED_MANIFESTS = "deleted_manifests";
+    /**
+     * (poolId, manifestId) -> deletingTxId u64: the same retired manifests by pool, so that deleting a bucket (or a blob
+     * going away) finds the tombstones with a lookup or a range scan instead of reading the whole queue of all pools.
+     * Rows are created and dropped together with the queue row; the queue row's value carries the pool id (after the
+     * 8-byte queueing time). Manifests without a pool are indexed under the empty pool id.
+     */
+    static final String DELETED_BY_POOL = "deleted_manifests_by_pool";
+    /** poolId -> blob ids (newline separated): a deleted bucket whose rows are still being removed in small transactions */
+    static final String POOL_PURGES = "pool_purges";
 
     /** {@code "totals"} -> (objects u64, bytes u64): number and total size of the current S3 object versions */
     static final String STATS = "stats";
@@ -214,10 +223,40 @@ final class Trees {
         for (String b : blobsOf(m)) byBlob.delete(pairKey(b, m.getId()));
     }
 
-    static void enqueueDeleted(WriteTxn tx, String manifestId) {
-        // the value is the queueing time: the collector waits for the grace period before it removes the tombstone
-        tx.tree(DELETED_MANIFESTS).put(gcKey(tx.txId() + 1, manifestId),
-                ByteBuffer.allocate(8).putLong(System.currentTimeMillis()).array());
+    static void enqueueDeleted(WriteTxn tx, ManifestEntity m) {
+        // the value is the queueing time (the collector waits for the grace period before it removes the tombstone),
+        // then the pool id, which lets the queue row be dropped together with its by-pool row
+        long txId = tx.txId() + 1;
+        byte[] pool = m.getPoolId() == null ? new byte[0] : bytes(m.getPoolId());
+        tx.tree(DELETED_MANIFESTS).put(gcKey(txId, m.getId()),
+                ByteBuffer.allocate(8 + pool.length).putLong(System.currentTimeMillis()).put(pool).array());
+        tx.tree(DELETED_BY_POOL).put(deletedByPoolKey(m.getPoolId(), m.getId()), ByteBuffer.allocate(8).putLong(txId).array());
+    }
+
+    static byte[] deletedByPoolKey(String poolId, String manifestId) {
+        return Keys.builder().string(poolId == null ? "" : poolId).string(manifestId).build();
+    }
+
+    /** Removes a queue row and its by-pool row ({@code value} is the row's value as read from the queue). */
+    static void dropQueueRow(WriteTxn tx, byte[] queueKey, byte[] value) {
+        tx.tree(DELETED_MANIFESTS).delete(queueKey);
+        if (value != null && value.length >= 8) {   // rows queued before the by-pool index have no pool and no index row
+            Keys.Reader r = new Keys.Reader(queueKey);
+            r.longUnsigned();
+            String manifestId = r.string();
+            String poolId = value.length == 8 ? "" : new String(value, 8, value.length - 8, StandardCharsets.UTF_8);
+            tx.tree(DELETED_BY_POOL).delete(deletedByPoolKey(poolId, manifestId));
+        }
+    }
+
+    /** Drops the queue row of a retired manifest (and its by-pool row), if it has one. */
+    static void dropTombstone(WriteTxn tx, ManifestEntity m) {
+        byte[] idx = deletedByPoolKey(m.getPoolId(), m.getId());
+        Optional<byte[]> txId = tx.tree(DELETED_BY_POOL).get(idx);
+        if (txId.isEmpty()) return;
+        byte[] queueKey = gcKey(ByteBuffer.wrap(txId.get()).getLong(), m.getId());
+        dropQueueRow(tx, queueKey, tx.tree(DELETED_MANIFESTS).get(queueKey).orElse(null));
+        tx.tree(DELETED_BY_POOL).delete(idx);
     }
 
     /**
@@ -241,7 +280,7 @@ final class Trees {
             m.setSegments(m.getSegments().stream().filter(s -> s.kind() == StorageKind.SMALL).toList());
         }
         putManifest(tx, m);
-        enqueueDeleted(tx, manifestId);
+        enqueueDeleted(tx, m);
         return Optional.of(resolve(tx, m));
     }
 
@@ -254,37 +293,70 @@ final class Trees {
     }
 
     /**
-     * Removes every manifest record that references one of {@code blobIds}, and every GC-queue entry whose manifest
-     * belongs to those blobs, to {@code poolId} (if not null) or no longer exists. Used when blobs go away.
+     * Removes every manifest record that references one of {@code blobIds} (blobs go away). The GC queue is not read:
+     * a queue row whose manifest is gone only loses its row when the collector reaches it (that is what it does with
+     * any row of a manifest that no longer exists), so this stays proportional to the blobs' own rows.
      */
-    static void purgeManifests(WriteTxn tx, Collection<String> blobIds, String poolId) {
+    static void purgeManifests(WriteTxn tx, Collection<String> blobIds) {
         Set<String> doomed = new HashSet<>();
         for (String blobId : blobIds) doomed.addAll(manifestIdsOfBlob(tx, blobId));
-        if (poolId != null) {
-            try (Cursor c = tx.tree(MANIFESTS_BY_POOL).scanPrefix(Keys.of(poolId))) {
-                while (c.next()) doomed.add(secondOf(c.key()));
-            }
+        for (String id : doomed) {
+            manifest(tx, id).ifPresent(m -> {
+                dropTombstone(tx, m);
+                deleteManifestRecord(tx, m);
+            });
         }
+    }
 
-        BTree queue = tx.tree(DELETED_MANIFESTS);
-        List<byte[]> queueKeys = new ArrayList<>();
-        try (Cursor c = queue.scan()) {
-            while (c.next()) {
-                byte[] key = c.key();
-                Keys.Reader r = new Keys.Reader(key);
-                r.longUnsigned();
-                String manifestId = r.string();
-                Optional<ManifestEntity> m = manifest(tx, manifestId);
-                if (m.isEmpty()) {
-                    queueKeys.add(key);
-                } else if (doomed.contains(manifestId) || (poolId != null && poolId.equals(m.get().getPoolId()))) {
-                    doomed.add(manifestId);
-                    queueKeys.add(key);
+    /**
+     * One slice of a bucket deletion: removes at most about {@code budget} rows of the pool's manifests (shell-stored ones,
+     * those referencing its blobs and its tombstones, with their queue rows). Returns true when nothing of that is left.
+     */
+    static boolean purgePoolManifestsSlice(WriteTxn tx, String poolId, List<String> blobIds, int budget) {
+        int left = budget;
+        for (String blobId : blobIds) {
+            if (left <= 0) return false;
+            List<byte[]> rows = new ArrayList<>();
+            try (Cursor c = tx.tree(MANIFESTS_BY_BLOB).scanPrefix(Keys.of(blobId))) {
+                while (rows.size() < left && c.next()) rows.add(c.key());
+            }
+            for (byte[] row : rows) {
+                manifest(tx, secondOf(row)).ifPresent(m -> deleteManifestRecord(tx, m));
+                tx.tree(MANIFESTS_BY_BLOB).delete(row);   // also when the record was already gone: never loop on a dangling row
+            }
+            left -= rows.size();
+        }
+        if (left > 0) {
+            List<byte[]> rows = new ArrayList<>();
+            try (Cursor c = tx.tree(MANIFESTS_BY_POOL).scanPrefix(Keys.of(poolId))) {
+                while (rows.size() < left && c.next()) rows.add(c.key());
+            }
+            for (byte[] row : rows) {
+                manifest(tx, secondOf(row)).ifPresent(m -> deleteManifestRecord(tx, m));
+                tx.tree(MANIFESTS_BY_POOL).delete(row);
+            }
+            left -= rows.size();
+        }
+        if (left > 0) {
+            List<byte[]> rows = new ArrayList<>();
+            List<byte[]> txIds = new ArrayList<>();
+            try (Cursor c = tx.tree(DELETED_BY_POOL).scanPrefix(Keys.of(poolId))) {
+                while (rows.size() < left && c.next()) {
+                    rows.add(c.key());
+                    txIds.add(c.value());
                 }
             }
+            BTree queue = tx.tree(DELETED_MANIFESTS);
+            for (int i = 0; i < rows.size(); i++) {
+                String manifestId = secondOf(rows.get(i));
+                byte[] queueKey = gcKey(ByteBuffer.wrap(txIds.get(i)).getLong(), manifestId);
+                manifest(tx, manifestId).ifPresent(m -> deleteManifestRecord(tx, m));
+                dropQueueRow(tx, queueKey, queue.get(queueKey).orElse(null));
+                tx.tree(DELETED_BY_POOL).delete(rows.get(i));   // also when the queue row was gone: never loop on a dangling row
+            }
+            left -= rows.size();
         }
-        for (String id : doomed) manifest(tx, id).ifPresent(m -> deleteManifestRecord(tx, m));
-        for (byte[] k : queueKeys) queue.delete(k);
+        return left > 0;
     }
 
     // ------------------------------------------------------------------ object totals (cheap gauges)
