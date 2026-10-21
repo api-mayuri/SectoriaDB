@@ -3,7 +3,11 @@ package org.example.sectoriadb;
 import org.example.sectoriadb.s3.auth.SigV4Utils;
 import org.junit.jupiter.api.Test;
 
-import static org.junit.jupiter.api.Assertions.*;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Unit tests for AccessControlService and SigV4Utils.
@@ -45,7 +49,7 @@ public class AccessControlServiceTest {
         // Test that consecutive spaces are collapsed into one
         String testValue = "Bearer   token    value";
         assertTrue(SigV4Utils.canonicalizeHeaders(
-                java.util.Map.of("authorization", testValue)
+                Map.of("authorization", testValue)
         ).contains("Bearer token value"),
                 "Consecutive spaces should be collapsed");
     }
@@ -55,7 +59,7 @@ public class AccessControlServiceTest {
         // Test that leading/trailing whitespace is trimmed
         String testValue = "  value  ";
         String result = SigV4Utils.canonicalizeHeaders(
-                java.util.Map.of("x-custom-header", testValue)
+                Map.of("x-custom-header", testValue)
         );
         assertTrue(result.contains(":value\n"),
                 "Header values should be trimmed");

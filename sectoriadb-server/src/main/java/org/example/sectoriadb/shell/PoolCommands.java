@@ -1,12 +1,13 @@
 package org.example.sectoriadb.shell;
 
-import org.example.sectoriadb.model.BlobFileEntity;
-import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.repository.BlobFileRepository;
-import org.example.sectoriadb.service.BlobService;
-import org.example.sectoriadb.service.HashTableCache;
-import org.example.sectoriadb.service.PoolService;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.BlobFileRepository;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.storage.BlobService;
+import org.example.sectoriadb.storage.HashTableCache;
+import org.example.sectoriadb.storage.PoolService;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;
@@ -21,9 +22,14 @@ public class PoolCommands {
     private final BlobFileRepository blobRepo;
     private final BlobService blobService;
     private final HashTableCache cache;
+    private final ManifestRepository manifestRepo;
+    private final ChunkRepository chunkRepo;
 
     public PoolCommands(PoolService poolService, BlobFileRepository blobRepo,
-                        BlobService blobService, HashTableCache cache) {
+                        BlobService blobService, HashTableCache cache, ManifestRepository manifestRepo,
+                        ChunkRepository chunkRepo) {
+        this.chunkRepo = chunkRepo;
+        this.manifestRepo = manifestRepo;
         this.poolService = poolService;
         this.blobRepo    = blobRepo;
         this.blobService = blobService;
@@ -65,13 +71,17 @@ public class PoolCommands {
         sb.append(String.format("  Path:    %s%n", p.getBasePath()));
         sb.append(String.format("  Created: %s%n", p.getCreatedAt()));
         sb.append(String.format("  Blobs:   %d%n", blobs.size()));
+        ManifestRepository.BucketStats stats = manifestRepo.countAndSize(p.getName());   // scans the bucket's key range
+        sb.append(String.format("  Objects: %d  (%s)%n", stats.objects(), ShellTable.humanSize(stats.bytes())));
 
         if (!blobs.isEmpty()) {
-            sb.append(ShellTable.blobTableHeader());
-            for (BlobFileEntity b : blobs) {
-                CuckooHashTable.FillStats stats = cache.get(b).getFillStats();
-                sb.append(ShellTable.blobTableRow(b, stats));
-            }
+            sb.append(ShellTable.poolBlobTable(blobService, chunkRepo, blobs));
+            BlobService.PoolFill fill = blobService.poolFill(p);
+            sb.append(String.format("  Pool fill: %.1f%% of %d slot(s) in %d cuckoo blob(s)%n",
+                    fill.fillPercent(), fill.totalSlots(), fill.blobs()));
+            ChunkRepository.Stats cs = chunkRepo.stats();
+            sb.append(String.format("  Chunk index (all pools): %d chunk(s), %d reference(s), %d awaiting collection, %d orphan copy(ies)%n",
+                    cs.chunks(), cs.refs(), cs.gcQueue(), cs.orphans()));
         }
         return sb.toString().stripTrailing();
     }

@@ -1,9 +1,9 @@
 package org.example.sectoriadb;
 
-import org.example.sectoriadb.model.ManifestEntity;
-import org.example.sectoriadb.repository.ManifestRepository;
-import org.example.sectoriadb.service.FileStorageService;
-import org.example.sectoriadb.service.PoolService;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.storage.ObjectWriter;
+import org.example.sectoriadb.storage.PoolService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -20,7 +20,8 @@ import java.net.http.HttpRequest.BodyPublishers;
 import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.file.Path;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Anonymous access with authentication ENABLED (a credential exists, so unsigned requests are rejected
@@ -47,7 +48,7 @@ class S3PublicAccessTest {
 
     @LocalServerPort int port;
     @Autowired PoolService poolService;
-    @Autowired FileStorageService fileService;
+    @Autowired ObjectWriter writer;
     @Autowired ManifestRepository manifestRepo;
 
     private final HttpClient http = HttpClient.newHttpClient();
@@ -62,7 +63,7 @@ class S3PublicAccessTest {
 
     private void putObject(String bucket, String key) throws Exception {
         var pool = poolService.createBucket(bucket);
-        fileService.storeStream(new ByteArrayInputStream("data".getBytes()), pool, key, "text/plain");
+        writer.storeStream(new ByteArrayInputStream("data".getBytes()), pool, key, "text/plain");
     }
 
     @Test
@@ -78,7 +79,7 @@ class S3PublicAccessTest {
     void publicObjectAclOpensOnlyThatObject() throws Exception {
         putObject("obj-bkt", "pub.txt");
         putObject("obj-bkt", "other.txt");
-        ManifestEntity m = manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse("obj-bkt", "pub.txt").orElseThrow();
+        ManifestEntity m = manifestRepo.findCurrent("obj-bkt", "pub.txt").orElseThrow();
         m.setAcl("public-read");
         manifestRepo.save(m);
 
@@ -89,11 +90,13 @@ class S3PublicAccessTest {
     }
 
     @Test
-    void publicBucketOpensReadAndListButNeverWritesOrAdminCalls() throws Exception {
+    void publicBucketOpensListButNotObjectsNorWritesNorAdminCalls() throws Exception {
         putObject("pub-bkt", "a.txt");
         poolService.setAcl("pub-bkt", "public-read");
 
-        assertEquals(200, status("GET", "/pub-bkt/a.txt"));
+        // AWS semantics: bucket public-read grants ListBucket only; objects need their own ACL or a policy
+        assertEquals(403, status("GET", "/pub-bkt/a.txt"));
+        assertEquals(403, status("HEAD", "/pub-bkt/a.txt"));
         assertEquals(200, status("GET", "/pub-bkt?list-type=2"));
         // prefixes that merely CONTAIN words like acl/uploads must not be treated as admin sub-resources
         assertEquals(200, status("GET", "/pub-bkt?list-type=2&prefix=uploads/"));
@@ -128,5 +131,113 @@ class S3PublicAccessTest {
                 .header("x-amz-date", "20260101T000000Z").GET().build();
         int code = http.send(req, BodyHandlers.discarding()).statusCode();
         assertTrue(code == 403 || code == 400, "a request that claims credentials must be validated, got " + code);
+    }
+
+    @Test
+    void publicReadWriteBucketStillAllowsWritesButNotReads() throws Exception {
+        putObject("rw-bkt", "a.txt");
+        poolService.setAcl("rw-bkt", "public-read-write");
+        assertEquals(403, status("GET", "/rw-bkt/a.txt"));
+        assertEquals(200, status("GET", "/rw-bkt?list-type=2"));
+        assertEquals(200, status("PUT", "/rw-bkt/new.txt"));
+    }
+
+    private int statusWithHeaders(String method, String path, String... headers) throws Exception {
+        var b = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path));
+        for (int i = 0; i < headers.length; i += 2) b.header(headers[i], headers[i + 1]);
+        if ("PUT".equals(method)) b.PUT(BodyPublishers.ofString("x"));
+        else b.method(method, BodyPublishers.noBody());
+        return http.send(b.build(), BodyHandlers.discarding()).statusCode();
+    }
+
+    @Test
+    void anonymousCopyIntoPublicWritableBucketCannotReadPrivateObjects() throws Exception {
+        putObject("loot-src", "secret.txt");
+        putObject("loot-dst", "seed.txt");
+        poolService.setAcl("loot-dst", "public-read-write");
+
+        // plain anonymous write is allowed by the bucket ACL ...
+        assertEquals(200, status("PUT", "/loot-dst/plain.txt"));
+        // ... but naming a source (CopyObject) or making the copy public is not
+        assertEquals(403, statusWithHeaders("PUT", "/loot-dst/loot.txt", "x-amz-copy-source", "/loot-src/secret.txt"));
+        assertEquals(403, statusWithHeaders("PUT", "/loot-dst/loot2.txt", "x-amz-copy-source", "loot-src/secret.txt",
+                "x-amz-acl", "public-read"));
+        assertTrue(manifestRepo.findCurrent("loot-dst", "loot.txt").isEmpty());
+        assertTrue(manifestRepo.findCurrent("loot-dst", "loot2.txt").isEmpty());
+        // an anonymous caller cannot make its own upload public or hand out grants either (needs s3:PutObjectAcl)
+        assertEquals(403, statusWithHeaders("PUT", "/loot-dst/pub.txt", "x-amz-acl", "public-read"));
+        assertEquals(403, statusWithHeaders("PUT", "/loot-dst/pub2.txt", "x-amz-grant-read",
+                "uri=\"http://acs.amazonaws.com/groups/global/AllUsers\""));
+        assertEquals(200, statusWithHeaders("PUT", "/loot-dst/priv.txt", "x-amz-acl", "private"));
+        assertEquals(403, statusWithHeaders("GET", "/loot-dst/plain.txt"), "uploaded object is not readable anonymously");
+    }
+
+    @Test
+    void publicBucketPlusPublicObjectAclReadsOnlyThatObject() throws Exception {
+        putObject("mix-bkt", "pub.txt");
+        putObject("mix-bkt", "priv.txt");
+        poolService.setAcl("mix-bkt", "public-read");
+        ManifestEntity m = manifestRepo.findCurrent("mix-bkt", "pub.txt").orElseThrow();
+        m.setAcl("public-read");
+        manifestRepo.save(m);
+        assertEquals(200, status("GET", "/mix-bkt/pub.txt"));
+        assertEquals(403, status("GET", "/mix-bkt/priv.txt"));
+    }
+
+    @Test
+    void explicitDenyOverridesAllowAndPublicAcl() throws Exception {
+        putObject("deny-bkt", "docs/a.txt");
+        putObject("deny-bkt", "docs/secret/b.txt");
+        poolService.setPolicy("deny-bkt", "{\"Version\":\"2012-10-17\",\"Statement\":[\n"
+                + "{\"Effect\":\"Allow\",\"Principal\":\"*\",\"Action\":[\"s3:GetObject\"],\"Resource\":[\"arn:aws:s3:::deny-bkt/*\"]},\n"
+                + "{\"Effect\":\"Deny\",\"Principal\":{\"AWS\":\"*\"},\"Action\":\"s3:Get*\",\"Resource\":\"arn:aws:s3:::deny-bkt/docs/secret/*\"}]}");
+        assertEquals(200, status("GET", "/deny-bkt/docs/a.txt"));
+        assertEquals(403, status("GET", "/deny-bkt/docs/secret/b.txt"));
+        // object ACL public-read does not beat an explicit Deny either
+        ManifestEntity m = manifestRepo.findCurrent("deny-bkt", "docs/secret/b.txt").orElseThrow();
+        m.setAcl("public-read");
+        manifestRepo.save(m);
+        assertEquals(403, status("GET", "/deny-bkt/docs/secret/b.txt"));
+    }
+
+    @Test
+    void allowWithConditionDoesNotGrantAccess() throws Exception {
+        putObject("cond-bkt", "a.txt");
+        poolService.setPolicy("cond-bkt", "{\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\","
+                + "\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::cond-bkt/*\","
+                + "\"Condition\":{\"IpAddress\":{\"aws:SourceIp\":\"10.0.0.0/8\"}}}]}");
+        assertEquals(403, status("GET", "/cond-bkt/a.txt"));
+    }
+
+    @Test
+    void policyAllowListBucketOpensListing() throws Exception {
+        putObject("lst-bkt", "a.txt");
+        poolService.setPolicy("lst-bkt", "{\"Statement\":{\"Effect\":\"Allow\",\"Principal\":\"*\","
+                + "\"Action\":\"s3:ListBucket\",\"Resource\":\"arn:aws:s3:::lst-bkt\"}}");
+        assertEquals(200, status("GET", "/lst-bkt?list-type=2"));
+        assertEquals(403, status("GET", "/lst-bkt/a.txt"));
+    }
+
+    @Test
+    void anAnonymousListingEvaluatesPrefixConditionsOfADeny() throws Exception {
+        putObject("pfx-bkt", "private/a.txt");
+        poolService.setAcl("pfx-bkt", "public-read");
+        poolService.setPolicy("pfx-bkt", "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":\"*\","
+                + "\"Action\":\"s3:ListBucket\",\"Resource\":\"arn:aws:s3:::pfx-bkt\","
+                + "\"Condition\":{\"StringLike\":{\"s3:prefix\":\"private/*\"}}}]}");
+        assertEquals(403, status("GET", "/pfx-bkt?list-type=2&prefix=private/"), "the Deny with a prefix condition applies");
+        assertEquals(403, status("GET", "/pfx-bkt?list-type=2&prefix=private/a"));
+        assertEquals(200, status("GET", "/pfx-bkt?list-type=2&prefix=public/"), "other prefixes stay listable");
+        assertEquals(200, status("GET", "/pfx-bkt?list-type=2"));
+    }
+
+    @Test
+    void anAnonymousVersionsListingIsListBucketVersionsNotListBucket() throws Exception {
+        putObject("ver-bkt", "a.txt");
+        poolService.setAcl("ver-bkt", "public-read");
+        poolService.setPolicy("ver-bkt", "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":\"*\","
+                + "\"Action\":\"s3:ListBucketVersions\",\"Resource\":\"arn:aws:s3:::ver-bkt\"}]}");
+        assertEquals(403, status("GET", "/ver-bkt?versions"));
+        assertEquals(200, status("GET", "/ver-bkt?list-type=2"), "plain listing is not affected");
     }
 }

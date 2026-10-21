@@ -1,23 +1,29 @@
 package org.example.sectoriadb.s3.access;
 
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
-import org.example.sectoriadb.model.ManifestEntity;
-import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.repository.ManifestRepository;
-import org.example.sectoriadb.s3.S3Support;
-import org.example.sectoriadb.service.PoolService;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.observability.OperationClassifier;
+import org.example.sectoriadb.s3.error.S3Exception;
+import org.example.sectoriadb.s3.http.UrlCodec;
+import org.example.sectoriadb.s3.xml.XmlSupport;
+import org.example.sectoriadb.storage.PoolService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.w3c.dom.Document;
+import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Enumeration;
+import java.util.Locale;
 import java.util.Set;
+import javax.xml.parsers.DocumentBuilder;
 
 /**
  * ACL and access control service for S3 buckets and objects.
@@ -31,90 +37,56 @@ public class AccessControlService {
     private final PoolService poolService;
     private final ObjectMapper objectMapper;
     private final ManifestRepository manifestRepo;
+    private final BucketPolicyEvaluator policyEvaluator;
 
     public AccessControlService(PoolService poolService, ObjectMapper objectMapper,
                                 ManifestRepository manifestRepo) {
         this.poolService = poolService;
         this.objectMapper = objectMapper;
         this.manifestRepo = manifestRepo;
+        this.policyEvaluator = new BucketPolicyEvaluator(objectMapper);
     }
 
     /**
-     * Applies bucket ACL from request (canned ACL, headers, or XML body).
-     * If no ACL specified in request, does nothing.
+     * Applies the bucket ACL given by the request (canned ACL header, grant headers or XML body); nothing is changed
+     * when the request names no ACL. A malformed ACL document or an unknown canned ACL is an error, never a silent no-op.
      */
     public void applyBucketAcl(HttpServletRequest request, byte[] body, PoolEntity pool) {
-        try {
-            String acl = null;
+        String acl = resolveAcl(request, body);
+        if (acl != null) {
+            poolService.setAcl(pool.getName(), acl);
+        }
+    }
 
-            // Check x-amz-acl header (canned ACL)
-            String cannedAcl = request.getHeader("x-amz-acl");
-            if (cannedAcl != null && !cannedAcl.isBlank()) {
-                acl = normalizeCannedAcl(cannedAcl);
-            } else {
-                // Check x-amz-grant-read/write headers
-                String grantRead = request.getHeader("x-amz-grant-read");
-                String grantWrite = request.getHeader("x-amz-grant-write");
-                if (grantRead != null || grantWrite != null) {
-                    if (isGrantForAllUsers(grantRead) && isGrantForAllUsers(grantWrite)) {
-                        acl = "public-read-write";
-                    } else if (isGrantForAllUsers(grantRead)) {
-                        acl = "public-read";
-                    }
-                }
-            }
-
-            // Check XML body (AccessControlPolicy)
-            if (acl == null && body != null && body.length > 0) {
-                acl = parseAclFromXml(new String(body));
-            }
-
-            // Apply ACL if determined
-            if (acl != null) {
-                poolService.setAcl(pool.getName(), acl);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to apply bucket ACL: {}", e.getMessage());
+    /** As {@link #applyBucketAcl} for an object manifest (the caller persists it). */
+    public void applyObjectAcl(HttpServletRequest request, byte[] body, ManifestEntity manifest) {
+        String acl = resolveAcl(request, body);
+        if (acl != null) {
+            manifest.setAcl(acl);
         }
     }
 
     /**
-     * Applies object ACL from request.
-     * If no ACL specified in request and this is not a PutObjectAcl request, leaves as-is.
+     * The ACL the request asks for ("private", "public-read" or "public-read-write"), or null if it names none.
+     *
+     * @throws S3Exception 400 InvalidArgument for an unknown canned ACL, 400 MalformedACLError for a bad document
      */
-    public void applyObjectAcl(HttpServletRequest request, byte[] body, ManifestEntity manifest) {
-        try {
-            String acl = null;
-
-            // Check x-amz-acl header
-            String cannedAcl = request.getHeader("x-amz-acl");
-            if (cannedAcl != null && !cannedAcl.isBlank()) {
-                acl = normalizeCannedAcl(cannedAcl);
-            } else {
-                // Check grant headers
-                String grantRead = request.getHeader("x-amz-grant-read");
-                String grantWrite = request.getHeader("x-amz-grant-write");
-                if (grantRead != null || grantWrite != null) {
-                    if (isGrantForAllUsers(grantRead) && isGrantForAllUsers(grantWrite)) {
-                        acl = "public-read-write";
-                    } else if (isGrantForAllUsers(grantRead)) {
-                        acl = "public-read";
-                    }
-                }
-            }
-
-            // Check XML body
-            if (acl == null && body != null && body.length > 0) {
-                acl = parseAclFromXml(new String(body));
-            }
-
-            // Apply ACL if determined
-            if (acl != null) {
-                manifest.setAcl(acl);
-            }
-        } catch (Exception e) {
-            log.warn("Failed to apply object ACL: {}", e.getMessage());
+    public String resolveAcl(HttpServletRequest request, byte[] body) {
+        String cannedAcl = request.getHeader("x-amz-acl");
+        if (cannedAcl != null && !cannedAcl.isBlank()) {
+            return normalizeCannedAcl(cannedAcl);
         }
+        String grantRead = request.getHeader("x-amz-grant-read");
+        String grantWrite = request.getHeader("x-amz-grant-write");
+        if (grantRead != null || grantWrite != null) {
+            if (isGrantForAllUsers(grantRead) && isGrantForAllUsers(grantWrite)) return "public-read-write";
+            if (isGrantForAllUsers(grantRead)) return "public-read";
+            return null;
+        }
+        if (body != null && body.length > 0) {
+            return parseAclFromXml(new String(body, StandardCharsets.UTF_8));
+        }
+        return null;
     }
 
     /**
@@ -190,6 +162,14 @@ public class AccessControlService {
                 return false;
             }
 
+            // An anonymous request may never name another object as its source (CopyObject reads the source without
+            // any permission check, so an open bucket would become an exfiltration channel for every private
+            // object) and may never set a non-private ACL / grants (AWS needs s3:PutObjectAcl for that, which the
+            // public-read-write bucket ACL does not give to anonymous callers).
+            if (carriesPrivilegedHeaders(request)) {
+                return false;
+            }
+
             PoolEntity poolEntity;
             try {
                 poolEntity = poolService.getByName(bucket);
@@ -197,51 +177,45 @@ public class AccessControlService {
                 return false;  // Bucket doesn't exist
             }
 
-            // For GET/HEAD: check if object is accessible
+            String bucketArn = "arn:aws:s3:::" + bucket;
+
+            // For GET/HEAD
             if ("GET".equals(method) || "HEAD".equals(method)) {
-                // If querying bucket directly (no key) - ListObjects
+                // Bucket-level request (ListObjects / HeadBucket) -> s3:ListBucket
                 if (isBucketListRequest(uri, bucket)) {
-                    // ListObjects allowed if bucket is public-read(-write) or policy allows
-                    if (isPublicBucket(poolEntity)) {
-                        return true;
+                    // like the signed path: ?versions is ListBucketVersions, and s3:prefix / s3:delimiter reach the conditions
+                    String listAction = OperationClassifier.hasParam(queryString == null ? "" : queryString, "versions")
+                            ? "s3:ListBucketVersions" : "s3:ListBucket";
+                    var context = IamAuthorizer.listContext(request);
+                    var listDecision = policyEvaluator.evaluate(poolEntity.getPolicy(),
+                            new BucketPolicyEvaluator.Request(listAction, bucketArn, null, request.isSecure(), context));
+                    if (listDecision == BucketPolicyEvaluator.Decision.DENY) {
+                        return false;
                     }
-                    return checkBucketPolicy(poolEntity, "s3:ListBucket", bucket, null);
+                    return isPublicBucket(poolEntity) || listDecision == BucketPolicyEvaluator.Decision.ALLOW;
                 }
 
-                // Object GET: extract key
                 String key = extractKeyFromUri(uri, bucket);
                 if (key == null || key.isEmpty()) {
                     return false;
                 }
-
-                // Check object ACL
-                if (isObjectPublicReadable(request, bucket, key)) {
-                    return true;
-                }
-
-                // Check bucket policy
-                String resource = "arn:aws:s3:::" + bucket + "/" + key;
-                if (checkBucketPolicy(poolEntity, "s3:GetObject", bucket, resource)) {
-                    return true;
-                }
-
-                return false;
+                String resource = bucketArn + "/" + key;
+                var decision = policyDecision(request, poolEntity, "s3:GetObject", resource);
+                if (decision == BucketPolicyEvaluator.Decision.DENY) return false;   // explicit Deny beats ACLs
+                // Bucket ACL does NOT make objects readable (S1): only the object ACL or a policy Allow does.
+                return isObjectPublicReadable(bucket, key) || decision == BucketPolicyEvaluator.Decision.ALLOW;
             }
 
-            // For PUT/DELETE: only allowed if bucket has public-read-write ACL or policy allows
+            // For PUT/DELETE: public-read-write bucket ACL (WRITE grant) or a policy Allow, unless explicitly denied
             if ("PUT".equals(method) || "DELETE".equals(method)) {
                 String key = extractKeyFromUri(uri, bucket);
                 if (key == null || key.isEmpty()) {
                     return false;
                 }
-
-                if ("public-read-write".equals(poolEntity.getAcl())) {
-                    return true;
-                }
-
                 String action = "PUT".equals(method) ? "s3:PutObject" : "s3:DeleteObject";
-                String resource = "arn:aws:s3:::" + bucket + "/" + key;
-                return checkBucketPolicy(poolEntity, action, bucket, resource);
+                var decision = policyDecision(request, poolEntity, action, bucketArn + "/" + key);
+                if (decision == BucketPolicyEvaluator.Decision.DENY) return false;
+                return "public-read-write".equals(poolEntity.getAcl()) || decision == BucketPolicyEvaluator.Decision.ALLOW;
             }
 
             return false;
@@ -253,17 +227,25 @@ public class AccessControlService {
 
     // ── Helper methods ────────────────────────────────────────────────────────
 
+    /**
+     * Canned ACLs. SectoriaDB has one owner, so the owner-oriented ones (bucket-owner-*, aws-exec-read, log-delivery-write)
+     * and authenticated-read (conservatively) are stored as "private"; an unknown name is rejected.
+     */
     private String normalizeCannedAcl(String acl) {
-        if (acl == null) return "private";
-        String normalized = acl.toLowerCase();
-        // Map authenticated-read to private (conservative approach)
-        if ("authenticated-read".equals(normalized)) {
-            return "private";
+        String normalized = acl.trim().toLowerCase(Locale.ROOT);
+        switch (normalized) {
+            case "private", "public-read", "public-read-write":
+                return normalized;
+            case "authenticated-read", "aws-exec-read", "bucket-owner-read", "bucket-owner-full-control", "log-delivery-write":
+                return "private";
+            default:
+                throw S3Exception.invalidArgument("Unknown canned ACL: " + sanitizeForMessage(acl));
         }
-        if ("public-read".equals(normalized) || "public-read-write".equals(normalized) || "private".equals(normalized)) {
-            return normalized;
-        }
-        return "private";
+    }
+
+    private static String sanitizeForMessage(String s) {
+        String t = s.replaceAll("\\p{Cntrl}", "?");
+        return t.length() > 64 ? t.substring(0, 64) + "..." : t;
     }
 
     private boolean isGrantForAllUsers(String grantHeader) {
@@ -274,31 +256,29 @@ public class AccessControlService {
 
     private String parseAclFromXml(String xmlBody) {
         try {
-            DocumentBuilderFactory dbf = DocumentBuilderFactory.newInstance();
-            dbf.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-            DocumentBuilder db = dbf.newDocumentBuilder();
-            Document doc = db.parse(new ByteArrayInputStream(xmlBody.getBytes()));
+            DocumentBuilder db = XmlSupport.newSecureDocumentBuilder(false);
+            Document doc = db.parse(new ByteArrayInputStream(xmlBody.getBytes(StandardCharsets.UTF_8)));
 
             NodeList grants = doc.getElementsByTagName("Grant");
             boolean hasPublicRead = false;
             boolean hasPublicWrite = false;
 
             for (int i = 0; i < grants.getLength(); i++) {
-                org.w3c.dom.Node grantNode = grants.item(i);
+                Node grantNode = grants.item(i);
                 boolean isAllUsers = false;
                 String permission = null;
 
                 // Check if grant is for AllUsers
                 NodeList children = grantNode.getChildNodes();
                 for (int j = 0; j < children.getLength(); j++) {
-                    org.w3c.dom.Node child = children.item(j);
+                    Node child = children.item(j);
                     if ("Grantee".equals(child.getNodeName())) {
                         NodeList granteeChildren = child.getChildNodes();
                         for (int k = 0; k < granteeChildren.getLength(); k++) {
-                            org.w3c.dom.Node gc = granteeChildren.item(k);
+                            Node gc = granteeChildren.item(k);
                             if ("URI".equals(gc.getNodeName())) {
                                 String uri = gc.getTextContent();
-                                if (uri != null && uri.contains("global/AllUsers")) {
+                                if (uri != null && "http://acs.amazonaws.com/groups/global/AllUsers".equals(uri.trim())) {
                                     isAllUsers = true;
                                 }
                             }
@@ -322,10 +302,12 @@ public class AccessControlService {
             } else if (hasPublicRead) {
                 return "public-read";
             }
+            return "private";   // a valid document without public grants removes public access
         } catch (Exception e) {
             log.debug("Failed to parse ACL from XML: {}", e.getMessage());
+            throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedACLError",
+                    "The XML you provided was not well-formed or did not validate against our published schema");
         }
-        return null;
     }
 
     /** Sub-resources that must never be reachable anonymously (matched by parameter name). */
@@ -333,11 +315,21 @@ public class AccessControlService {
             "acl", "policy", "uploads", "uploadId", "partNumber", "tagging", "versioning",
             "cors", "lifecycle", "encryption", "publicAccessBlock", "delete", "location");
 
+    private static boolean carriesPrivilegedHeaders(HttpServletRequest request) {
+        if (request.getHeader("x-amz-copy-source") != null) return true;
+        String acl = request.getHeader("x-amz-acl");
+        if (acl != null && !acl.isBlank() && !"private".equalsIgnoreCase(acl.trim())) return true;
+        for (Enumeration<String> names = request.getHeaderNames(); names != null && names.hasMoreElements(); ) {
+            if (names.nextElement().regionMatches(true, 0, "x-amz-grant-", 0, "x-amz-grant-".length())) return true;
+        }
+        return false;
+    }
+
     private boolean isPrivateQuery(String queryString) {
         if (queryString == null || queryString.isEmpty()) return false;
         for (String pair : queryString.split("&")) {
             int eq = pair.indexOf('=');
-            String name = S3Support.percentDecode(eq < 0 ? pair : pair.substring(0, eq));
+            String name = UrlCodec.percentDecode(eq < 0 ? pair : pair.substring(0, eq));
             if (PRIVATE_SUBRESOURCES.contains(name)) return true;
         }
         return false;
@@ -358,7 +350,7 @@ public class AccessControlService {
     private String extractKeyFromUri(String uri, String bucket) {
         String prefix = "/" + bucket + "/";
         if (uri.startsWith(prefix)) {
-            return S3Support.percentDecode(uri.substring(prefix.length()));
+            return UrlCodec.percentDecode(uri.substring(prefix.length()));
         }
         return null;
     }
@@ -368,133 +360,18 @@ public class AccessControlService {
         return "public-read".equals(acl) || "public-read-write".equals(acl);
     }
 
-    private boolean isObjectPublicReadable(HttpServletRequest request, String bucket, String key) {
-        try {
-            PoolEntity pool = poolService.getByName(bucket);
-            if (isPublicBucket(pool)) {
-                return true;
-            }
-        } catch (Exception e) {
-            return false;
-        }
-        return manifestRepo.findByBucketNameAndObjectKeyAndDeletedFalse(bucket, key)
+    /**
+     * Object readability comes ONLY from the object's own ACL (AWS semantics). A public-read bucket ACL
+     * grants listing, not reading of objects; a bucket policy is checked separately by the caller.
+     */
+    private boolean isObjectPublicReadable(String bucket, String key) {
+        return manifestRepo.findCurrent(bucket, key)
                 .map(m -> "public-read".equals(m.getAcl()) || "public-read-write".equals(m.getAcl()))
                 .orElse(false);
     }
 
-    private boolean checkBucketPolicy(PoolEntity pool, String action, String bucket, String resource) {
-        if (pool.getPolicy() == null) {
-            return false;
-        }
-
-        try {
-            JsonNode policyNode = objectMapper.readTree(pool.getPolicy());
-
-            // Simple validation: check Statement array for matching policy
-            JsonNode statements = policyNode.get("Statement");
-            if (statements == null || !statements.isArray()) {
-                return false;
-            }
-
-            for (JsonNode stmt : statements) {
-                String effect = stmt.get("Effect") != null ? stmt.get("Effect").asText() : "Deny";
-                if (!"Allow".equals(effect)) continue;
-
-                // Check Principal includes "*" or {"AWS":"*"}
-                JsonNode principal = stmt.get("Principal");
-                if (principal == null) continue;
-                if ("*".equals(principal.asText())) {
-                    // Check Action
-                    if (matchesAction(stmt.get("Action"), action)) {
-                        // Check Resource matches
-                        if (resource == null || matchesResource(stmt.get("Resource"), resource)) {
-                            // Check Condition (must be absent for anonymous access)
-                            if (stmt.get("Condition") == null) {
-                                return true;
-                            }
-                        }
-                    }
-                } else if (principal.isObject() && principal.get("AWS") != null) {
-                    String awsPrincipal = principal.get("AWS").asText();
-                    if ("*".equals(awsPrincipal)) {
-                        if (matchesAction(stmt.get("Action"), action)) {
-                            if (resource == null || matchesResource(stmt.get("Resource"), resource)) {
-                                if (stmt.get("Condition") == null) {
-                                    return true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.debug("Failed to parse bucket policy: {}", e.getMessage());
-            return false;
-        }
-
-        return false;
-    }
-
-    private boolean matchesAction(JsonNode actionNode, String requiredAction) {
-        if (actionNode == null) return false;
-
-        if (actionNode.isTextual()) {
-            String action = actionNode.asText();
-            return matchesActionPattern(action, requiredAction);
-        } else if (actionNode.isArray()) {
-            for (JsonNode node : actionNode) {
-                if (node.isTextual() && matchesActionPattern(node.asText(), requiredAction)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean matchesActionPattern(String pattern, String requiredAction) {
-        if ("s3:*".equals(pattern)) return true;
-        if ("*".equals(pattern)) return true;
-
-        // Handle s3:Get*, s3:Put*, etc.
-        if (pattern.contains("*")) {
-            if (pattern.startsWith("s3:")) {
-                String base = pattern.substring(3);
-                if (base.endsWith("*")) {
-                    String prefix = base.substring(0, base.length() - 1);
-                    if (requiredAction.startsWith("s3:" + prefix)) {
-                        return true;
-                    }
-                }
-            }
-        }
-
-        return pattern.equals(requiredAction);
-    }
-
-    private boolean matchesResource(JsonNode resourceNode, String requiredResource) {
-        if (resourceNode == null) return false;
-
-        if (resourceNode.isTextual()) {
-            return matchesResourcePattern(resourceNode.asText(), requiredResource);
-        } else if (resourceNode.isArray()) {
-            for (JsonNode node : resourceNode) {
-                if (node.isTextual() && matchesResourcePattern(node.asText(), requiredResource)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private boolean matchesResourcePattern(String pattern, String resource) {
-        if ("*".equals(pattern)) return true;
-
-        // Simple glob pattern matching
-        if (pattern.endsWith("*")) {
-            String prefix = pattern.substring(0, pattern.length() - 1);
-            return resource.startsWith(prefix);
-        }
-
-        return pattern.equals(resource);
+    private BucketPolicyEvaluator.Decision policyDecision(HttpServletRequest request, PoolEntity pool,
+                                                          String action, String resource) {
+        return policyEvaluator.evaluate(pool.getPolicy(), action, resource, request.isSecure());
     }
 }

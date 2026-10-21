@@ -45,3 +45,21 @@ output/
 
 ### Docker secrets ###
 .env
+
+### Benchmark results (local files only; see bench/results/README.md) ###
+bench/results/*
+!bench/results/README.md
+bench/compat/work/
+bench/faults/work/
+
+### Cold backups hold credentials.json in the clear (deploy/backup/cold-backup.sh writes outside the repo by default) ###
+backups/
+*.tar.zst
+*.tar.gz
+
+### TLS: certificates and keys (deploy/gen-self-signed.sh, certbot, corporate CA) ###
+deploy/certs/*
+!deploy/certs/.gitkeep
+
+# Python bytecode of the bench scripts
+__pycache__/

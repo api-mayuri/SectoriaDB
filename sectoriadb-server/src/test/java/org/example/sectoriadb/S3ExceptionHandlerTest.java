@@ -1,0 +1,100 @@
+package org.example.sectoriadb;
+
+import org.example.sectoriadb.catalog.CatalogUnavailableException;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.s3.error.S3ExceptionHandler;
+import org.junit.jupiter.api.Test;
+import org.springframework.http.ResponseEntity;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.SocketTimeoutException;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+
+/** Mapping of unexpected exceptions to S3 error responses (no Spring context needed). */
+class S3ExceptionHandlerTest {
+
+    private final S3ExceptionHandler handler = new S3ExceptionHandler();
+
+    /** Full-disk test (bench/faults/full-disk.sh): ENOSPC used to be a plain 500 InternalError. */
+    @Test
+    void noSpaceLeftOnDeviceIsInsufficientStorage507() {
+        var r = handler.handleGeneral(new IOException("No space left on device"));
+        assertEquals(507, r.getStatusCode().value());
+        assertEquals("InsufficientStorage", r.getBody().getCode());
+        // wrapped in other exceptions, as the engine does
+        var wrapped = handler.handleGeneral(new UncheckedIOException(new IOException("write failed", new IOException("No space left on device"))));
+        assertEquals(507, wrapped.getStatusCode().value());
+    }
+
+    @Test
+    void anOversizedMultipartObjectIsEntityTooLarge400() {
+        var r = handler.handleMultipart(new org.example.sectoriadb.catalog.MultipartException(
+                org.example.sectoriadb.catalog.MultipartException.Kind.ENTITY_TOO_LARGE, "too big"));
+        assertEquals(400, r.getStatusCode().value());
+        assertEquals("EntityTooLarge", r.getBody().getCode());
+    }
+
+    @Test
+    void otherFailuresStayInternalError500() {
+        ResponseEntity<?> r = handler.handleGeneral(new IOException("Input/output error"));
+        assertEquals(500, r.getStatusCode().value());
+    }
+
+    /** Classification is by type: every IllegalStateException is a 503 and its message is never echoed. */
+    @Test
+    void illegalStateIsAlwaysAGenericServiceUnavailable() {
+        var r = handler.handleIllegalState(new IllegalStateException("BucketNotEmpty: bucket 'b' still has 1 object(s) /var/data/x"));
+        assertEquals(503, r.getStatusCode().value());
+        assertEquals("ServiceUnavailable", r.getBody().getCode());
+        assertFalse(r.getBody().getMessage().contains("/var/data"));
+    }
+
+    /** No substring guessing: "Bucket"/"not found"/"already exists" in a message must not turn into 404/409. */
+    @Test
+    void illegalArgumentIsInvalidArgumentWithAFixedMessage() {
+        for (String msg : new String[]{"Bucket x not found", "Pool already exists: p", "For input string: \"abc\"", "File not found: /srv/secret/path"}) {
+            var r = handler.handleIllegalArgument(new IllegalArgumentException(msg));
+            assertEquals(400, r.getStatusCode().value(), msg);
+            assertEquals("InvalidArgument", r.getBody().getCode());
+            assertFalse(r.getBody().getMessage().contains("/srv"), "internal text must not be echoed");
+        }
+        var nfe = handler.handleIllegalArgument(new NumberFormatException("For input string: \"abc\""));
+        assertEquals(400, nfe.getStatusCode().value());
+    }
+
+    @Test
+    void aSlowBodyIsRequestTimeoutNotAnInternalError() {
+        var r = handler.handleSocketTimeout(new SocketTimeoutException("Read timed out"));
+        assertEquals(400, r.getStatusCode().value());
+        assertEquals("RequestTimeout", r.getBody().getCode());
+    }
+
+    /** A chunk the upload deduplicated against was collected before its commit; the client simply retries. */
+    @Test
+    void aCollectedChunkIsARetryable503() {
+        var r = handler.handleChunkPlacement(new ChunkRepository.ChunkPlacementException(
+                ChunkRepository.ChunkPlacementException.Reason.COLLECTED, "collected meanwhile"));
+        assertEquals(503, r.getStatusCode().value());
+        assertEquals("ServiceUnavailable", r.getBody().getCode());
+        assertEquals("1", r.getHeaders().getFirst("Retry-After"));
+    }
+
+    /** The metadata store refuses writes after a failed commit (reads still work): 507 for a full disk, else 503 SlowDown. */
+    @Test
+    void aStoreThatIsRecoveringIsSlowDownAndAFullMetadataDiskIsInsufficientStorage() {
+        var full = new CatalogUnavailableException("read-only",
+                new UncheckedIOException(new IOException("No space left on device")));
+        var r507 = handler.handleCatalogUnavailable(full);
+        assertEquals(507, r507.getStatusCode().value());
+        assertEquals("InsufficientStorage", r507.getBody().getCode());
+        var other = new CatalogUnavailableException("read-only",
+                new UncheckedIOException(new IOException("Input/output error")));
+        var r503 = handler.handleCatalogUnavailable(other);
+        assertEquals(503, r503.getStatusCode().value());
+        assertEquals("SlowDown", r503.getBody().getCode());
+        assertEquals("1", r503.getHeaders().getFirst("Retry-After"));
+    }
+}

@@ -1,16 +1,21 @@
 package org.example.sectoriadb.s3.auth;
 
-import org.example.sectoriadb.s3.S3Support;
 
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.net.URLDecoder;
+import org.example.sectoriadb.s3.http.UrlCodec;
+
 import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
+import java.util.TreeSet;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 
 /**
  * AWS Signature Version 4 computation utilities.
@@ -70,7 +75,7 @@ public final class SigV4Utils {
             if (i > 0) sb.append('/');
             // Decode first to avoid double-encoding an already percent-encoded URI
             // Use percent-decode that leaves '+' untouched (unlike URLDecoder)
-            String decoded = S3Support.percentDecode(segments[i]);
+            String decoded = UrlCodec.percentDecode(segments[i]);
             sb.append(uriEncode(decoded, false));
         }
         return sb.toString();
@@ -87,8 +92,8 @@ public final class SigV4Utils {
             int eq = pair.indexOf('=');
             String key   = eq < 0 ? pair : pair.substring(0, eq);
             String value = eq < 0 ? "" : pair.substring(eq + 1);
-            key   = uriEncode(URLDecoder.decode(key,   StandardCharsets.UTF_8), true);
-            value = uriEncode(URLDecoder.decode(value, StandardCharsets.UTF_8), true);
+            key   = uriEncode(UrlCodec.decodeQueryComponent(key), true);
+            value = uriEncode(UrlCodec.decodeQueryComponent(value), true);
             params.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
         }
         // Exclude X-Amz-Signature from the canonical query when computing presigned URLs
@@ -193,16 +198,18 @@ public final class SigV4Utils {
     public static String uriEncode(String value, boolean encodeSlash) {
         if (value == null) return "";
         StringBuilder result = new StringBuilder();
-        for (char c : value.toCharArray()) {
-            if (isUnreserved(c) || (!encodeSlash && c == '/')) {
-                result.append(c);
+        // By code point, not by char: a character outside the BMP (emoji, rare CJK) is a surrogate PAIR in Java, and
+        // encoding each half separately yields "?" bytes, i.e. a wrong canonical URI and SignatureDoesNotMatch.
+        value.codePoints().forEach(cp -> {
+            if (cp < 0x80 && (isUnreserved((char) cp) || (!encodeSlash && cp == '/'))) {
+                result.append((char) cp);
             } else {
-                byte[] bytes = String.valueOf(c).getBytes(StandardCharsets.UTF_8);
+                byte[] bytes = new String(Character.toChars(cp)).getBytes(StandardCharsets.UTF_8);
                 for (byte b : bytes) {
-                    result.append('%').append(String.format("%02X", b & 0xFF));
+                    result.append('%').append(HexFormat.of().withUpperCase().toHexDigits(b));
                 }
             }
-        }
+        });
         return result.toString();
     }
 

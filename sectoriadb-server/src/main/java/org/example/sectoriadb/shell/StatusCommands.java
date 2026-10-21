@@ -1,14 +1,15 @@
 package org.example.sectoriadb.shell;
 
+import org.example.sectoriadb.audit.OperationLogEntity;
+import org.example.sectoriadb.audit.OperationLogRepository;
+import org.example.sectoriadb.catalog.BlobFileEntity;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.ManifestRepository;
+import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.config.StorageProperties;
-import org.example.sectoriadb.model.BlobFileEntity;
-import org.example.sectoriadb.model.OperationLogEntity;
-import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.repository.OperationLogRepository;
-import org.example.sectoriadb.service.BlobService;
-import org.example.sectoriadb.service.HashTableCache;
-import org.example.sectoriadb.service.PoolService;
-import org.example.sectoriadb.service.impl.CuckooHashTable;
+import org.example.sectoriadb.storage.BlobService;
+import org.example.sectoriadb.storage.HashTableCache;
+import org.example.sectoriadb.storage.PoolService;
 import org.springframework.shell.standard.ShellComponent;
 import org.springframework.shell.standard.ShellMethod;
 import org.springframework.shell.standard.ShellOption;
@@ -31,9 +32,14 @@ public class StatusCommands {
     private final HashTableCache cache;
     private final StorageProperties props;
     private final OperationLogRepository opLogRepo;
+    private final ManifestRepository manifestRepo;
+    private final ChunkRepository chunkRepo;
 
     public StatusCommands(PoolService poolService, BlobService blobService, HashTableCache cache,
-                          StorageProperties props, OperationLogRepository opLogRepo) {
+                          StorageProperties props, OperationLogRepository opLogRepo, ManifestRepository manifestRepo,
+                          ChunkRepository chunkRepo) {
+        this.chunkRepo = chunkRepo;
+        this.manifestRepo = manifestRepo;
         this.poolService = poolService;
         this.blobService = blobService;
         this.cache       = cache;
@@ -50,17 +56,17 @@ public class StatusCommands {
         sb.append("═".repeat(60)).append('\n');
         for (PoolEntity pool : pools) {
             List<BlobFileEntity> blobs = blobService.listByPool(pool);
-            sb.append(String.format("Pool: %-20s  (%d blob(s))%n", pool.getName(), blobs.size()));
+            ManifestRepository.BucketStats stats = manifestRepo.countAndSize(pool.getName());
+            sb.append(String.format("Pool: %-20s  (%d blob(s), %d object(s), %s)%n", pool.getName(), blobs.size(),
+                    stats.objects(), ShellTable.humanSize(stats.bytes())));
             if (!blobs.isEmpty()) {
-                sb.append(ShellTable.blobTableHeader());
-                for (BlobFileEntity b : blobs) {
-                    CuckooHashTable.FillStats s = cache.get(b).getFillStats();
-                    sb.append(ShellTable.blobTableRow(b, s));
-                    if (s.fillPercent() >= props.getAutoResize().getThresholdPercent()) {
-                        sb.append(String.format(
-                                "    ⚠ Fill >= threshold (%d%%) — auto-resize will trigger%n",
-                                props.getAutoResize().getThresholdPercent()));
-                    }
+                sb.append(ShellTable.poolBlobTable(blobService, chunkRepo, blobs));
+                BlobService.PoolFill fill = blobService.poolFill(pool);
+                if (fill.fillPercent() >= props.getPool().getGrowThresholdPercent()) {
+                    sb.append(String.format(
+                            "    ⚠ Pool fill %.1f%% >= grow threshold (%d%%) — a blob is added%s%n",
+                            fill.fillPercent(), props.getPool().getGrowThresholdPercent(),
+                            fill.blobs() >= props.getPool().getMaxBlobs() ? " (max-blobs reached: raise it or 'resize')" : ""));
                 }
             }
             sb.append('\n');
@@ -76,26 +82,43 @@ public class StatusCommands {
                 "  default-chunk-size:             %s%n" +
                 "  default-num-buckets:            %d%n" +
                 "  max-evictions:                  %d%n" +
+                "  small-object.max-file-bytes:    %s%n" +
+                "  pool.initial-blobs:             %d%n" +
+                "  pool.max-blobs:                 %d%n" +
+                "  pool.grow-threshold-percent:    %d%%%n" +
                 "  auto-resize.enabled:            %s%n" +
-                "  auto-resize.threshold-percent:  %d%%%n" +
-                "  auto-resize.expand-percent:     %d%%%n" +
                 "  auto-resize.check-interval:     %s%n" +
+                "  gc.enabled:                     %s%n" +
+                "  gc.grace / interval:            %s / %s%n" +
+                "  gc.sweep-interval:              %s%n" +
+                "  gc.small-compact-dead-percent:  %d%%%n" +
+                "  cache.max-resident-tables:      %d (budget %s)%n" +
+                "  cache.max-open-small-blobs:     %d%n" +
                 "%n" +
                 "Edit application.properties and restart to change settings.",
                 ShellTable.humanSize(props.getDefaultChunkSize()),
                 props.getDefaultNumBuckets(),
                 props.getMaxEvictions(),
+                ShellTable.humanSize(props.getSmallObject().getMaxFileBytes()),
+                props.getPool().getInitialBlobs(),
+                props.getPool().getMaxBlobs(),
+                props.getPool().getGrowThresholdPercent(),
                 ar.isEnabled(),
-                ar.getThresholdPercent(),
-                ar.getExpandPercent(),
-                formatDuration(ar.getCheckIntervalMs()));
+                formatDuration(ar.getCheckIntervalMs()),
+                props.getGc().isEnabled(),
+                props.getGc().getGrace(), props.getGc().getInterval(),
+                props.getGc().getSweepInterval(),
+                props.getGc().getSmallCompactDeadPercent(),
+                props.getCache().getMaxResidentTables(),
+                props.getCache().getMaxResidentTableBytes() == 0 ? "none" : ShellTable.humanSize(props.getCache().getMaxResidentTableBytes()),
+                props.getCache().getMaxOpenSmallBlobs());
     }
 
     @ShellMethod(key = "logs", value = "Show the last N lines of the application log  |  logs [--n N]")
     public String logsTail(
             @ShellOption(defaultValue = "50", help = "Number of lines to show") int n) throws IOException {
         int lines = n;
-        Path logFile = Path.of("./sectoriadb-meta/sectoriadb.log");
+        Path logFile = Path.of(props.getMetaDir()).resolve("sectoriadb.log");   // same directory logback writes to
         if (!Files.exists(logFile)) {
             return "Log file not found: " + logFile.toAbsolutePath() +
                    "\nThe log file is created on first activity.";

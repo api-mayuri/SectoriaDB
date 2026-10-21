@@ -1,12 +1,16 @@
 package org.example.sectoriadb;
 
-import org.example.sectoriadb.model.ManifestEntity;
-import org.example.sectoriadb.model.PoolEntity;
-import org.example.sectoriadb.service.BlobService;
-import org.example.sectoriadb.service.FileStorageService;
-import org.example.sectoriadb.service.PoolService;
-import org.example.sectoriadb.service.ResizeService;
+import org.example.sectoriadb.catalog.ChunkRepository;
+import org.example.sectoriadb.catalog.ManifestEntity;
+import org.example.sectoriadb.catalog.PoolEntity;
+import org.example.sectoriadb.maintenance.ResizeService;
+import org.example.sectoriadb.storage.BlobService;
+import org.example.sectoriadb.storage.ObjectCatalog;
+import org.example.sectoriadb.storage.ObjectReader;
+import org.example.sectoriadb.storage.ObjectWriter;
+import org.example.sectoriadb.storage.PoolService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -17,9 +21,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Random;
 
-import org.junit.jupiter.api.io.TempDir;
-
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 @SpringBootTest
 class SectoriaDBIntegrationTest {
@@ -41,8 +47,11 @@ class SectoriaDBIntegrationTest {
 
     @Autowired PoolService poolService;
     @Autowired BlobService blobService;
-    @Autowired FileStorageService fileService;
+    @Autowired ObjectWriter writer;
+    @Autowired ObjectReader reader;
+    @Autowired ObjectCatalog catalog;
     @Autowired ResizeService resizeService;
+    @Autowired ChunkRepository chunkRepo;
 
     private PoolEntity newPool(String name) throws IOException {
         Path base = tempRoot.resolve(name);
@@ -67,7 +76,7 @@ class SectoriaDBIntegrationTest {
         Path src = tempRoot.resolve("full-src.bin");
         Files.write(src, original);
 
-        ManifestEntity m = fileService.store(src, pool);
+        ManifestEntity m = writer.store(src, pool);
 
         assertEquals(original.length, m.getTotalBytes());
         assertEquals(3, m.getTotalChunks());
@@ -75,7 +84,7 @@ class SectoriaDBIntegrationTest {
         assertEquals(1024, m.getLastChunkSize());
 
         Path restored = tempRoot.resolve("full-out.bin");
-        fileService.restore(m.getId(), restored);
+        reader.restore(m.getId(), restored);
 
         assertArrayEquals(original, Files.readAllBytes(restored),
                 "Full restore must produce byte-identical output");
@@ -92,14 +101,14 @@ class SectoriaDBIntegrationTest {
         Path src = tempRoot.resolve("range-src.bin");
         Files.write(src, original);
 
-        ManifestEntity m = fileService.store(src, pool);
+        ManifestEntity m = writer.store(src, pool);
         assertEquals(5, m.getTotalChunks());
 
         // Range [1200, +1800] spans chunks 1-2 (byte offsets 1024-3072)
         long startByte = 1200L;
         long length    = 1800L;
         Path out = tempRoot.resolve("range-out.bin");
-        fileService.restoreRange(m.getId(), out, startByte, length);
+        reader.restoreRange(m.getId(), out, startByte, length);
 
         byte[] extracted = Files.readAllBytes(out);
         assertEquals(length, extracted.length, "Extracted length must match requested length");
@@ -120,16 +129,16 @@ class SectoriaDBIntegrationTest {
         Path src = tempRoot.resolve("del-src.bin");
         Files.write(src, data);
 
-        ManifestEntity m = fileService.store(src, pool);
+        ManifestEntity m = writer.store(src, pool);
         String id = m.getId();
 
         // sanity: accessible before delete
-        assertNotNull(fileService.getActiveManifest(id));
+        assertNotNull(catalog.getActiveManifest(id));
 
-        fileService.delete(id);
+        catalog.delete(id);
 
         // must throw after soft-delete
-        assertThrows(IllegalArgumentException.class, () -> fileService.getActiveManifest(id),
+        assertThrows(IllegalArgumentException.class, () -> catalog.getActiveManifest(id),
                 "getActiveManifest must throw after soft-delete");
     }
 
@@ -144,17 +153,20 @@ class SectoriaDBIntegrationTest {
         Path src = tempRoot.resolve("resize-src.bin");
         Files.write(src, original);
 
-        ManifestEntity m = fileService.store(src, pool);
-        String blobId = m.getBlobFileId();
+        ManifestEntity m = writer.store(src, pool);
+        String blobId = chunkRepo.find(pool.getId(), m.chunkKeyArray()[0]).orElseThrow().blobId();
 
         // Resize blob from 32 → 64 buckets
         resizeService.resizeBlobFile(blobId, 64);
 
         // Manifest should still be valid (auto-rewired to new blob)
         Path restored = tempRoot.resolve("resize-out.bin");
-        fileService.restore(m.getId(), restored);
+        reader.restore(m.getId(), restored);
 
         assertArrayEquals(original, Files.readAllBytes(restored),
                 "After blob resize, full restore must still be byte-identical");
+        // the chunk index now points at the replacement blob
+        String after = chunkRepo.find(pool.getId(), m.chunkKeyArray()[0]).orElseThrow().blobId();
+        assertNotEquals(blobId, after);
     }
 }

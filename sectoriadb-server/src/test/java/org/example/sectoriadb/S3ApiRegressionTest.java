@@ -2,13 +2,13 @@ package org.example.sectoriadb;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
 import java.io.ByteArrayOutputStream;
+import java.net.Socket;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -19,13 +19,18 @@ import java.net.http.HttpResponse.BodyHandlers;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 import java.util.concurrent.CompletableFuture;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
  * Regression tests for S3 API bugs found in real use (auth disabled, so requests need no signature).
@@ -39,6 +44,7 @@ class S3ApiRegressionTest {
 
     @DynamicPropertySource
     static void props(DynamicPropertyRegistry r) {
+        r.add("sectoriadb.multipart.min-part-size", () -> "0");   // these tests use tiny parts on purpose
         r.add("sectoriadb.meta-dir",            () -> tempRoot.resolve("meta").toString());
         r.add("sectoriadb.data-dir",            () -> tempRoot.resolve("data").toString());
         r.add("sectoriadb.auto-resize.enabled", () -> "false");
@@ -165,7 +171,7 @@ class S3ApiRegressionTest {
         assertEquals("bytes 4090-8200/50000", part.headers().firstValue("Content-Range").orElse(""));
         assertEquals("bytes", part.headers().firstValue("Accept-Ranges").orElse(""),
                 "players need Accept-Ranges on 206 responses");
-        assertArrayEquals(java.util.Arrays.copyOfRange(data, 4090, 8201), part.body());
+        assertArrayEquals(Arrays.copyOfRange(data, 4090, 8201), part.body());
 
         // end beyond size is clamped, start beyond size is 416
         var tail = send(HttpRequest.newBuilder(uri("/range-test/v.bin")).header("Range", "bytes=49990-99999").GET());
@@ -304,5 +310,308 @@ class S3ApiRegressionTest {
         assertTrue(new String(rb.body()).contains("BucketNotEmpty"));
         var bad = send(HttpRequest.newBuilder(uri("/..")).PUT(BodyPublishers.noBody()));
         assertTrue(bad.statusCode() >= 400, "path-like bucket names must be rejected");
+    }
+
+    // ── incident: Spring MVC errors were reported as 500 InternalError (or Spring's JSON page) ──
+
+    private static String code(HttpResponse<byte[]> r) {
+        Matcher m = Pattern.compile("<Code>([^<]+)</Code>").matcher(new String(r.body(), StandardCharsets.UTF_8));
+        return m.find() ? m.group(1) : "?" + new String(r.body(), StandardCharsets.UTF_8);
+    }
+
+    @Test
+    void unsupportedMethodOnKnownPathIsS3MethodNotAllowed() throws Exception {
+        mkBucket("mvc-405");
+        var r = send(HttpRequest.newBuilder(uri("/mvc-405/k")).method("PATCH", BodyPublishers.noBody()));
+        assertEquals(405, r.statusCode());
+        assertEquals("MethodNotAllowed", code(r));
+        assertTrue(r.headers().firstValue("Content-Type").orElse("").contains("xml"), "S3 XML, not Spring JSON");
+        // service root accepts GET only
+        var root = send(HttpRequest.newBuilder(uri("/")).DELETE());
+        assertEquals(405, root.statusCode());
+        assertEquals("MethodNotAllowed", code(root));
+    }
+
+    @Test
+    void malformedQueryParameterIsInvalidArgumentNot500() throws Exception {
+        mkBucket("mvc-400");
+        var r = send(HttpRequest.newBuilder(uri("/mvc-400?max-keys=abc")).GET());
+        assertEquals(400, r.statusCode());
+        assertEquals("InvalidArgument", code(r));
+        var v2 = send(HttpRequest.newBuilder(uri("/mvc-400?list-type=x")).GET());
+        assertEquals(400, v2.statusCode());
+        assertEquals("InvalidArgument", code(v2));
+    }
+
+    // ── ListObjectVersions on an unversioned bucket: objects as version "null" (SDK bucket cleanup relies on it) ──
+
+    @Test
+    void listObjectVersionsListsObjectsAsNullVersion() throws Exception {
+        mkBucket("ver-list");
+        put("ver-list", "a/1.txt", "one".getBytes());
+        put("ver-list", "b.txt", "two".getBytes());
+        var r = send(HttpRequest.newBuilder(uri("/ver-list?versions")).GET());
+        assertEquals(200, r.statusCode());
+        String xml = new String(r.body(), StandardCharsets.UTF_8);
+        assertTrue(xml.contains("<ListVersionsResult"), xml);
+        assertEquals(2, xml.split("<Version>", -1).length - 1, xml);
+        assertTrue(xml.contains("<Key>a/1.txt</Key><VersionId>null</VersionId><IsLatest>true</IsLatest>"), xml);
+        // paging: one key per page, then the marker
+        var p1 = new String(send(HttpRequest.newBuilder(uri("/ver-list?versions&max-keys=1")).GET()).body(), StandardCharsets.UTF_8);
+        assertTrue(p1.contains("<IsTruncated>true</IsTruncated>") && p1.contains("<NextKeyMarker>a/1.txt</NextKeyMarker>"), p1);
+        var p2 = new String(send(HttpRequest.newBuilder(uri("/ver-list?versions&max-keys=1&key-marker=a%2F1.txt")).GET()).body(), StandardCharsets.UTF_8);
+        assertTrue(p2.contains("<Key>b.txt</Key>") && !p2.contains("a/1.txt</Key>"), p2);
+    }
+
+    @Test
+    void multiObjectDeleteQuietSuppressesDeletedEntriesAndAcceptsVersionId() throws Exception {
+        mkBucket("del-quiet");
+        put("del-quiet", "x", "1".getBytes());
+        put("del-quiet", "y", "2".getBytes());
+        String body = "<Delete><Quiet>true</Quiet><Object><Key>x</Key><VersionId>null</VersionId></Object>"
+                + "<Object><Key>y</Key></Object></Delete>";
+        var r = send(HttpRequest.newBuilder(uri("/del-quiet?delete")).POST(BodyPublishers.ofString(body)));
+        assertEquals(200, r.statusCode());
+        assertFalse(new String(r.body()).contains("<Deleted>"), new String(r.body()));
+        assertEquals(404, get("del-quiet", "x").statusCode());
+        assertEquals(404, get("del-quiet", "y").statusCode());
+    }
+
+    /** s3-tests test_bucket_create_special_key_names: keys that are only spaces were trimmed to "" and never deleted. */
+    @Test
+    void multiObjectDeleteKeepsWhitespaceInKeys() throws Exception {
+        mkBucket("del-space");
+        for (String k : new String[]{" ", "_ ", " lead", "trail ", "a  b"}) {
+            assertEquals(200, put("del-space", k, "v".getBytes()).statusCode(), k);
+        }
+        String body = "<Delete><Object><Key> </Key></Object><Object><Key>_ </Key></Object><Object><Key> lead</Key></Object>"
+                + "<Object><Key>trail </Key></Object><Object><Key>a  b</Key></Object></Delete>";
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/del-space?delete")).POST(BodyPublishers.ofString(body))).statusCode());
+        var list = new String(send(HttpRequest.newBuilder(uri("/del-space")).GET()).body(), StandardCharsets.UTF_8);
+        assertFalse(list.contains("<Key>"), "bucket must be empty after the multi-delete: " + list);
+    }
+
+    // ── s3-tests listing details ─────────────────────────────────────────────
+
+    @Test
+    void listObjectsHonoursMaxKeysZeroEncodingTypeAndEchoesMarkers() throws Exception {
+        mkBucket("list-det");
+        put("list-det", "asdf+b", "1".getBytes());
+        put("list-det", "foo/bar", "2".getBytes());
+        put("list-det", "quux ab/c", "3".getBytes());
+        // max-keys=0 is an empty page, not "everything"
+        String zero = new String(send(HttpRequest.newBuilder(uri("/list-det?max-keys=0")).GET()).body(), StandardCharsets.UTF_8);
+        assertFalse(zero.contains("<Key>"), zero);
+        assertTrue(zero.contains("<IsTruncated>false</IsTruncated>"), zero);
+        // V1 always has <Marker/> and <Owner>, V2 echoes StartAfter
+        String v1 = new String(send(HttpRequest.newBuilder(uri("/list-det")).GET()).body(), StandardCharsets.UTF_8);
+        assertTrue(v1.contains("<Marker/>") || v1.contains("<Marker></Marker>"), v1);
+        assertTrue(v1.contains("<Owner>"), v1);
+        String v2 = new String(send(HttpRequest.newBuilder(uri("/list-det?list-type=2&start-after=asdf%2Bb")).GET()).body(), StandardCharsets.UTF_8);
+        assertTrue(v2.contains("<StartAfter>asdf+b</StartAfter>"), v2);
+        assertFalse(v2.contains("<Owner>"), v2);
+        // encoding-type=url
+        String enc = new String(send(HttpRequest.newBuilder(uri("/list-det?delimiter=/&encoding-type=url")).GET()).body(), StandardCharsets.UTF_8);
+        assertTrue(enc.contains("<Key>asdf%2Bb</Key>"), enc);
+        assertTrue(enc.contains("<Prefix>quux%20ab/</Prefix>") && enc.contains("<EncodingType>url</EncodingType>"), enc);
+        assertEquals(400, send(HttpRequest.newBuilder(uri("/list-det?encoding-type=bogus")).GET()).statusCode());
+    }
+
+    @Test
+    void multiObjectDeleteOfMoreThanThousandKeysIsRejectedAndBadBucketNamesAreInvalidBucketName() throws Exception {
+        mkBucket("del-limit");
+        StringBuilder sb = new StringBuilder("<Delete>");
+        for (int i = 0; i < 1001; i++) sb.append("<Object><Key>k").append(i).append("</Key></Object>");
+        var r = send(HttpRequest.newBuilder(uri("/del-limit?delete")).POST(BodyPublishers.ofString(sb.append("</Delete>").toString())));
+        assertEquals(400, r.statusCode());
+        assertEquals("MalformedXML", code(r));
+        var bad = send(HttpRequest.newBuilder(uri("/ab")).PUT(BodyPublishers.noBody()));
+        assertEquals(400, bad.statusCode());
+        assertEquals("InvalidBucketName", code(bad));
+    }
+
+    /** warp "multipart" reads parts with GET ?partNumber=N; the whole object came back and was mistaken for the part. */
+    @Test
+    void getWithPartNumberReturnsThatPartOfAMultipartObject() throws Exception {
+        mkBucket("partnum");
+        put("partnum", "plain", "hello".getBytes());
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/partnum/plain?partNumber=1")).GET()).statusCode());
+        assertEquals(416, send(HttpRequest.newBuilder(uri("/partnum/plain?partNumber=2")).GET()).statusCode());
+        assertEquals(400, send(HttpRequest.newBuilder(uri("/partnum/plain?partNumber=0")).GET()).statusCode());
+        // a two-part upload
+        var init = send(HttpRequest.newBuilder(uri("/partnum/mp?uploads")).POST(BodyPublishers.noBody()));
+        Matcher m = Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(new String(init.body()));
+        assertTrue(m.find());
+        String uid = m.group(1);
+        byte[] p1 = random(5 * 1024 * 1024, 1), p2 = random(1000, 2);
+        var r1 = send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=1&uploadId=" + uid)).PUT(BodyPublishers.ofByteArray(p1)));
+        var r2 = send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=2&uploadId=" + uid)).PUT(BodyPublishers.ofByteArray(p2)));
+        String body = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>" + r1.headers().firstValue("ETag").get()
+                + "</ETag></Part><Part><PartNumber>2</PartNumber><ETag>" + r2.headers().firstValue("ETag").get() + "</ETag></Part></CompleteMultipartUpload>";
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/partnum/mp?uploadId=" + uid)).POST(BodyPublishers.ofString(body))).statusCode());
+        var part1 = send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=1")).GET());
+        assertEquals(206, part1.statusCode());
+        assertArrayEquals(p1, part1.body());
+        assertEquals("bytes 0-" + (p1.length - 1) + "/" + (p1.length + p2.length), part1.headers().firstValue("Content-Range").get());
+        assertEquals("2", part1.headers().firstValue("x-amz-mp-parts-count").get());
+        var part2 = send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=2")).GET());
+        assertEquals(206, part2.statusCode());
+        assertArrayEquals(p2, part2.body());
+        assertEquals("bytes " + p1.length + "-" + (p1.length + p2.length - 1) + "/" + (p1.length + p2.length),
+                part2.headers().firstValue("Content-Range").get());
+        var head2 = send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=2")).method("HEAD", BodyPublishers.noBody()));
+        assertEquals(206, head2.statusCode());
+        assertEquals("1000", head2.headers().firstValue("Content-Length").get());
+        assertEquals("2", head2.headers().firstValue("x-amz-mp-parts-count").get());
+        assertEquals(416, send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=3")).GET()).statusCode());
+        assertEquals(400, send(HttpRequest.newBuilder(uri("/partnum/mp?partNumber=1")).header("Range", "bytes=0-9").GET()).statusCode(),
+                "partNumber and Range cannot be combined");
+        // a part of a multipart object is not the whole object, and the whole object is still the concatenation
+        var whole = get("partnum", "mp");
+        assertEquals(200, whole.statusCode());
+        assertArrayEquals(Stream.of(p1, p2).reduce(new byte[0], (a, b) -> {
+            byte[] c = Arrays.copyOf(a, a.length + b.length);
+            System.arraycopy(b, 0, c, a.length, b.length);
+            return c;
+        }), whole.body());
+        assertEquals(5 * 1024 * 1024 + 1000, get("partnum", "mp").body().length);
+    }
+
+    /** A zero-length part used to fall through the part branch: the response was 200 with the WHOLE object. */
+    @Test
+    void getAndHeadOfAZeroLengthPartAreEmptyNotTheWholeObject() throws Exception {
+        mkBucket("zero-part");
+        var init = send(HttpRequest.newBuilder(uri("/zero-part/mp?uploads")).POST(BodyPublishers.noBody()));
+        Matcher m = Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(new String(init.body()));
+        assertTrue(m.find());
+        String uid = m.group(1);
+        byte[] p1 = random(5 * 1024 * 1024, 11);
+        var r1 = send(HttpRequest.newBuilder(uri("/zero-part/mp?partNumber=1&uploadId=" + uid)).PUT(BodyPublishers.ofByteArray(p1)));
+        var r2 = send(HttpRequest.newBuilder(uri("/zero-part/mp?partNumber=2&uploadId=" + uid)).PUT(BodyPublishers.noBody()));
+        assertEquals(200, r2.statusCode());
+        String body = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>" + r1.headers().firstValue("ETag").get()
+                + "</ETag></Part><Part><PartNumber>2</PartNumber><ETag>" + r2.headers().firstValue("ETag").get() + "</ETag></Part></CompleteMultipartUpload>";
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/zero-part/mp?uploadId=" + uid)).POST(BodyPublishers.ofString(body))).statusCode());
+
+        var part2 = send(HttpRequest.newBuilder(uri("/zero-part/mp?partNumber=2")).GET());
+        assertEquals(206, part2.statusCode());
+        assertEquals(0, part2.body().length, "the part is empty, the object is " + p1.length + " bytes");
+        assertEquals("2", part2.headers().firstValue("x-amz-mp-parts-count").get());
+        var head2 = send(HttpRequest.newBuilder(uri("/zero-part/mp?partNumber=2")).method("HEAD", BodyPublishers.noBody()));
+        assertEquals(206, head2.statusCode());
+        assertEquals("0", head2.headers().firstValue("Content-Length").get());
+        var part1 = send(HttpRequest.newBuilder(uri("/zero-part/mp?partNumber=1")).GET());
+        assertEquals(206, part1.statusCode());
+        assertArrayEquals(p1, part1.body());
+    }
+
+    @Test
+    void putWithUploadIdButNoPartNumberDoesNotOverwriteTheObject() throws Exception {
+        mkBucket("put-uid");
+        put("put-uid", "k", "original".getBytes());
+        var r = send(HttpRequest.newBuilder(uri("/put-uid/k?uploadId=nope")).PUT(BodyPublishers.ofString("clobber")));
+        assertEquals(501, r.statusCode());
+        assertEquals("original", new String(get("put-uid", "k").body()));
+    }
+
+    /** GET ?object-lock returned the bucket listing, GET ?retention / ?attributes the object bytes, both with 200. */
+    @Test
+    void unsupportedSubresourcesAreNotImplementedNotAListingOrTheObject() throws Exception {
+        mkBucket("subres");
+        put("subres", "k", "bytes".getBytes());
+        for (String q : new String[]{"object-lock", "ownershipControls", "website", "logging", "notification", "policyStatus"}) {
+            var r = send(HttpRequest.newBuilder(uri("/subres?" + q)).GET());
+            assertEquals(501, r.statusCode(), q);
+            assertEquals("NotImplemented", code(r), q);
+        }
+        for (String q : new String[]{"attributes", "retention", "legal-hold", "torrent"}) {
+            var r = send(HttpRequest.newBuilder(uri("/subres/k?" + q)).GET());
+            assertEquals(501, r.statusCode(), q);
+        }
+        // a plain read and a versionId=null read (what SDKs send for unversioned buckets) keep working
+        assertEquals("bytes", new String(get("subres", "k").body()));
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/subres/k?versionId=null")).GET()).statusCode());
+    }
+
+    @Test
+    void completeMultipartWithoutPartsIsMalformedXmlNot500() throws Exception {
+        mkBucket("mp-empty");
+        var init = send(HttpRequest.newBuilder(uri("/mp-empty/k?uploads")).POST(BodyPublishers.noBody()));
+        Matcher m = Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(new String(init.body()));
+        assertTrue(m.find());
+        var r = send(HttpRequest.newBuilder(uri("/mp-empty/k?uploadId=" + m.group(1)))
+                .POST(BodyPublishers.ofString("<CompleteMultipartUpload></CompleteMultipartUpload>")));
+        assertEquals(400, r.statusCode());
+        assertEquals("MalformedXML", code(r));
+        var junk = send(HttpRequest.newBuilder(uri("/mp-empty/k?uploadId=" + m.group(1))).POST(BodyPublishers.ofString("not xml")));
+        assertEquals(400, junk.statusCode());
+    }
+
+    /**
+     * minio/mint (minio-java deleteBucketTags): DELETE /bucket?tagging fell through to DeleteBucket and removed the
+     * (empty) bucket; DELETE /bucket/key?retention would have removed the object.
+     */
+    @Test
+    void deleteWithUnclaimedSubresourceDoesNotDestroyTheBucketOrTheObject() throws Exception {
+        mkBucket("del-sub");
+        for (String q : new String[]{"tagging", "lifecycle", "cors", "encryption", "website"}) {
+            var r = send(HttpRequest.newBuilder(uri("/del-sub?" + q)).DELETE());
+            assertEquals(501, r.statusCode(), q);
+            assertEquals(200, send(HttpRequest.newBuilder(uri("/del-sub")).GET()).statusCode(), "bucket must survive DELETE ?" + q);
+        }
+        put("del-sub", "k", "data".getBytes());
+        assertEquals(501, send(HttpRequest.newBuilder(uri("/del-sub/k?retention")).DELETE()).statusCode());
+        assertEquals(501, send(HttpRequest.newBuilder(uri("/del-sub/k?retention")).PUT(BodyPublishers.ofString("<x/>"))).statusCode());
+        assertEquals("data", new String(get("del-sub", "k").body()));
+        // the AWS SDKs for JavaScript / Go add x-id=<Operation> to every request: that must keep working
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/del-xid?x-id=CreateBucket")).PUT(BodyPublishers.noBody())).statusCode());
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/del-xid/o?x-id=PutObject")).PUT(BodyPublishers.ofString("v"))).statusCode());
+        assertEquals(204, send(HttpRequest.newBuilder(uri("/del-xid/o?x-id=DeleteObject")).DELETE()).statusCode());
+        // presigned PUT / DELETE URLs carry the SigV4 parameters in the query string (mint: PresignedPut regressed)
+        String presign = "X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature=00";
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/del-xid/p?" + presign)).PUT(BodyPublishers.ofString("presigned"))).statusCode());
+        assertEquals("presigned", new String(get("del-xid", "p").body()));
+        assertEquals(204, send(HttpRequest.newBuilder(uri("/del-xid/p?" + presign)).DELETE()).statusCode());
+        assertEquals(204, send(HttpRequest.newBuilder(uri("/del-xid?x-id=DeleteBucket")).DELETE()).statusCode());
+    }
+
+    /** minio-py test_put_object (11 MiB = multipart): user metadata and content headers given at initiate were lost. */
+    @Test
+    void multipartUploadKeepsUserMetadataAndContentHeaders() throws Exception {
+        mkBucket("mp-meta");
+        var init = send(HttpRequest.newBuilder(uri("/mp-meta/k?uploads")).header("x-amz-meta-testing", "value")
+                .header("Cache-Control", "max-age=60").header("Content-Disposition", "attachment; filename=a.bin")
+                .header("Content-Language", "ru").header("Content-Type", "text/bla").POST(BodyPublishers.noBody()));
+        Matcher m = Pattern.compile("<UploadId>([^<]+)</UploadId>").matcher(new String(init.body()));
+        assertTrue(m.find());
+        String uid = m.group(1);
+        var r1 = send(HttpRequest.newBuilder(uri("/mp-meta/k?partNumber=1&uploadId=" + uid)).PUT(BodyPublishers.ofByteArray(new byte[100])));
+        String body = "<CompleteMultipartUpload><Part><PartNumber>1</PartNumber><ETag>" + r1.headers().firstValue("ETag").get()
+                + "</ETag></Part></CompleteMultipartUpload>";
+        assertEquals(200, send(HttpRequest.newBuilder(uri("/mp-meta/k?uploadId=" + uid)).POST(BodyPublishers.ofString(body))).statusCode());
+        var head = send(HttpRequest.newBuilder(uri("/mp-meta/k")).method("HEAD", BodyPublishers.noBody()));
+        assertEquals("value", head.headers().firstValue("x-amz-meta-testing").orElse(null));
+        assertEquals("max-age=60", head.headers().firstValue("Cache-Control").orElse(null));
+        assertEquals("attachment; filename=a.bin", head.headers().firstValue("Content-Disposition").orElse(null));
+        assertEquals("ru", head.headers().firstValue("Content-Language").orElse(null));
+        assertEquals("text/bla", head.headers().firstValue("Content-Type").orElse(null));
+    }
+
+    /** security probe: Content-Length of 6 TiB without a body held a worker thread until the 10 minute timeout. */
+    @Test
+    void declaredUploadSizeOverFiveGiBIsRefusedImmediately() throws Exception {
+        mkBucket("too-big");
+        try (Socket sock = new Socket("localhost", port)) {
+            sock.setSoTimeout(5000);
+            sock.getOutputStream().write(("PUT /too-big/huge HTTP/1.1\r\nHost: localhost\r\nContent-Length: "
+                    + 6L * 1024 * 1024 * 1024 * 1024 + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            sock.getOutputStream().flush();
+            byte[] buf = new byte[2048];
+            int n = sock.getInputStream().read(buf);
+            String resp = new String(buf, 0, Math.max(n, 0), StandardCharsets.UTF_8);
+            assertTrue(resp.startsWith("HTTP/1.1 400"), resp);
+            assertTrue(resp.contains("EntityTooLarge"), resp);
+        }
+        assertEquals(404, get("too-big", "huge").statusCode());
     }
 }

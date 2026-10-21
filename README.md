@@ -1,104 +1,74 @@
 # SectoriaDB
 
-S3-совместимое хранилище объектов на Java и Spring Boot. Работает с `aws cli`, SDK и веб-интерфейсами, которые
-умеют разговаривать по S3 API. Данные лежат в собственных блоб-файлах с кукушкиным хэшированием (Cuckoo hash table),
-метаданные — в обычных JSON-файлах, без внешней базы данных.
+S3-совместимое хранилище объектов на Java 21 и Spring Boot. Работает с `aws cli`, SDK и веб-интерфейсами, которые умеют S3 API (path-style, подпись SigV4).
+Данные лежат в собственных блоб-файлах: крупные объекты — чанками в кукушкиных хэш-таблицах с дедупликацией, мелкие (меньше 16 КиБ) — в append-only журналах;
+метаданные — во встроенном транзакционном хранилище (copy-on-write B+-дерево в одном файле `sectoria.db`), без внешней базы данных.
 
-> Проект учебный и экспериментальный. Перед использованием для важных данных прочитайте раздел
-> [Ограничения](#ограничения).
+> Проект учебный и экспериментальный. Перед использованием для важных данных прочитайте [известные ограничения](docs/README.md#известные-ограничения-и-планы).
+>
+> Текущее состояние, ветки и что осталось сделать — [docs/status.md](docs/status.md).
 
-## Содержание
-
-- [Возможности](#возможности)
-- [Быстрый старт в Docker](#быстрый-старт-в-docker)
-- [Ключи доступа](#ключи-доступа)
-- [Работа через AWS CLI](#работа-через-aws-cli)
-- [Запуск без Docker](#запуск-без-docker)
-- [Настройка](#настройка)
-- [Как это устроено](#как-это-устроено)
-- [Тесты](#тесты)
-- [Безопасность](#безопасность)
-- [Ограничения](#ограничения)
+> **Перед боевым использованием прочитайте [рекомендации](docs/guide/recommendations.md):** когда SectoriaDB подходит, TLS (nginx), резервные копии, память, мониторинг.
 
 ## Возможности
 
-**Операции S3**
-
-| Область | Что поддерживается |
-|---|---|
-| Бакеты | создание, удаление, `HeadBucket`, список бакетов |
-| Объекты | `PutObject`, `GetObject` (в том числе `Range`), `HeadObject`, `DeleteObject`, `CopyObject` |
-| Листинг | `ListObjectsV2` и `ListObjects` (v1) с префиксами и пагинацией |
-| Multipart | создание, загрузка частей, завершение, отмена, список частей и загрузок, копирование части |
-| Доступ | ACL бакетов и объектов, политики бакетов, публичное чтение, presigned-ссылки |
-| Прочее | теги объектов, заглушки для `location`, `versioning`, `cors`, `lifecycle`, `encryption` |
-
-**Аутентификация**
-
-- AWS Signature Version 4: заголовок `Authorization` и presigned-ссылки.
-- Несколько ключей доступа, их можно включать, выключать и удалять без перезапуска.
-- Поддержка `aws-chunked` (потоковая подпись, которую использует AWS CLI).
-
-**Эксплуатация**
-
-- Загрузка и скачивание больших файлов потоком, без чтения всего файла в память.
-- Автоматическое расширение блоба, когда он заполняется.
-- Консоль администратора (Spring Shell) и журнал операций.
-- Готовые `Dockerfile` и `docker-compose.yml`.
+- **S3 API:** бакеты, `PutObject`/`GetObject` (`Range`, условные заголовки)/`HeadObject`/`DeleteObject`/`DeleteObjects`/`CopyObject`, `ListObjects` v1 и v2, ACL, политики бакета, presigned-ссылки,
+  полный multipart (`Complete` без копирования данных, идемпотентный, `GET ?partNumber`). Что поддержано и чем отличается от AWS — [guide/s3-usage.md](docs/guide/s3-usage.md).
+- **Целостность от клиента до диска:** SigV4 и подписи `aws-chunked`, `x-amz-checksum-*` (CRC32, CRC32C, CRC64NVME, SHA-1, SHA-256) и `Content-MD5`, CRC32C каждого чанка и всего объекта на каждом чтении, `verify-all` — [architecture/integrity.md](docs/architecture/integrity.md).
+- **Надёжность:** атомарные коммиты метаданных, переживает `kill -9` и потерю питания; при сбое записи метахранилища чтение продолжается, запись восстанавливается сама.
+- **Место:** дедупликация по бакету, сборщик мусора возвращает место удалённых объектов, рост бакета добавлением блобов, расширение блоба без остановки записи.
+- **Эксплуатация:** Docker и compose, несколько ключей доступа с включением/выключением без перезапуска, консоль администратора, метрики Prometheus, стенд Grafana, готовые алерты.
 
 ## Быстрый старт в Docker
 
-Понадобятся Docker и Docker Compose.
+Нужны Docker и Docker Compose.
 
-1. Создайте файл с настройками:
+```bash
+cp .env.example .env
+# откройте .env и задайте ключ (секрет не короче 16 символов):
+#   SECTORIADB_S3_ACCESS_KEY=ваш_access_key
+#   SECTORIADB_S3_SECRET_KEY=ваш_секретный_ключ_не_короче_16_символов
+deploy/gen-self-signed.sh      # сертификат для проверки (боевой — в deploy/certs/, см. guide/operations.md)
+docker compose up -d --build
+```
 
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Задайте ключ доступа. Откройте `.env` и укажите свои значения:
-
-   ```dotenv
-   SECTORIADB_S3_ACCESS_KEY=ваш_access_key
-   SECTORIADB_S3_SECRET_KEY=ваш_секретный_ключ_не_короче_16_символов
-   ```
-
-3. Запустите сервис:
-
-   ```bash
-   docker compose up -d --build
-   ```
-
-После запуска:
+TLS терминирует nginx из compose; порт самого сервера (`8080`) на хост не публикуется.
 
 | Адрес | Что это |
 |---|---|
-| `http://localhost:8080` | S3 API |
-| `http://localhost:8081` | веб-интерфейс s3manager (сторонний, необязательный) |
+| `https://localhost` | S3 API (nginx, TLS); `http://localhost` отвечает `301` на HTTPS |
+| `http://127.0.0.1:9464/actuator/prometheus` | метрики и `/actuator/health` (без подписи, только loopback) |
 
-Данные хранятся в Docker-томах `sectoriadb-meta` и `sectoriadb-data` и переживают пересборку и перезапуск контейнера.
+Разработка без TLS: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build` — дополнительно `http://localhost:8080` (S3, только loopback) и `http://localhost:8081` (веб-интерфейс s3manager, сторонний, необязательный).
 
-После изменения кода пересобирайте образ той же командой: `docker compose up -d --build sectoriadb`.
+Всё состояние (метаданные, блобы, спул загрузок) лежит в одном Docker-томе `sectoriadb-store` (`/data/meta`, `/data/storage`) и переживает пересборку; его снимок атомарен для метаданных и блобов (резервное копирование и шифрование — в operations.md). Подробности — [guide/operations.md](docs/guide/operations.md).
+
+## Запуск из jar
+
+Нужны JDK 21 и Maven.
+
+```bash
+mvn -B package -DskipTests
+java -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar                       # сервер + интерактивная консоль (help)
+java -Dspring.shell.interactive.enabled=false -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar
+# разработка без авторизации:  -Dsectoriadb.s3.auth.enabled=false
+```
+
+Пока нет ни одного ключа, сервер отвечает `403` на все запросы. Каталоги по умолчанию — `./sectoriadb-meta` и `./sectoriadb-data`; все свойства — [guide/configuration.md](docs/guide/configuration.md).
 
 ## Ключи доступа
 
-Ключами управляют командами консоли администратора. Они работают рядом с запущенным сервером:
+Команды работают рядом с запущенным сервером ([все команды консоли](docs/guide/admin-shell.md)):
 
 ```bash
 X="docker compose exec -T sectoriadb java -jar /app/sectoriadb.jar"
-
-$X mk-key --count 3 --desc "для бэкапов"   # создать ключи
-$X keys                                    # список ключей
-$X keys --secret                           # список вместе с секретами
-$X disable-key --id ID                     # временно выключить
-$X enable-key --id ID                      # включить обратно
-$X rm-key --id ID1,ID2 --yes               # удалить
+$X mk-key --count 3 --desc "для бэкапов"    # создать ключи
+$X keys --secret                            # список с секретами
+$X disable-key --id ID                      # выключить; enable-key — включить
+$X rm-key --id ID1,ID2 --yes                # удалить
 ```
 
-Один ключ — одному приложению или человеку. Тогда любой ключ можно отозвать, не ломая остальных.
-
-Ключи также можно передать через переменные окружения (`SECTORIADB_S3_CREDENTIALS`, формат
-`ACCESS:SECRET:описание`, несколько ключей через запятую). Подробности — в [`.env.example`](.env.example).
+Один ключ — одному приложению или человеку: любой можно отозвать, не ломая остальных. Ключи можно передать и через `SECTORIADB_S3_CREDENTIALS=ACCESS:SECRET|описание,…` ([.env.example](.env.example)).
 
 ## Работа через AWS CLI
 
@@ -106,137 +76,35 @@ $X rm-key --id ID1,ID2 --yes               # удалить
 aws configure set aws_access_key_id     <AccessKeyId>
 aws configure set aws_secret_access_key <SecretKey>
 aws configure set default.region        us-east-1
+aws configure set default.ca_bundle     "$PWD/deploy/certs/fullchain.pem"   # только для самоподписанного сертификата
 
-aws s3 --endpoint-url http://localhost:8080 mb s3://my-bucket
-aws s3 --endpoint-url http://localhost:8080 cp photo.jpg s3://my-bucket/
-aws s3 --endpoint-url http://localhost:8080 ls s3://my-bucket
-aws s3 --endpoint-url http://localhost:8080 cp s3://my-bucket/photo.jpg ./copy.jpg
-aws s3 --endpoint-url http://localhost:8080 rm s3://my-bucket/photo.jpg
+aws s3 --endpoint-url https://localhost mb s3://my-bucket
+aws s3 --endpoint-url https://localhost cp photo.jpg s3://my-bucket/
+aws s3 --endpoint-url https://localhost ls s3://my-bucket
+aws s3 --endpoint-url https://localhost cp s3://my-bucket/photo.jpg ./copy.jpg
+aws s3 --endpoint-url https://localhost presign s3://my-bucket/photo.jpg --expires-in 3600
 ```
 
-Временная ссылка на файл (по умолчанию объекты приватны):
+Регион клиента должен совпадать с `sectoriadb.s3.region` (по умолчанию `us-east-1`). Объекты приватны; как открыть их всем — [guide/s3-usage.md](docs/guide/s3-usage.md).
 
-```bash
-aws s3 --endpoint-url http://localhost:8080 presign s3://my-bucket/photo.jpg --expires-in 3600
-```
+## Документация
 
-Как открыть файл или бакет всем, как работает публичный доступ и чего лучше не делать — в
-[руководстве по S3](docs/S3-GUIDE.md).
+Индекс и порядок чтения — [docs/README.md](docs/README.md).
 
-## Запуск без Docker
-
-Нужны JDK 21 и Maven.
-
-```bash
-mvn package -DskipTests
-
-# С авторизацией (по умолчанию)
-java -Dspring.shell.interactive.enabled=false -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar
-
-# Для разработки, без авторизации
-java -Dspring.shell.interactive.enabled=false -Dsectoriadb.s3.auth.enabled=false \
-     -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar
-```
-
-Без флага `spring.shell.interactive.enabled=false` запускается интерактивная консоль администратора.
-Список команд выводит `help`.
-
-Основные команды консоли:
-
-| Группа | Команды |
+| Раздел | Документы |
 |---|---|
-| Пулы | `mkpool`, `pools`, `pool`, `rmpool` |
-| Блобы | `mkblob`, `blobs`, `blob`, `resize`, `rmblob` |
-| Файлы | `store`, `ls`, `info`, `get`, `rm` |
-| Ключи | `mk-key`, `keys`, `rm-key`, `enable-key`, `disable-key` |
-| Доступ | `bucket-acl`, `object-acl`, `public-list` |
-| Служебные | `status`, `config`, `logs`, `audit` |
+| Руководства | [S3 API](docs/guide/s3-usage.md) · [консоль](docs/guide/admin-shell.md) · [эксплуатация](docs/guide/operations.md) · [конфигурация](docs/guide/configuration.md) · [мониторинг](docs/guide/monitoring.md) · [разработка](docs/guide/development.md) |
+| Архитектура | [обзор](docs/architecture/overview.md) · [движок](docs/architecture/storage-engine.md) · [метахранилище](docs/architecture/metastore.md) · [модель метаданных](docs/architecture/metadata-model.md) · [сборка мусора](docs/architecture/garbage-collection.md) · [целостность](docs/architecture/integrity.md) · [безопасность](docs/architecture/security.md) |
+| Тестирование | [нагрузка](docs/testing/benchmarking.md) · [совместимость](docs/testing/compatibility.md) · [отказы](docs/testing/fault-injection.md) · [результаты](docs/reports/sandbox-results.md) |
+| История | [CHANGELOG](CHANGELOG.md) · [документы этапов](docs/history/ROADMAP.md) |
 
-## Настройка
+## Безопасность в двух словах
 
-Параметры задаются в `application.properties`, системными свойствами (`-Dsectoriadb.…`) или переменными окружения.
+- Не публикуйте `.env` (там реальные ключи), `deploy/certs/` и порты `9464` (метрики без подписи), `8080` (без TLS) и `8081` (s3manager с полными правами) наружу.
+- Не отключайте авторизацию (`sectoriadb.s3.auth.enabled=false`) и не включайте `allow-open-setup` на сервере, доступном из сети. Сервер не терминирует TLS: в compose это делает nginx, `sectoriadb.s3.require-secure-transport=true` отвергает запросы не по HTTPS ([guide/operations.md](docs/guide/operations.md#tls-через-nginx)).
+- Права ключа задаёт **IAM-политика** (стандартный документ AWS, `key-policy`, примеры в [deploy/iam](deploy/iam/)); пользователей, ролей и STS нет. **Ключ без политики имеет полный доступ ко всему**: выдавайте приложениям и арендаторам отдельные ключи с политиками. `public-read` на бакете открывает только листинг; чтение объекта открывают ACL объекта или политика. Подробности — [architecture/security.md](docs/architecture/security.md).
+- Перед важными операциями делайте согласованную копию обоих томов ([резервное копирование](docs/guide/operations.md#резервное-копирование)).
 
-| Параметр | По умолчанию | Описание |
-|---|---|---|
-| `sectoriadb.meta-dir` | `./sectoriadb-meta` | каталог с JSON-метаданными и ключами |
-| `sectoriadb.data-dir` | `./sectoriadb-data` | каталог с блоб-файлами |
-| `sectoriadb.default-chunk-size` | `1048576` | размер чанка, байт |
-| `sectoriadb.default-num-buckets` | `1280` | число корзин хэш-таблицы нового блоба |
-| `sectoriadb.max-evictions` | `32` | максимум вытеснений при вставке в таблицу |
-| `sectoriadb.auto-resize.enabled` | `true` | автоматическое расширение блоба |
-| `sectoriadb.auto-resize.threshold-percent` | `80` | заполненность, при которой блоб расширяется |
-| `sectoriadb.auto-resize.expand-percent` | `50` | на сколько процентов расширять |
-| `sectoriadb.s3.region` | `us-east-1` | регион для подписи запросов |
-| `sectoriadb.s3.auth.enabled` | `true` | проверка подписи SigV4 |
-| `server.port` | `8080` | порт HTTP |
+## Лицензия
 
-Переменные окружения для Docker (`HOST_PORT`, `JAVA_OPTS` и другие) описаны в [`.env.example`](.env.example).
-Для больших файлов увеличьте память: `JAVA_OPTS=-Xmx1g`.
-
-## Как это устроено
-
-| Понятие S3 | Что это внутри SectoriaDB |
-|---|---|
-| Бакет | пул хранилища — отдельный каталог с блоб-файлами |
-| Объект | манифест (JSON) со списком ключей чанков, типом содержимого и ETag |
-| Данные | блоб — большой разрежённый файл с хэш-таблицей чанков |
-
-Загруженный файл режется на чанки фиксированного размера. Каждый чанк хэшируется (Murmur) и кладётся в кукушкину
-хэш-таблицу блоба. Манифест хранит только упорядоченный список ключей чанков. Благодаря этому `Range`-запросы
-читают лишь нужные чанки, а видео можно перематывать.
-
-Проект состоит из двух Maven-модулей:
-
-| Модуль | Что внутри |
-|---|---|
-| `sectoriadb-core` | движок хранилища: кукушкина хэш-таблица, чанкинг, блоб-файлы, JSON-репозитории метаданных |
-| `sectoriadb-server` | Spring Boot приложение: S3 API, проверка подписи SigV4, консоль администратора, планировщик |
-
-Пакеты (`org.example.sectoriadb`):
-
-| Модуль | Пакет | Назначение |
-|---|---|---|
-| core | `model` | сущности и значения: манифесты, пулы, блобы, ключи доступа, журнал операций |
-| core | `repository` | хранение метаданных в JSON |
-| core | `service`, `service.impl` | бизнес-логика, запись и чтение чанков, кукушкина таблица |
-| core | `config`, `tools` | настройки `sectoriadb.*`, хэширование |
-| server | `s3`, `s3.xml` | контроллеры S3 API, XML-ответы, обработка ошибок |
-| server | `s3.auth` | проверка SigV4, декодирование `aws-chunked` |
-| server | `s3.access` | ACL и политики доступа |
-| server | `shell` | команды консоли администратора |
-| server | `scheduler` | автоматическое расширение блобов |
-
-## Тесты
-
-```bash
-mvn test             # оба модуля
-mvn -pl sectoriadb-core test   # только движок
-```
-
-Интеграционные тесты поднимают сервер на случайном порту и во временных каталогах. Рабочие данные они не трогают.
-Среди них проверки больших файлов, медленных клиентов, `Range`-запросов, публичного доступа и совместимости S3 API.
-
-## Безопасность
-
-- **Не публикуйте `.env`.** В нём лежат реальные ключи. Файл исключён из git; в репозиторий входит только `.env.example`.
-- **Не отключайте авторизацию на открытом сервере.** Параметр `sectoriadb.s3.auth.enabled=false` предназначен
-  только для разработки.
-- **Режим начальной настройки.** Если авторизация включена, но ни одного ключа ещё нет, сервер пропускает все запросы.
-  Создайте ключ сразу после первого запуска.
-- **Порты в Docker.** По умолчанию `8080` и `8081` открыты на всех сетевых интерфейсах. s3manager работает с
-  полными правами и умеет удалять файлы. Если сервер доступен из сети, не публикуйте порт `8081` наружу или
-  ограничьте его адресом `127.0.0.1`.
-- **HTTP без шифрования.** Сервер не терминирует TLS. Для доступа из интернета поставьте перед ним обратный прокси
-  с HTTPS.
-- **Публичный доступ.** Не открывайте бакет с приватными файлами как `public-read`: его содержимое смогут
-  перечислить все. Режим `public-read-write` позволяет любому загружать и затирать файлы.
-- Если ключ засветился, удалите его (`rm-key`) и создайте новый.
-
-## Ограничения
-
-- Удаление объектов «мягкое»: место в блобе после удаления и перезаписи не освобождается.
-- Загружаемый файл сначала записывается во временный каталог, поэтому там нужно свободное место не меньше размера
-  самого большого файла.
-- Нет версионирования, шифрования на стороне сервера и репликации. Соответствующие запросы S3 возвращают заглушки.
-- Метаданные хранятся в JSON-файлах без транзакций. Перед важными операциями делайте копию томов
-  `sectoriadb-meta` и `sectoriadb-data`.
+См. [LICENSE](LICENSE).
