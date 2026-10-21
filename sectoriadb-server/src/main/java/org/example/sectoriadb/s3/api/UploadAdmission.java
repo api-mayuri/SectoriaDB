@@ -154,12 +154,22 @@ public class UploadAdmission extends OncePerRequestFilter {
                 "The server is low on free disk space and refuses writes until space is freed.");
     }
 
+    /** FileStore lookup scans the mount table (milliseconds): resolved once per path, statvfs on the cached store is cheap. */
+    private static final java.util.concurrent.ConcurrentHashMap<Path, java.nio.file.FileStore> STORES =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
     private static long usable(Path path) {
         try {
-            Path p = path;
-            while (p != null && !Files.exists(p)) p = p.getParent();   // a directory not created yet: its volume
-            return Files.getFileStore(p == null ? Path.of(".") : p).getUsableSpace();
+            java.nio.file.FileStore store = STORES.get(path);
+            if (store == null) {
+                Path p = path;
+                while (p != null && !Files.exists(p)) p = p.getParent();   // a directory not created yet: its volume
+                store = Files.getFileStore(p == null ? Path.of(".") : p);
+                if (Files.exists(path)) STORES.put(path, store);
+            }
+            return store.getUsableSpace();
         } catch (IOException e) {
+            STORES.remove(path);
             return Long.MAX_VALUE;   // cannot be inspected: the write itself will report a real problem
         }
     }
