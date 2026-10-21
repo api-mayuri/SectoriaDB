@@ -133,7 +133,7 @@ aws ec2 create-snapshot --volume-id vol-0123456789abcdef0 --description sectoria
 Вспомогательные скрипты для малых установок без снимков. Нужны Docker и compose; образ GNU tar (`debian:12-slim`, `BACKUP_IMAGE`) скачивается при первом запуске; `zstd` на хосте используется, если есть, иначе `gzip`.
 
 ```bash
-deploy/backup/cold-backup.sh [каталог]        # остановить sectoriadb, архив тома → <каталог>/sectoriadb-<UTC>.tar.zst(.gz) + .sha256, запустить
+deploy/backup/cold-backup.sh [каталог]   # по умолчанию $SECTORIADB_BACKUP_DIR или ~/sectoriadb-backups (вне репозитория, umask 077: внутри секреты ключей)        # остановить sectoriadb, архив тома → <каталог>/sectoriadb-<UTC>.tar.zst(.gz) + .sha256, запустить
 deploy/backup/verify-backup.sh архив          # проверить КОПИЮ: распаковать во временный том, offline verify-all, удалить том; код возврата ≠ 0 при сбое
 docker compose down && docker volume rm <проект>_sectoriadb-store
 deploy/backup/restore.sh архив                # распаковать в НОВЫЙ том (существующий том не трогает), затем docker compose up -d
@@ -141,6 +141,9 @@ deploy/backup/restore.sh архив                # распаковать в �
 
 - `cold-backup.sh` останавливает только сервис `sectoriadb` (graceful, до 40 с); nginx остаётся и отвечает `502`, пока идёт копирование. Сервер запускается снова в любом случае, в том числе при ошибке архивирования.
 - `restore.sh` отказывается писать в существующий том и проверяет `.sha256`, если он лежит рядом. Куда восстанавливать — второй аргумент (по умолчанию том, который использует compose).
+- `restore.sh` без файла `.sha256` отказывается восстанавливать архив; для собственного tar без суммы есть `--no-verify`. Относительные пути скриптов считаются от текущего каталога.
+- Образы `debian`, `nginx`, `temurin`, `maven` закреплены по digest; обновляйте digest вместе с тегом. `docker-compose.dev.yml`: `s3manager` включается только профилем (`--profile s3manager`) и стартует без права удаления (`S3MANAGER_ALLOW_DELETE=true` включает).
+- Журнал nginx (`access_log`) не содержит строки запроса: подписи presigned-ссылок не попадают в `docker logs`. Docker ротирует логи (50 МиБ x 5).
 - `verify-backup.sh` принимает и каталог (смонтированный снимок, копия): он копируется во временный том и проверяется там, оригинал не изменяется. Безопасен при работающем сервере. В cron: `0 4 * * 0  /opt/sectoriadb/deploy/backup/verify-backup.sh /backups/latest.tar.zst || mail …`.
 - Скрипты проверены на compose-стеке из этого репозитория: холодная копия, проверка, восстановление в новый том, чтение объектов после восстановления ([fault-injection.md](../testing/fault-injection.md#холодная-копия-и-проверка-скрипты-deploybackup)).
 

@@ -54,6 +54,8 @@ $X keys                                                        # колонка 
 Арендатору дайте бакет, созданный администратором (`CreateBucket` в политику не включайте), и не давайте `s3:PutBucketPolicy`, `s3:PutBucketAcl`, `s3:PutObjectAcl`: иначе он сможет открыть свой бакет анонимам. Это действует и для заголовков: `PutObject`, `CopyObject`, `CreateMultipartUpload` с `x-amz-acl` (кроме `private`) или любым `x-amz-grant-*` требуют дополнительно `s3:PutObjectAcl`, а `CreateBucket` с такими заголовками — `s3:PutBucketAcl`; без права ответ `403 AccessDenied`. `CreateBucket` существующего бакета ACL не меняет никогда. Изоляция только по бакетам и префиксам:
 общих ресурсов сервера (диск, память, потоки) политики не делят, лимиты на ключ см. [security.md](../architecture/security.md#лимиты-и-защита-от-злоупотреблений).
 
+Бюджет потоков: один ключ занимает не больше `max-inflight-writes-per-key` + `max-inflight-reads-per-key` (32 + 64) потоков Tomcat из 200, анонимные запросы вместе — `max-inflight-anonymous` (16). Если ключей много, держите сумму ниже `server.tomcat.threads.max`.
+
 ## Обратный прокси (nginx)
 
 **Проверено.** Конфигурация [deploy/nginx/sectoriadb.conf](../../deploy/nginx/sectoriadb.conf) (сервис `nginx` в `docker-compose.yml`, образ `nginx:1.27.5-alpine`) прошла проверку реальными клиентами при включённой проверке подписи

@@ -22,6 +22,20 @@
 - **Журнал:** построчные события хранилища (`Storing file`, `Stored`, `Object deleted`, multipart, чтение/восстановление, загрузка таблиц) переведены на `DEBUG`; на `INFO` остались события жизненного цикла.
 - Формат файла не менялся; добавлены деревья `deleted_manifests_by_pool` и `pool_purges` (создаются при первой записи; надгробия старых версий в индексе отсутствуют и снимаются обычным проходом).
 
+### Безопасность
+
+- **Обход `Deny` через `;` в пути** (`GET /secret;x?list-type=2`): такие запросы отклоняются `400 InvalidURI` до аутентификации; `%3B` в ключах работает. Проверено на живом Tomcat.
+- **ACL без прав на ACL:** `x-amz-acl`/`x-amz-grant-*` у `PutObject`, `CopyObject`, `CreateMultipartUpload` требуют `s3:PutObjectAcl`, у `CreateBucket` — `s3:PutBucketAcl`; `CreateBucket` существующего бакета ACL не трогает. Исправлено утверждение в `recommendations.md` и `deploy/iam/README.md`.
+- **Потоки и соединения:** общий лимит анонимных запросов (`max-inflight-anonymous`=16), лимиты на ключ снижены до 32/64, минимальная скорость в скользящем окне (`min-rate-window`) для тела запроса и для скачивания, nginx: `limit_conn`, `limit_req` для запросов без подписи, таймауты.
+- **Диск:** суммирование резервов идущих загрузок, `x-amz-decoded-content-length` только для aws-chunked, проверка и потолок 5 ГиБ для `CopyObject`/`UploadPartCopy`, порог `sectoriadb.storage.min-free-bytes` (507).
+- **Куча:** бюджет `upload-heap-fraction` на промежуточные структуры загрузок.
+- **Коллизия ключа чанка:** побайтовое сравнение копий в разных блобах при коммите; location-подсказка ставится после коммита.
+- **Размер объекта:** `Complete` отклоняет объект больше 5 ТиБ и больше, чем помещается в манифест (`400 EntityTooLarge`).
+- **Мелочи:** синтаксис `SECTORIADB_S3_CREDENTIALS` теперь `ACCESS:SECRET|описание` (**меняется для пользователей**: форма `ACCESS:SECRET:описание` отклоняется с сообщением; в `bench/observability/docker-compose.yml` обновлено), та же проверка для пары `access-key`/`secret-key`; ограничение WARN отказов аутентификации; глубина XML; анонимный листинг учитывает `s3:prefix` и `?versions`; очистка спула и `credentials*.tmp` при старте; пустая часть в `?partNumber`; `LogSafe` для имён в логах, построчные `INFO` по объектам переведены в `DEBUG`; запуск не удаляет неучтённые блобы моложе grace; `umask 027` в образе; `spring.servlet.multipart.enabled=false`.
+- **Развёртывание:** ротация логов, `no-new-privileges`, `cap_drop`, `read_only`, digest образов (nginx 1.30.6), журнал nginx без query, сброс `Forwarded`-заголовков, бэкапы с `umask 077` и обязательной суммой, `s3manager` только по профилю, `.dockerignore`.
+- **Зависимости:** Spring Boot 3.3.13 (Spring 6.1.21, Jackson 2.17.3, Logback 1.5.18, Micrometer 1.13.15), Tomcat 10.1.61, Spring Shell 3.3.4.
+- Формат данных не менялся.
+
 ## 18-ops-hardening — один том, копии, шифрование, soak, фаззинг (2026-10-18)
 
 - **Один том для всего.** `docker-compose.yml` и `Dockerfile` держат метаданные (`/data/meta`), блобы и спул загрузок (`/data/storage`, спул `/data/storage/.tmp`) в одном томе `sectoriadb-store`, смонтированном в `/data`; `VOLUME ["/data"]`. Снимок одного тома атомарен для метаданных и блобов.
