@@ -3,7 +3,7 @@
 Документация описывает **текущее** состояние проекта. Хронология разработки (документы по этапам 01–14, дорожная карта) сохранена в [docs/history](history/ROADMAP.md);
 список изменений по этапам — [CHANGELOG](../CHANGELOG.md).
 
-> **Состояние проекта** — готовность, ветки, текущая работа и что осталось: [status.md](status.md).
+> **Состояние проекта** — готовность, ветки, текущая работа и что осталось: [status.md](status.md). План работ — [roadmap.md](roadmap.md).
 
 > **Начните с [рекомендаций по использованию](guide/recommendations.md)** — чек-лист перед боевым запуском, nginx, резервные копии, обновления.
 
@@ -31,7 +31,7 @@
 
 | Каталог | Документы |
 |---|---|
-| корень | `status` (состояние проекта, ветки, текущая работа) |
+| корень | `status` (состояние проекта, ветки, текущая работа), `roadmap` (план этапов до 1.0 и дальше) |
 | `guide/` | `recommendations`, `s3-usage`, `admin-shell`, `operations`, `configuration`, `monitoring`, `development` |
 | `architecture/` | `overview`, `storage-engine`, `metastore`, `metadata-model`, `garbage-collection`, `integrity`, `security`, `observability` |
 | `testing/` | `benchmarking`, `compatibility`, `fault-injection` |
