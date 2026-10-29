@@ -83,8 +83,9 @@ public class IamAuthorizer {
         }
         JsonNode identity = cred.get().getPolicy();
         List<Requirement> needs = requirements(request);
-        if (needs == null) {   // unmapped operation or ambiguous request: only a key without an identity policy may try
-            return identity == null ? Optional.empty()
+        if (needs == null) {   // unmapped operation or ambiguous request: only a key allowed everything may try
+            var everything = new BucketPolicyEvaluator.Request("s3:*", "arn:aws:s3:::*", accessKeyId, request.isSecure(), Map.of());
+            return identity != null && evaluator.evaluateIdentity(identity, everything) == Decision.ALLOW ? Optional.empty()
                     : Optional.of(new Denial(accessKeyId, new Requirement("s3:*", null, null)));
         }
         for (Requirement r : needs) {
@@ -107,8 +108,8 @@ public class IamAuthorizer {
         Decision byIdentity = identity == null ? Decision.NONE : evaluator.evaluateIdentity(identity, question);
         Decision byBucket = r.bucket() == null ? Decision.NONE : evaluator.evaluate(bucketPolicies.apply(r.bucket()), question);
         if (byIdentity == Decision.DENY || byBucket == Decision.DENY) return false;
-        if (byIdentity == Decision.ALLOW || byBucket == Decision.ALLOW) return true;
-        return identity == null;
+        // deny by default: a key without a policy, or with one that says nothing about the request, is refused
+        return byIdentity == Decision.ALLOW || byBucket == Decision.ALLOW;
     }
 
     /** s3:prefix is "" when the request names none; s3:delimiter exists only when it is sent. */

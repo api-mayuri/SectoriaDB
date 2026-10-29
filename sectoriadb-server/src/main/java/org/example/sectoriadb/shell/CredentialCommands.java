@@ -29,9 +29,10 @@ public class CredentialCommands {
     }
 
     @ShellMethod(key = "mk-key",
-            value = "Create one or more S3 access keys  |  mk-key [--count N] [--desc TEXT] [--access-key KEY] [--secret-key SECRET]")
+            value = "Create one or more S3 access keys  |  mk-key [--count N] [--desc TEXT] [--access-key KEY] [--secret-key SECRET] [--admin]")
     public String mkKey(
             @ShellOption(defaultValue = "1", help = "Number of keys to create (1-100)") int count,
+            @ShellOption(defaultValue = "false", help = "Full access to everything (otherwise the key has no access until key-policy)") boolean admin,
             @ShellOption(defaultValue = "", help = "Human-readable description") String desc,
             @ShellOption(defaultValue = "", help = "Custom access key (only with count=1)") String accessKey,
             @ShellOption(defaultValue = "", help = "Custom secret key (only with count=1)") String secretKey) {
@@ -58,6 +59,9 @@ public class CredentialCommands {
             created.addAll(credentialService.createMany(count, desc));
         }
 
+        if (admin) {
+            for (CredentialEntity c : created) credentialService.setPolicy(c.getAccessKeyId(), CredentialService.fullAccessPolicy());
+        }
         StringBuilder sb = new StringBuilder();
         if (count == 1 && !accessKey.isBlank()) {
             sb.append("Access key registered:\n");
@@ -73,8 +77,17 @@ public class CredentialCommands {
             sb.append(String.format("%-24s  %s%n", cred.getAccessKeyId(), cred.getSecretKey()));
         }
         sb.append("\n⚠  Save the secret keys. They can be shown again with: keys --secret");
+        if (!admin) {
+            sb.append("\n⚠  No access yet (deny by default): attach a policy with key-policy --id KEY --file POLICY.json, or --admin.");
+        }
 
         return sb.toString();
+    }
+
+    /** {@code admin} (the full-access policy), {@code custom}, or {@code deny} for a key without a policy. */
+    private static String policyLabel(CredentialEntity c) {
+        if (c.getPolicy() == null) return "deny";
+        return c.getPolicy().equals(CredentialService.fullAccessPolicy()) ? "admin" : "custom";
     }
 
     @ShellMethod(key = "keys",
@@ -95,7 +108,7 @@ public class CredentialCommands {
                 sb.append(String.format("%-24s  %-8s  %-7s  %-30s  %-40s  %s%n",
                         c.getAccessKeyId(),
                         c.isEnabled() ? "yes" : "no",
-                        c.getPolicy() != null ? "yes" : "none",
+                        policyLabel(c),
                         c.getCreatedAt(),
                         c.getSecretKey(),
                         c.getDescription() != null ? c.getDescription() : ""));
@@ -108,7 +121,7 @@ public class CredentialCommands {
                 sb.append(String.format("%-24s  %-8s  %-7s  %-30s  %s%n",
                         c.getAccessKeyId(),
                         c.isEnabled() ? "yes" : "no",
-                        c.getPolicy() != null ? "yes" : "none",
+                        policyLabel(c),
                         c.getCreatedAt(),
                         c.getDescription() != null ? c.getDescription() : ""));
             }
@@ -169,15 +182,16 @@ public class CredentialCommands {
     }
 
     @ShellMethod(key = "key-policy",
-            value = "Attach, show or remove the IAM policy of an access key  |  key-policy --id ID (--file policy.json | --show | --remove)")
+            value = "Attach, show or remove the IAM policy of an access key  |  key-policy --id ID (--file policy.json | --admin | --show | --remove)")
     public String keyPolicy(
             @ShellOption(help = "Access Key ID") String id,
             @ShellOption(defaultValue = "", help = "JSON policy document to attach") String file,
             @ShellOption(defaultValue = "false", help = "Print the attached policy") boolean show,
-            @ShellOption(defaultValue = "false", help = "Remove the policy (the key gets full access again)") boolean remove) {
-        int modes = (file.isBlank() ? 0 : 1) + (show ? 1 : 0) + (remove ? 1 : 0);
+            @ShellOption(defaultValue = "false", help = "Attach the full-access policy (every action on every bucket)") boolean admin,
+            @ShellOption(defaultValue = "false", help = "Remove the policy (the key then has no access)") boolean remove) {
+        int modes = (file.isBlank() ? 0 : 1) + (show ? 1 : 0) + (remove ? 1 : 0) + (admin ? 1 : 0);
         if (modes != 1) {
-            return "Error: give exactly one of --file POLICY.json, --show or --remove";
+            return "Error: give exactly one of --file POLICY.json, --admin, --show or --remove";
         }
         var cred = credentialService.findByAccessKeyId(id);
         if (cred.isEmpty()) {
@@ -186,7 +200,7 @@ public class CredentialCommands {
         if (show) {
             JsonNode policy = cred.get().getPolicy();
             if (policy == null) {
-                return "No policy: the key has full access to every bucket.";
+                return "No policy: the key is refused every request (deny by default).";
             }
             try {
                 return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(policy);
@@ -197,7 +211,11 @@ public class CredentialCommands {
         try {
             if (remove) {
                 credentialService.setPolicy(id, null);
-                return "Removed the policy of " + id + ": the key has full access again.";
+                return "Removed the policy of " + id + ": the key has no access now.";
+            }
+            if (admin) {
+                credentialService.setPolicy(id, CredentialService.fullAccessPolicy());
+                return "Full access granted to " + id + ". The running server applies it to the next request.";
             }
             JsonNode policy = readPolicy(Path.of(file));
             List<String> warnings = credentialService.setPolicy(id, policy);

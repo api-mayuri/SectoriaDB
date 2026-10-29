@@ -42,12 +42,13 @@ java -jar ... verify-all --sectoriadb.meta-dir=/data/meta                 # ра
 
 | Команда | Что делает |
 |---|---|
-| `mk-key [--count N] [--desc ТЕКСТ] [--access-key AK --secret-key SK]` | создать 1–100 ключей; свои значения — только при `--count 1`; секрет не короче 16 символов |
+| `mk-key [--count N] [--desc ТЕКСТ] [--access-key AK --secret-key SK] [--admin]` | создать 1–100 ключей; свои значения — только при `--count 1`; секрет не короче 16 символов. Без `--admin` у ключа нет доступа, пока не подключена политика; `--admin` — политика полного доступа |
 | `keys [--secret]` | список ключей (секреты только с `--secret`) |
 | `rm-key --id ID1,ID2 [--yes]` | удалить ключи (без `--yes` только подсказка) |
 | `enable-key --id ID` / `disable-key --id ID` | включить / временно выключить без перезапуска |
 | `key-policy --id ID --file policy.json` | подключить IAM-политику ключа (заменяет прежнюю) |
-| `key-policy --id ID --show` / `key-policy --id ID --remove` | показать политику / снять её (ключ снова с полным доступом) |
+| `key-policy --id ID --admin` | политика полного доступа (`s3:*` на `*`) |
+| `key-policy --id ID --show` / `key-policy --id ID --remove` | показать политику / снять её (ключ остаётся без доступа). В `keys` столбец `Policy`: `admin`, `custom` или `deny` |
 
 `key-policy --file` проверяет документ до записи: корень — объект, `Version` `2012-10-17`, `Statement` — объект или непустой массив; `Effect` `Allow`/`Deny`; `Action` — строки `s3:…` (или `*`); `Resource` — ARN `arn:aws:s3:::…` (или `*`);
 `NotAction`/`NotResource` только в `Deny`; нет `Principal`, переменных `${…}` и неподдерживаемых условий (разрешены `Bool aws:SecureTransport`, `StringEquals`/`StringLike` на `s3:prefix`, `s3:delimiter`). Ошибки перечисляются `Error: Invalid policy: …`

@@ -62,7 +62,8 @@ java -Dspring.shell.interactive.enabled=false -jar sectoriadb-server/target/Sect
 
 ```bash
 X="docker compose exec -T sectoriadb java -jar /app/sectoriadb.jar"
-$X mk-key --count 3 --desc "для бэкапов"    # создать ключи
+$X mk-key --count 3 --desc "для бэкапов"    # создать ключи (без доступа, пока нет политики)
+$X key-policy --id ID --admin                # права ключа: --admin или --file POLICY.json (файл внутри контейнера)
 $X keys --secret                            # список с секретами
 $X disable-key --id ID                      # выключить; enable-key — включить
 $X rm-key --id ID1,ID2 --yes                # удалить
@@ -102,7 +103,7 @@ aws s3 --endpoint-url https://localhost presign s3://my-bucket/photo.jpg --expir
 
 - Не публикуйте `.env` (там реальные ключи), `deploy/certs/` и порты `9464` (метрики без подписи), `8080` (без TLS) и `8081` (s3manager с полными правами) наружу.
 - Не отключайте авторизацию (`sectoriadb.s3.auth.enabled=false`) и не включайте `allow-open-setup` на сервере, доступном из сети. Сервер не терминирует TLS: в compose это делает nginx, `sectoriadb.s3.require-secure-transport=true` отвергает запросы не по HTTPS ([guide/operations.md](docs/guide/operations.md#tls-через-nginx)).
-- Права ключа задаёт **IAM-политика** (стандартный документ AWS, `key-policy`, примеры в [deploy/iam](deploy/iam/)); пользователей, ролей и STS нет. **Ключ без политики имеет полный доступ ко всему**: выдавайте приложениям и арендаторам отдельные ключи с политиками. `public-read` на бакете открывает только листинг; чтение объекта открывают ACL объекта или политика. Подробности — [architecture/security.md](docs/architecture/security.md).
+- Права ключа задаёт **IAM-политика** (стандартный документ AWS, `key-policy`, примеры в [deploy/iam](deploy/iam/)); пользователей, ролей и STS нет. **Запрет по умолчанию**: ключ без политики получает `403` на всё; ключи из `SECTORIADB_S3_CREDENTIALS` при старте получают политику полного доступа, `mk-key --admin` и `key-policy --admin` дают её явно. Приложениям и арендаторам выдавайте отдельные ключи с минимальными политиками. `public-read` на бакете открывает только листинг; чтение объекта открывают ACL объекта или политика. Подробности — [architecture/security.md](docs/architecture/security.md).
 - Перед важными операциями делайте согласованную копию обоих томов ([резервное копирование](docs/guide/operations.md#резервное-копирование)).
 
 ## Лицензия

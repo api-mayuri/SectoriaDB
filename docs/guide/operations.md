@@ -23,7 +23,7 @@ docker compose logs -f sectoriadb
 | Консоль | `docker attach sectoriadb` (compose включает `stdin_open`/`tty`); разовые команды — [admin-shell.md](admin-shell.md) |
 
 Первый запуск: пока нет ни одного ключа, все S3-запросы получают `403` (если не включён `allow-open-setup`). Создайте ключ
-`docker compose exec sectoriadb java -jar /app/sectoriadb.jar mk-key --desc "my key"` или задайте переменные окружения.
+`docker compose exec sectoriadb java -jar /app/sectoriadb.jar mk-key --admin --desc "my key"` (без `--admin` ключ получает `403`, пока ему не подключена политика) или задайте переменные окружения — такие ключи получают полный доступ при старте.
 
 Запуск без Docker: `mvn package -DskipTests`, затем `java -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar` (нужен JDK 21).
 Свойства: [configuration.md](configuration.md).

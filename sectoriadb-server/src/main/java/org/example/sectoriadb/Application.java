@@ -24,6 +24,7 @@ import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.List;
 import java.util.Set;
 
 @SpringBootApplication
@@ -195,6 +196,7 @@ public class Application {
                         } else {
                             log.debug("Credential from the environment unchanged: accessKeyId={}", ak);
                         }
+                        grantFullAccessIfNoPolicy(credentialService, ak);
                     } catch (IllegalArgumentException e) {
                         // validation messages name the rule (length, characters), never the secret
                         log.warn("Ignoring credential #{} from the environment: {}", index, e.getMessage());
@@ -211,11 +213,30 @@ public class Application {
                     if (existing.isEmpty() || !existing.get().getSecretKey().equals(sk)) {
                         credentialService.ensureCredential(ak, sk);   // same validation as register()
                     }
+                    grantFullAccessIfNoPolicy(credentialService, ak);
                 } catch (IllegalArgumentException e) {
                     log.warn("Ignoring the sectoriadb.s3.access-key / secret-key pair: {}", e.getMessage());
                 }
             }
+
+            List<String> powerless = credentialService.keysWithoutPolicy();
+            if (!powerless.isEmpty()) {
+                log.warn("{} access key(s) have no policy and are refused every request (deny by default): {}. "
+                        + "Grant access with key-policy --id KEY --file POLICY.json, or --admin for full access.",
+                        powerless.size(), String.join(", ", powerless));
+            }
         };
+    }
+
+    /**
+     * Keys declared in the environment are the operator's keys: they get an explicit full-access policy, unless a
+     * policy was attached to them (which is kept). Every other key starts without access (deny by default).
+     */
+    private static void grantFullAccessIfNoPolicy(CredentialService credentialService, String accessKeyId) {
+        credentialService.findByAccessKeyId(accessKeyId).filter(c -> c.getPolicy() == null).ifPresent(c -> {
+            credentialService.setPolicy(accessKeyId, CredentialService.fullAccessPolicy());
+            log.info("Credential from the environment granted full access: accessKeyId={}", accessKeyId);
+        });
     }
 
     /** Shows the reason when a shell/CLI command fails (otherwise the process just exits with 1). */

@@ -331,7 +331,7 @@ class S3IamTest {
     @Test
     void aPolicyChangeMadeByAnotherProcessApplyToTheNextRequest() throws Exception {
         bucketWithObject("live-a", "k", "v");
-        SigV4TestClient key = tenant(null);   // no policy: legacy full access
+        SigV4TestClient key = tenant(CredentialService.fullAccessPolicy().toString());
         assertEquals(200, send(key, "GET", "/live-a/k", null, null).statusCode());
 
         // the admin CLI is a separate process with its own repository over the same credentials.json
@@ -345,7 +345,7 @@ class S3IamTest {
         assertEquals(200, send(key, "GET", "/live-a/k", null, null).statusCode());
 
         cli.setPolicy(key.accessKey, null);
-        assertEquals(200, send(key, "PUT", "/live-other", null, null).statusCode(), "removed: full access again");
+        assertDenied(send(key, "GET", "/live-a/k", null, null), "removed: no policy, no access");
         assertTrue(Files.readString(tempRoot.resolve("meta").resolve("credentials.json"), StandardCharsets.UTF_8).contains(key.accessKey));
     }
 
@@ -422,12 +422,21 @@ class S3IamTest {
     }
 
     @Test
-    void aKeyWithoutAPolicyStillHasFullAccess() throws Exception {
-        SigV4TestClient legacy = tenant(null);
-        assertEquals(200, send(legacy, "PUT", "/legacy-b", null, null).statusCode());
-        assertEquals(200, send(legacy, "PUT", "/legacy-b/k", null, "v").statusCode());
-        assertEquals(200, send(legacy, "GET", "/", null, null).statusCode());
-        assertEquals(204, send(legacy, "DELETE", "/legacy-b/k", null, null).statusCode());
+    void aKeyWithoutAPolicyIsRefusedAndTheFullAccessPolicyAllowsEverything() throws Exception {
+        SigV4TestClient bare = tenant(null);
+        assertDenied(send(bare, "PUT", "/bare-b", null, null), "a key without a policy (deny by default)");
+        assertDenied(send(bare, "GET", "/", null, null), "a key without a policy (deny by default)");
+
+        SigV4TestClient full = tenant(CredentialService.fullAccessPolicy().toString());
+        assertEquals(200, send(full, "PUT", "/full-b", null, null).statusCode());
+        assertEquals(200, send(full, "PUT", "/full-b/k", null, "v").statusCode());
+        assertEquals(200, send(full, "GET", "/", null, null).statusCode());
+        assertEquals(204, send(full, "DELETE", "/full-b/k", null, null).statusCode());
+    }
+
+    @Test
+    void keysFromTheEnvironmentAreGrantedFullAccessAtStart() {
+        assertEquals(CredentialService.fullAccessPolicy(), credentials.findByAccessKeyId(AK).orElseThrow().getPolicy());
     }
 
     // ── ACL headers need ACL permissions ─────────────────────────────────────

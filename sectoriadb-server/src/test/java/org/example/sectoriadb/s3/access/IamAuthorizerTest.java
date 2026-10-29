@@ -31,7 +31,7 @@ class IamAuthorizerTest {
     private CredentialService credentials;
     private final Map<String, String> bucketPolicies = new HashMap<>();
     private IamAuthorizer authorizer;
-    private String legacy;
+    private String admin;
 
     @BeforeEach
     void setUp() {
@@ -39,7 +39,8 @@ class IamAuthorizerTest {
         props.setMetaDir(dir.toString());
         credentials = new CredentialService(new JsonCredentialRepository(MAPPER, props));
         authorizer = new IamAuthorizer(credentials, bucketPolicies::get, MAPPER);
-        legacy = credentials.create("legacy").getAccessKeyId();
+        admin = credentials.create("admin").getAccessKeyId();
+        credentials.setPolicy(admin, CredentialService.fullAccessPolicy());
     }
 
     private String keyWith(String identityStatements) {
@@ -85,12 +86,22 @@ class IamAuthorizerTest {
     // ── evaluation order ─────────────────────────────────────────────────────
 
     @Test
-    void aKeyWithoutAnIdentityPolicyKeepsFullAccess() {
-        assertTrue(allowed(legacy, "GET", "/b/k", null));
-        assertTrue(allowed(legacy, "DELETE", "/b/k", null));
-        assertTrue(allowed(legacy, "GET", "/", null));
-        assertTrue(allowed(legacy, "PUT", "/b", null));
-        assertTrue(allowed(legacy, "POST", "/b/k", "restore"), "even unmapped operations (the controller answers 501)");
+    void aKeyWithoutAnIdentityPolicyIsRefusedEverything() {
+        String bare = credentials.create("bare").getAccessKeyId();
+        assertFalse(allowed(bare, "GET", "/b/k", null));
+        assertFalse(allowed(bare, "GET", "/", null));
+        assertFalse(allowed(bare, "POST", "/b/k", "restore"));
+        bucketPolicies.put("b", bucketPolicy(bucketStmt("Allow", "{\"AWS\":\"" + bare + "\"}", "s3:GetObject", "arn:aws:s3:::b/*")));
+        assertTrue(allowed(bare, "GET", "/b/k", null), "a bucket policy can still grant a key without an identity policy");
+    }
+
+    @Test
+    void theFullAccessPolicyAllowsEverythingIncludingUnmappedOperations() {
+        assertTrue(allowed(admin, "GET", "/b/k", null));
+        assertTrue(allowed(admin, "DELETE", "/b/k", null));
+        assertTrue(allowed(admin, "GET", "/", null));
+        assertTrue(allowed(admin, "PUT", "/b", null));
+        assertTrue(allowed(admin, "POST", "/b/k", "restore"), "even unmapped operations (the controller answers 501)");
     }
 
     @Test
@@ -120,7 +131,7 @@ class IamAuthorizerTest {
         String key = keyWith(stmt("Allow", "s3:GetObject", "arn:aws:s3:::mine/*"));
         bucketPolicies.put("open", bucketPolicy(bucketStmt("Allow", "\"*\"", "s3:GetObject", "arn:aws:s3:::open/*")));
         assertTrue(allowed(key, "GET", "/open/k", null));
-        assertTrue(allowed(legacy, "GET", "/open/k", null));
+        assertTrue(allowed(admin, "GET", "/open/k", null));
     }
 
     @Test
@@ -139,14 +150,14 @@ class IamAuthorizerTest {
         assertFalse(allowed(key, "PUT", "/b/k", null), "Deny naming the key by its plain id");
         assertFalse(allowed(key, "DELETE", "/b/k", null));
         assertTrue(allowed(key, "GET", "/b/k", null));
-        assertFalse(allowed(legacy, "DELETE", "/b/k", null), "a Deny for * applies to a legacy key");
-        assertTrue(allowed(legacy, "PUT", "/b/k", null), "the Deny that names another key does not");
+        assertFalse(allowed(admin, "DELETE", "/b/k", null), "a Deny for * applies to a admin key");
+        assertTrue(allowed(admin, "PUT", "/b/k", null), "the Deny that names another key does not");
     }
 
     @Test
     void aDisabledOrDeletedKeyIsRefused() {
-        credentials.setEnabled(legacy, false);
-        assertFalse(allowed(legacy, "GET", "/b/k", null));
+        credentials.setEnabled(admin, false);
+        assertFalse(allowed(admin, "GET", "/b/k", null));
         assertFalse(allowed("NOSUCHKEY", "GET", "/b/k", null));
     }
 
@@ -247,7 +258,7 @@ class IamAuthorizerTest {
 
     @Test
     void unmappedAndAmbiguousRequestsAreRefusedForRestrictedKeysOnly() {
-        String key = keyWith(stmt("Allow", "s3:*", "*"));
+        String key = keyWith(stmt("Allow", "s3:*", "arn:aws:s3:::b") + "," + stmt("Allow", "s3:*", "arn:aws:s3:::b/*"));
         for (String[] r : new String[][]{
                 {"PUT", "/b/k", "acl&partNumber=1&uploadId=u"},   // acl vs upload part: Spring would pick the upload
                 {"PUT", "/b/k", "%61cl"},                            // encoded sub-resource name
@@ -256,7 +267,7 @@ class IamAuthorizerTest {
                 {"GET", "//b/k", null}}) {
             assertNull(needs(authorizer, r[0], r[1], r[2], null), String.join(" ", r[0], r[1], String.valueOf(r[2])));
             assertFalse(allowed(key, r[0], r[1], r[2]));
-            assertTrue(allowed(legacy, r[0], r[1], r[2]));
+            assertTrue(allowed(admin, r[0], r[1], r[2]));
         }
         // a percent sign in a VALUE is fine
         assertTrue(allowed(key, "GET", "/b", "list-type=2&prefix=a%2Fb"));
@@ -264,11 +275,11 @@ class IamAuthorizerTest {
 
     @Test
     void aCopyWithAnUnreadableSourceHeaderIsRefusedForARestrictedKey() {
-        String key = keyWith(stmt("Allow", "s3:*", "*"));
+        String key = keyWith(stmt("Allow", "s3:*", "arn:aws:s3:::b/*"));
         MockHttpServletRequest r = req("PUT", "/b/k", null);
         r.addHeader("x-amz-copy-source", "no-slash");
         assertTrue(authorizer.authorize(r, key).isPresent());
-        assertTrue(authorizer.authorize(r, legacy).isEmpty(), "the controller will answer 400 for a legacy key");
+        assertTrue(authorizer.authorize(r, admin).isEmpty(), "the controller will answer 400 for a admin key");
     }
 
     @Test
@@ -285,6 +296,6 @@ class IamAuthorizerTest {
         var r = req("POST", "/b", "delete");
         assertTrue(authorizer.isAllowed(r, key, "s3:DeleteObject", "b", "tmp/x"));
         assertFalse(authorizer.isAllowed(r, key, "s3:DeleteObject", "b", "keep/x"));
-        assertTrue(authorizer.isAllowed(r, legacy, "s3:DeleteObject", "b", "keep/x"));
+        assertTrue(authorizer.isAllowed(r, admin, "s3:DeleteObject", "b", "keep/x"));
     }
 }

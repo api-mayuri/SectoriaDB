@@ -1,6 +1,8 @@
 package org.example.sectoriadb.security;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.JsonNodeFactory;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,6 +24,23 @@ public class CredentialService {
 
     public CredentialService(CredentialRepository credentialRepo) {
         this.credentialRepo = credentialRepo;
+    }
+
+    /**
+     * The identity policy of an administrator key: every S3 action on every resource. A key without any policy has no
+     * access at all (deny by default), so full access is always explicit and visible in {@code key-policy --show}.
+     */
+    public static JsonNode fullAccessPolicy() {
+        JsonNodeFactory f = JsonNodeFactory.instance;
+        ObjectNode statement = f.objectNode().put("Sid", "FullAccess").put("Effect", "Allow").put("Action", "s3:*").put("Resource", "*");
+        ObjectNode policy = f.objectNode().put("Version", "2012-10-17");
+        policy.putArray("Statement").add(statement);
+        return policy;
+    }
+
+    /** Access key ids without an identity policy: they are refused every request. */
+    public List<String> keysWithoutPolicy() {
+        return credentialRepo.findAll().stream().filter(c -> c.getPolicy() == null).map(CredentialEntity::getAccessKeyId).toList();
     }
 
     /** Generates a new access key + secret key pair. */
@@ -88,8 +107,8 @@ public class CredentialService {
     }
 
     /**
-     * Attaches an IAM identity policy to the key (replacing any earlier one); {@code null} removes it, which gives the
-     * key full access again.
+     * Attaches an IAM identity policy to the key (replacing any earlier one); {@code null} removes it, which leaves the
+     * key without any access.
      *
      * @return warnings of the validation (the policy is stored anyway)
      * @throws IllegalArgumentException if the key is unknown or the policy is invalid
