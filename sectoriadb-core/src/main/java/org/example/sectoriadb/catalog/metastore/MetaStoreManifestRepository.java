@@ -260,12 +260,23 @@ public class MetaStoreManifestRepository implements ManifestRepository {
         return new DeleteOutcome(removed, r.versionId(), r.marker());
     }
 
-    /** After the newest version of a key went away: the next one becomes current, unless it is a delete marker. */
+    /**
+     * After the newest version of a key went away: the next one becomes current, unless it is a delete marker. A null
+     * version that becomes current leaves the history again: the current null version is never a row (otherwise it would
+     * be listed twice, and deleting it would leave a row that points at nothing and keeps the bucket from being empty).
+     */
     private static void promote(WriteTxn tx, String bucket, String key) {
-        Versions.newest(tx, bucket, key).filter(r -> !r.marker()).flatMap(r -> Trees.manifest(tx, r.manifestId())).ifPresent(m -> {
-            tx.tree(Trees.OBJECTS).put(Trees.objectKey(bucket, key), Trees.bytes(m.getId()));
-            Trees.adjustTotals(tx, 1, m.getTotalBytes());
-        });
+        Optional<Versions.Row> next = Versions.newest(tx, bucket, key).filter(r -> !r.marker());
+        if (next.isEmpty()) return;
+        Optional<ManifestEntity> m = Trees.manifest(tx, next.get().manifestId());
+        if (m.isEmpty()) {   // a row without its version (must not exist): drop it and look further
+            Versions.remove(tx, next.get());
+            promote(tx, bucket, key);
+            return;
+        }
+        if (m.get().getVersionId() == null) Versions.remove(tx, next.get());
+        tx.tree(Trees.OBJECTS).put(Trees.objectKey(bucket, key), Trees.bytes(m.get().getId()));
+        Trees.adjustTotals(tx, 1, m.get().getTotalBytes());
     }
 
     @Override

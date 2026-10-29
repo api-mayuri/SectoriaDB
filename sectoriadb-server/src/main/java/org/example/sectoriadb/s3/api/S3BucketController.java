@@ -112,8 +112,8 @@ public class S3BucketController {
         try {
             poolService.deleteBucket(bucket);
         } catch (IllegalStateException e) {
-            // BucketNotEmpty is decided by the object index, not by the text of the exception
-            if (manifestRepo.hasObjects(bucket)) {
+            // BucketNotEmpty is decided by the object index and the version history, not by the text of the exception
+            if (manifestRepo.hasObjects(bucket) || manifestRepo.hasVersions(bucket)) {
                 throw new S3Exception(HttpStatus.CONFLICT, "BucketNotEmpty",
                         "The bucket you tried to delete is not empty", "/" + bucket);
             }

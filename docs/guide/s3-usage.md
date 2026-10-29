@@ -25,18 +25,19 @@
 | Multipart | `CreateMultipartUpload`, `UploadPart`, `UploadPartCopy`, `CompleteMultipartUpload`, `AbortMultipartUpload`, `ListParts`, `ListMultipartUploads`, `GET`/`HEAD ?partNumber=N` |
 | Доступ | `Get/PutBucketAcl`, `Get/PutObjectAcl`, `Get/Put/DeleteBucketPolicy`, presigned-ссылки |
 | Контрольные суммы | `x-amz-checksum-crc32/crc32c/crc64nvme/sha1/sha256`, `Content-MD5`, trailer `aws-chunked`, `x-amz-checksum-mode: ENABLED` |
+| Версионирование | `Get/PutBucketVersioning` (`Enabled`, `Suspended`), `ListObjectVersions`, `GET`/`HEAD`/`DELETE ?versionId`, маркеры удаления, `x-amz-version-id`, `x-amz-delete-marker`, `DeleteObjects` с `VersionId`, копирование версии (`x-amz-copy-source: /b/k?versionId=…`) |
+| Lifecycle | `Get/Put/DeleteBucketLifecycleConfiguration`: правила с `Filter/Prefix`, `NoncurrentVersionExpiration/NoncurrentDays`, `Expiration/ExpiredObjectDeleteMarker`; остальные элементы — `501` |
 
 ### Заглушки и неподдерживаемое
 
 | Запрос | Ответ |
 |---|---|
-| `GetBucketVersioning` | пустая конфигурация (версионирование выключено); `PutBucketVersioning` — `501` |
-| `GetBucketTagging`, `GetBucketCors`, `GetBucketLifecycle`, `GetBucketEncryption`, `GetPublicAccessBlock` | `404` с кодом «конфигурации нет» (`NoSuchTagSet`, `NoSuchCORSConfiguration`, ...) |
+| `GetBucketTagging`, `GetBucketCors`, `GetBucketEncryption`, `GetPublicAccessBlock` | `404` с кодом «конфигурации нет» (`NoSuchTagSet`, `NoSuchCORSConfiguration`, ...) |
 | `GetObjectTagging` | пустой `TagSet`; `PutObjectTagging` — `501` (теги не хранятся и не теряются молча); `DeleteObjectTagging` — `204` |
 | `?object-lock`, `?ownershipControls`, `?website`, `?logging`, `?notification`, `?policyStatus`, `?accelerate`, `?replication`, `?analytics`, `?inventory`, `?metrics`, `?requestPayment`, `?intelligent-tiering` у бакета; `?attributes`, `?retention`, `?legal-hold`, `?torrent`, `?select`, `?restore` у объекта | `501 NotImplemented` |
 | `PUT`/`DELETE` с неизвестным подресурсом (`DELETE /b?tagging`, `PUT /b/k?retention`) | `501`, а не удаление бакета или перезапись объекта; разрешены только `x-id` и параметры `X-Amz-*` presigned-ссылок |
 | `x-amz-copy-source-if-*` у `CopyObject` | `501` (не вычисляются, и игнорировать их небезопасно) |
-| POST-форма (`POST /bucket` с политикой), SigV2, SigV4a (`STREAMING-*` ECDSA), версионирование, блокировки, CORS, шифрование на стороне сервера, S3 Select, уведомления | не реализованы |
+| POST-форма (`POST /bucket` с политикой), SigV2, SigV4a (`STREAMING-*` ECDSA), блокировки объектов и MFA Delete, CORS, шифрование на стороне сервера, S3 Select, уведомления | не реализованы |
 
 ## Как отдать файл другим людям
 
@@ -111,6 +112,9 @@ java -jar sectoriadb.jar key-policy --id ACCESS_KEY_ID --file /tmp/photos.json  
 | `GetBucketAcl`, `PutBucketAcl` | `s3:GetBucketAcl`, `s3:PutBucketAcl` | `arn:aws:s3:::бакет` |
 | `GetBucketPolicy`, `PutBucketPolicy`, `DeleteBucketPolicy` | `s3:GetBucketPolicy`, `s3:PutBucketPolicy`, `s3:DeleteBucketPolicy` | `arn:aws:s3:::бакет` |
 | `GetBucketLocation`, `GetBucketVersioning`, `GetBucketTagging` | `s3:GetBucketLocation`, `s3:GetBucketVersioning`, `s3:GetBucketTagging` | `arn:aws:s3:::бакет` |
+| `PutBucketVersioning` | `s3:PutBucketVersioning` | `arn:aws:s3:::бакет` |
+| `Get/Put/DeleteBucketLifecycleConfiguration` | `s3:GetLifecycleConfiguration`, `s3:PutLifecycleConfiguration` (и для удаления) | `arn:aws:s3:::бакет` |
+| `GetObject`/`HeadObject`/`DeleteObject` с `versionId`, копирование версии | `s3:GetObjectVersion`, `s3:DeleteObjectVersion` | `arn:aws:s3:::бакет/ключ` |
 | `ListBuckets` | `s3:ListAllMyBuckets` | `arn:aws:s3:::*` |
 
 Особенности: с правом `s3:ListAllMyBuckets` `ListBuckets` возвращает имена **всех** бакетов (как AWS; содержимое остаётся закрытым), без права — `403`. Для «листинга только своего префикса» (`aws s3 ls s3://бакет/home/alice/`)
@@ -213,3 +217,24 @@ aws s3api head-object --bucket B --key K --checksum-mode ENABLED    # получ
 - Веб-интерфейс s3manager (только в `docker-compose.dev.yml`) не умеет менять доступ, не передаёт `Range` (видео не перематывается) и публикуется
   на `127.0.0.1:8081`; он работает с полными правами ключа из `.env`.
 - Не публикуйте сервер в интернет без обратного прокси с TLS: HTTPS сервер не терминирует. В `docker-compose.yml` TLS уже настроен через nginx ([operations.md](operations.md#tls-через-nginx)).
+
+## Версионирование
+
+Включается на бакете (`aws s3api put-bucket-versioning --bucket B --versioning-configuration Status=Enabled`) и выключается только
+приостановкой (`Suspended`), как в S3. При `Enabled` перезапись сохраняет прежнюю версию, а `DELETE` без `versionId` добавляет маркер удаления:
+объект «пропадает», но восстанавливается удалением маркера (`aws s3api delete-object --bucket B --key K --version-id <id маркера>`) или копированием
+нужной версии поверх. Окончательно версия удаляется `DELETE ?versionId=…`; если это была новейшая версия, текущей становится следующая.
+При `Suspended` запись и удаление заменяют версию `null`, остальные версии остаются. Объекты, записанные до включения, — версия `null`.
+
+**Место.** Прежние версии занимают место, пока их не удалят: для бакета с частыми перезаписями задайте lifecycle, например удаление нетекущих
+версий через 30 дней и маркеров без версий:
+
+```xml
+<LifecycleConfiguration><Rule><ID>old-versions</ID><Filter><Prefix></Prefix></Filter><Status>Enabled</Status>
+  <NoncurrentVersionExpiration><NoncurrentDays>30</NoncurrentDays></NoncurrentVersionExpiration>
+  <Expiration><ExpiredObjectDeleteMarker>true</ExpiredObjectDeleteMarker></Expiration></Rule></LifecycleConfiguration>
+```
+
+Проход lifecycle — раз в `sectoriadb.gc.lifecycle-interval` (1 ч); удалённое уходит сборщику мусора как обычно. Число версий и маркеров всего
+хранилища — `sectoriadb_metastore_tree_entries{tree="versions"}`. Бакет с версиями или маркерами не пуст для `DeleteBucket`. Устройство — [versioning.md](../architecture/versioning.md).
+

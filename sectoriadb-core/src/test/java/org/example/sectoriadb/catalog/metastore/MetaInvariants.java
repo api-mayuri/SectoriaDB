@@ -132,6 +132,10 @@ public final class MetaInvariants {
                         inHistory.add(row.manifestId());
                     }
                     assertTrue(Versions.byId(tx, row.bucket(), row.key(), row.versionId()).isPresent(), "version index entry of " + row.versionId());
+                    if (Versions.NULL_ID.equals(row.versionId()) && !row.marker()) {
+                        String cur = tx.tree(Trees.OBJECTS).get(Trees.objectKey(row.bucket(), row.key())).map(Trees::str).orElse(null);
+                        assertTrue(!row.manifestId().equals(cur), "the current null version of " + row.key() + " is not also a history row");
+                    }
                 }
             }
             assertEquals(tx.tree(Versions.VERSIONS).size(), tx.tree(Versions.VERSION_IDS).size(), "one index entry per version row");

@@ -186,6 +186,19 @@ class VersioningTest {
     }
 
     @Test
+    void theNullVersionPromotedToCurrentLeavesTheHistoryAndCanBeDeletedForGood() throws Exception {
+        put("k", "before", 0);                                    // the null version
+        rig.poolService.setVersioning("vb", "Enabled");
+        ManifestEntity v1 = put("k", "one", 0);
+        rig.manifests.delete("vb", "k", v1.getId());              // the null version is current again
+        assertEquals(List.of("null"), versionIds("k"), "listed once");
+        rig.manifests.delete("vb", "k", "null");
+        assertEquals(List.of(), versionIds("k"));
+        assertFalse(rig.manifests.hasVersions("vb"), "found by ceph/s3-tests: a row was left that kept the bucket from being empty");
+        rig.poolService.deleteBucket("vb");
+    }
+
+    @Test
     void versioningCannotBeSwitchedOff() {
         assertThrows(IllegalArgumentException.class, () -> rig.poolService.setVersioning("vb", "Disabled"));
     }
