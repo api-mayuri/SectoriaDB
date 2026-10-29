@@ -123,6 +123,6 @@ java -jar ... verify-all --sectoriadb.meta-dir=/data/meta                 # ра
 | `status` | все пулы, блобы, заполнение, предупреждение о пороге роста |
 | `config` | основные настройки (часть; полный список — [configuration.md](configuration.md)) |
 | `logs [--n N]` | последние строки `<meta-dir>/sectoriadb.log` |
-| `audit [--op ТИП] [--id ID] [--since ISO-8601] [--limit N]` | журнал операций (`oplogs.jsonl`): `STORE`, `DELETE`, `RESTORE`, `RESTORE_RANGE`, `RESIZE`, `BLOB_CREATE`, `BLOB_DELETE`, `POOL_CREATE`, `POOL_DELETE` |
+| `audit [--op ТИП] [--id ID] [--since ISO-8601] [--limit N]` | журнал операций (`oplogs.jsonl`): `STORE`, `DELETE`, `RESTORE`, `RESTORE_RANGE`, `RESIZE`, `BLOB_CREATE`, `BLOB_DELETE`, `POOL_CREATE`, `POOL_DELETE`. Столбцы `Actor` (ключ доступа, `anonymous` или `system` — работа самого сервера), `Client` (адрес клиента за доверенным прокси) и `Request ID` (`x-amz-request-id` ответа, он же в строках `sectoriadb.log`). Запрос читает только активный файл и держит в памяти лишь найденные записи |
 
 В интерактивной консоли есть и встроенные команды Spring Shell (`help`, `exit`).

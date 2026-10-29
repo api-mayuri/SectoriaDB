@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpServletResponseWrapper;
+import org.example.sectoriadb.audit.AuditContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -42,7 +43,7 @@ public class RequestObservabilityFilter extends OncePerRequestFilter {
 
     public static final String REQUEST_ID_HEADER = "x-amz-request-id";
     public static final String EXTENDED_ID_HEADER = "x-amz-id-2";
-    public static final String MDC_REQUEST_ID = "requestId";
+    public static final String MDC_REQUEST_ID = AuditContext.REQUEST_ID;
     public static final String MDC_OPERATION = "operation";
 
     private static final Logger log = LoggerFactory.getLogger(RequestObservabilityFilter.class);
@@ -68,6 +69,9 @@ public class RequestObservabilityFilter extends OncePerRequestFilter {
         response.setHeader(EXTENDED_ID_HEADER, RequestIds.newExtendedId());
         MDC.put(MDC_REQUEST_ID, requestId);
         MDC.put(MDC_OPERATION, op.label());
+        // the real client: behind the trusted proxy Tomcat's RemoteIpValve has already replaced the proxy's address
+        MDC.put(AuditContext.CLIENT, String.valueOf(request.getRemoteAddr()));
+        MDC.remove(AuditContext.ACCESS_KEY);   // set by the signature filter once the request is authenticated
 
         CountingRequest in = new CountingRequest(request);
         CountingResponse out = new CountingResponse(response, op == S3Operation.GetObject, t0);
@@ -92,6 +96,8 @@ public class RequestObservabilityFilter extends OncePerRequestFilter {
             } finally {
                 MDC.remove(MDC_REQUEST_ID);
                 MDC.remove(MDC_OPERATION);
+                MDC.remove(AuditContext.CLIENT);
+                MDC.remove(AuditContext.ACCESS_KEY);
             }
         }
     }

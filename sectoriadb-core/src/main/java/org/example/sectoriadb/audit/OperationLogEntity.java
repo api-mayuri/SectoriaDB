@@ -25,6 +25,12 @@ public class OperationLogEntity {
     private String status;
     private Long durationMs;
     private String errorMessage;
+    /** Access key the request was signed with, {@code anonymous}, or {@code system} for the server's own work. */
+    private String actor;
+    /** Client address of the request (the real client behind the trusted proxy); null for the server's own work. */
+    private String client;
+    /** The {@code x-amz-request-id} of the request, also printed in the server log lines of that request. */
+    private String requestId;
 
     public OperationLogEntity() {}
 
@@ -54,4 +60,13 @@ public class OperationLogEntity {
 
     public String getErrorMessage() { return errorMessage; }
     public void setErrorMessage(String errorMessage) { this.errorMessage = errorMessage; }
+
+    public String getActor() { return actor; }
+    public void setActor(String actor) { this.actor = actor; }
+
+    public String getClient() { return client; }
+    public void setClient(String client) { this.client = client; }
+
+    public String getRequestId() { return requestId; }
+    public void setRequestId(String requestId) { this.requestId = requestId; }
 }

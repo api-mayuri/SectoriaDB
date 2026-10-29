@@ -3,6 +3,7 @@ package org.example.sectoriadb.audit;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 
 import java.time.Instant;
 import java.util.Map;
@@ -53,6 +54,9 @@ public class OperationLogService {
             e.setEntityName(entityName);
             e.setStatus(status);
             e.setDurationMs(durationMs);
+            e.setActor(AuditContext.actor());
+            e.setClient(MDC.get(AuditContext.CLIENT));
+            e.setRequestId(MDC.get(AuditContext.REQUEST_ID));
             if (error != null) e.setErrorMessage(error.getMessage());
             if (details != null) {
                 try {

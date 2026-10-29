@@ -162,15 +162,18 @@ public class StatusCommands {
         if (results.isEmpty()) return "No log entries found.";
 
         StringBuilder sb = new StringBuilder();
-        sb.append(String.format("%-22s  %-16s  %-7s  %-36s  %s%n",
-                "Timestamp", "Operation", "Status", "Entity ID", "Name"));
-        sb.append("─".repeat(110)).append('\n');
+        sb.append(String.format("%-22s  %-16s  %-7s  %-20s  %-15s  %-16s  %-36s  %s%n",
+                "Timestamp", "Operation", "Status", "Actor", "Client", "Request ID", "Entity ID", "Name"));
+        sb.append("─".repeat(160)).append('\n');
         for (OperationLogEntity e : results) {
-            sb.append(String.format("%-22s  %-16s  %-7s  %-36s  %s%n",
+            sb.append(String.format("%-22s  %-16s  %-7s  %-20s  %-15s  %-16s  %-36s  %s%n",
                     e.getTimestamp() != null
                             ? e.getTimestamp().toString().replace("T", " ").substring(0, 19) : "",
                     e.getOperationType(),
                     e.getStatus(),
+                    e.getActor() != null ? e.getActor() : "",
+                    e.getClient() != null ? e.getClient() : "",
+                    e.getRequestId() != null ? e.getRequestId() : "",
                     e.getEntityId() != null ? e.getEntityId() : "",
                     e.getEntityName() != null ? e.getEntityName() : ""));
         }

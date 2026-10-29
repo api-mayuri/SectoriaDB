@@ -80,6 +80,7 @@ class S3MetricsTest {
     @Autowired PoolService poolService;
     @Autowired GarbageCollector gc;
     @Autowired CredentialService credentials;
+    @Autowired org.example.sectoriadb.audit.OperationLogRepository opLog;
 
     final HttpClient http = HttpClient.newHttpClient();
     SigV4TestClient client;
@@ -378,6 +379,22 @@ class S3MetricsTest {
                 "process_files_open_files", "process_cpu_usage", "tomcat_threads_busy_threads", "tomcat_threads_config_max_threads"}) {
             assertTrue(text.contains("\n" + s) || text.startsWith(s), "missing " + s);
         }
+    }
+
+    @Test
+    @Order(4)
+    void theOperationLogRecordsWhoDidWhatFromWhere() throws Exception {
+        SigV4TestClient c = client();
+        byte[] body = "audited".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        var put = c.put("/" + BUCKET + "/audited.txt", body, SigV4TestClient.sha256(body));
+        assertEquals(200, put.statusCode());
+        String id = put.headers().firstValue("x-amz-request-id").orElseThrow();
+        var entry = opLog.findTopNByOrderByTimestampDesc(200).stream().filter(e -> id.equals(e.getRequestId())).findFirst()
+                .orElseThrow(() -> new AssertionError("no operation log entry with the request id " + id));
+        assertEquals("STORE", entry.getOperationType());
+        assertEquals(AK, entry.getActor(), "the access key the request was signed with");
+        assertTrue(entry.getClient() != null && (entry.getClient().equals("127.0.0.1") || entry.getClient().contains(":")),
+                "client address: " + entry.getClient());
     }
 
     @Test

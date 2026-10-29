@@ -7,6 +7,7 @@ import jakarta.servlet.ServletInputStream;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletRequestWrapper;
 import jakarta.servlet.http.HttpServletResponse;
+import org.example.sectoriadb.audit.AuditContext;
 import org.example.sectoriadb.observability.AuthFailure;
 import org.example.sectoriadb.observability.ObservabilityAttributes;
 import org.example.sectoriadb.observability.RequestIds;
@@ -19,6 +20,7 @@ import org.example.sectoriadb.security.CredentialEntity;
 import org.example.sectoriadb.security.CredentialService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -212,6 +214,8 @@ public class SigV4Filter extends OncePerRequestFilter {
      */
     private void proceed(HttpServletRequest request, HttpServletResponse response, FilterChain chain, String accessKey)
             throws IOException, ServletException {
+        // the operation log records who did what; the request filter clears the key when the request ends
+        if (accessKey != null) MDC.put(AuditContext.ACCESS_KEY, accessKey);
         if (accessKey == null) {
             runLimited(request, response, chain, anonymousSlots,
                     "Too many concurrent anonymous requests. Please reduce your request rate.");
