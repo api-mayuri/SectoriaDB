@@ -34,7 +34,7 @@
 | корень | `status` (состояние проекта, ветки, текущая работа), `roadmap` (план этапов до 1.0 и дальше) |
 | `guide/` | `recommendations`, `s3-usage`, `admin-shell`, `operations`, `configuration`, `monitoring`, `development` |
 | `architecture/` | `overview`, `storage-engine`, `metastore`, `metadata-model`, `garbage-collection`, `integrity`, `security`, `observability` |
-| `testing/` | `benchmarking`, `compatibility`, `fault-injection` |
+| `testing/` | `benchmarking`, `compatibility`, `fault-injection`, `hardware-validation` (программа проверки на своём железе) |
 | `reports/` | `sandbox-results` (измерения с датами и оговоркой о железе), `critical-review` (пробелы безопасности и оптимизации, статус исправлений) |
 | `history/` | `01-…`–`14-…`, `ROADMAP` — исторические документы этапов, могут расходиться с кодом |
 
