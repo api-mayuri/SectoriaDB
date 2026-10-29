@@ -25,7 +25,7 @@
 | Этап | Ветка | Суть | Готово, когда |
 |---|---|---|---|
 | 0 ✅ | `20-critical-fixes` | пробелы из [critical-review](reports/critical-review.md) — закрыт 2026-10-29, soak в [sandbox-results](reports/sandbox-results.md#soak-45-минут-после-этапа-0-2026-10-29-коммит-f3916cb) | все пункты «исправлено», soak 45 мин не хуже (p99 PUT ≈ 49 мс), чтение метахранилища с диска упало ≥ 10× |
-| 1 | `21-platform` | Spring Boot 4 и Java 25 | `mvn verify`, s3-tests и mint не хуже, soak без регрессии |
+| 1 ✅ | `21-platform` | Spring Boot 4 и Java 25 — закрыт 2026-10-29: s3-tests и mint без изменений, soak лучше этапа 0 | `mvn verify`, s3-tests и mint не хуже, soak без регрессии |
 | 2 | `22-disk-format` | версии формата, мигратор | том предыдущей версии поднимается новой, `verify-all` проходит |
 | 3 | `23-hardware-validation` | прогоны на настоящем железе | отчёт в `docs/reports`, нет дрейфа p99 и памяти за 24 ч, отказные сценарии зелёные |
 | 4 | `24-versioning` | версионирование бакета и lifecycle | группы s3-tests проходят, удалённый объект восстанавливается по `versionId` |
