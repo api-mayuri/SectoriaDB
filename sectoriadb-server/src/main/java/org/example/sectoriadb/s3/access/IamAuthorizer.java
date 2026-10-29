@@ -1,7 +1,5 @@
 package org.example.sectoriadb.s3.access;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.observability.OperationClassifier;
@@ -14,6 +12,8 @@ import org.example.sectoriadb.security.CredentialService;
 import org.example.sectoriadb.storage.PoolService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.List;

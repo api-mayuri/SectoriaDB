@@ -1,12 +1,13 @@
 package org.example.sectoriadb.shell;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.security.CredentialEntity;
 import org.example.sectoriadb.security.CredentialService;
-import org.springframework.shell.standard.ShellComponent;
-import org.springframework.shell.standard.ShellMethod;
-import org.springframework.shell.standard.ShellOption;
+import org.springframework.shell.core.command.annotation.Command;
+import org.springframework.shell.core.command.annotation.Option;
+import org.springframework.stereotype.Component;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -15,7 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 
-@ShellComponent
+@Component
 public class CredentialCommands {
 
     private static final long MAX_POLICY_FILE_BYTES = 64 * 1024;
@@ -28,14 +29,17 @@ public class CredentialCommands {
         this.mapper = mapper;
     }
 
-    @ShellMethod(key = "mk-key",
-            value = "Create one or more S3 access keys  |  mk-key [--count N] [--desc TEXT] [--access-key KEY] [--secret-key SECRET] [--admin]")
+    @Command(name = "mk-key", description = "Create one or more S3 access keys  |  mk-key [--count N] [--desc TEXT] [--access-key KEY] [--secret-key SECRET] [--admin]")
     public String mkKey(
-            @ShellOption(defaultValue = "1", help = "Number of keys to create (1-100)") int count,
-            @ShellOption(defaultValue = "false", help = "Full access to everything (otherwise the key has no access until key-policy)") boolean admin,
-            @ShellOption(defaultValue = "", help = "Human-readable description") String desc,
-            @ShellOption(defaultValue = "", help = "Custom access key (only with count=1)") String accessKey,
-            @ShellOption(defaultValue = "", help = "Custom secret key (only with count=1)") String secretKey) {
+            @Option(longName = "count", defaultValue = "1", description = "Number of keys to create (1-100)") int count,
+            @Option(longName = "admin", defaultValue = "false", description = "Full access to everything (otherwise the key has no access until key-policy)") boolean admin,
+            @Option(longName = "desc", description = "Human-readable description") String desc,
+            @Option(longName = "access-key", description = "Custom access key (only with count=1)") String accessKey,
+            @Option(longName = "secret-key", description = "Custom secret key (only with count=1)") String secretKey) {
+        // an option that is not given is null (Spring Shell 4); the checks below compare with ""
+        desc = desc == null ? "" : desc;
+        accessKey = accessKey == null ? "" : accessKey;
+        secretKey = secretKey == null ? "" : secretKey;
 
         if (count < 1 || count > 100) {
             return "Error: count must be between 1 and 100";
@@ -90,10 +94,9 @@ public class CredentialCommands {
         return c.getPolicy().equals(CredentialService.fullAccessPolicy()) ? "admin" : "custom";
     }
 
-    @ShellMethod(key = "keys",
-            value = "List all S3 access keys  |  keys [--secret]")
+    @Command(name = "keys", description = "List all S3 access keys  |  keys [--secret]")
     public String keys(
-            @ShellOption(defaultValue = "false", help = "Show secret keys") boolean secret) {
+            @Option(longName = "secret", defaultValue = "false", description = "Show secret keys") boolean secret) {
         List<CredentialEntity> list = credentialService.listAll();
         if (list.isEmpty()) {
             return "No access keys. Use 'mk-key' to create one.\n" +
@@ -129,11 +132,10 @@ public class CredentialCommands {
         return sb.toString().stripTrailing();
     }
 
-    @ShellMethod(key = "rm-key",
-            value = "Delete one or more S3 access keys  |  rm-key --id ID1,ID2,... [--yes]")
+    @Command(name = "rm-key", description = "Delete one or more S3 access keys  |  rm-key --id ID1,ID2,... [--yes]")
     public String rmKey(
-            @ShellOption(help = "Access Key IDs to delete (comma-separated)") String id,
-            @ShellOption(defaultValue = "false", help = "Skip confirmation") boolean yes) {
+            @Option(longName = "id", required = true, description = "Access Key IDs to delete (comma-separated)") String id,
+            @Option(longName = "yes", defaultValue = "false", description = "Skip confirmation") boolean yes) {
 
         String[] ids = id.split(",");
         for (int i = 0; i < ids.length; i++) {
@@ -157,10 +159,9 @@ public class CredentialCommands {
         return result.toString().stripTrailing();
     }
 
-    @ShellMethod(key = "enable-key",
-            value = "Enable an S3 access key  |  enable-key --id ACCESS_KEY_ID")
+    @Command(name = "enable-key", description = "Enable an S3 access key  |  enable-key --id ACCESS_KEY_ID")
     public String enableKey(
-            @ShellOption(help = "Access Key ID to enable") String id) {
+            @Option(longName = "id", required = true, description = "Access Key ID to enable") String id) {
         try {
             credentialService.setEnabled(id, true);
             return "Enabled access key: " + id;
@@ -169,10 +170,9 @@ public class CredentialCommands {
         }
     }
 
-    @ShellMethod(key = "disable-key",
-            value = "Disable an S3 access key  |  disable-key --id ACCESS_KEY_ID")
+    @Command(name = "disable-key", description = "Disable an S3 access key  |  disable-key --id ACCESS_KEY_ID")
     public String disableKey(
-            @ShellOption(help = "Access Key ID to disable") String id) {
+            @Option(longName = "id", required = true, description = "Access Key ID to disable") String id) {
         try {
             credentialService.setEnabled(id, false);
             return "Disabled access key: " + id;
@@ -181,14 +181,14 @@ public class CredentialCommands {
         }
     }
 
-    @ShellMethod(key = "key-policy",
-            value = "Attach, show or remove the IAM policy of an access key  |  key-policy --id ID (--file policy.json | --admin | --show | --remove)")
+    @Command(name = "key-policy", description = "Attach, show or remove the IAM policy of an access key  |  key-policy --id ID (--file policy.json | --admin | --show | --remove)")
     public String keyPolicy(
-            @ShellOption(help = "Access Key ID") String id,
-            @ShellOption(defaultValue = "", help = "JSON policy document to attach") String file,
-            @ShellOption(defaultValue = "false", help = "Print the attached policy") boolean show,
-            @ShellOption(defaultValue = "false", help = "Attach the full-access policy (every action on every bucket)") boolean admin,
-            @ShellOption(defaultValue = "false", help = "Remove the policy (the key then has no access)") boolean remove) {
+            @Option(longName = "id", required = true, description = "Access Key ID") String id,
+            @Option(longName = "file", description = "JSON policy document to attach") String file,
+            @Option(longName = "show", defaultValue = "false", description = "Print the attached policy") boolean show,
+            @Option(longName = "admin", defaultValue = "false", description = "Attach the full-access policy (every action on every bucket)") boolean admin,
+            @Option(longName = "remove", defaultValue = "false", description = "Remove the policy (the key then has no access)") boolean remove) {
+        file = file == null ? "" : file;   // not given: null (Spring Shell 4)
         int modes = (file.isBlank() ? 0 : 1) + (show ? 1 : 0) + (remove ? 1 : 0) + (admin ? 1 : 0);
         if (modes != 1) {
             return "Error: give exactly one of --file POLICY.json, --admin, --show or --remove";
@@ -204,7 +204,7 @@ public class CredentialCommands {
             }
             try {
                 return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(policy);
-            } catch (IOException e) {
+            } catch (JacksonException e) {
                 return "Error: " + e.getMessage();
             }
         }
@@ -236,6 +236,8 @@ public class CredentialCommands {
             return mapper.readTree(Files.readString(path, StandardCharsets.UTF_8));
         } catch (IOException e) {
             throw new IllegalArgumentException("cannot read the policy file " + path + ": " + e.getMessage());
+        } catch (JacksonException e) {   // unchecked in Jackson 3
+            throw new IllegalArgumentException("the policy file " + path + " is not valid JSON: " + e.getOriginalMessage());
         }
     }
 }

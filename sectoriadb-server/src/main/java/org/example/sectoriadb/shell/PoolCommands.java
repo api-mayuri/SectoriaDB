@@ -8,14 +8,14 @@ import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.storage.BlobService;
 import org.example.sectoriadb.storage.HashTableCache;
 import org.example.sectoriadb.storage.PoolService;
-import org.springframework.shell.standard.ShellComponent;
-import org.springframework.shell.standard.ShellMethod;
-import org.springframework.shell.standard.ShellOption;
+import org.springframework.shell.core.command.annotation.Command;
+import org.springframework.shell.core.command.annotation.Option;
+import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.util.List;
 
-@ShellComponent
+@Component
 public class PoolCommands {
 
     private final PoolService poolService;
@@ -36,15 +36,15 @@ public class PoolCommands {
         this.cache       = cache;
     }
 
-    @ShellMethod(key = "mkpool", value = "Create a new storage pool  |  mkpool --name NAME --path DIR")
+    @Command(name = "mkpool", description = "Create a new storage pool  |  mkpool --name NAME --path DIR")
     public String mkpool(
-            @ShellOption(help = "Pool name") String name,
-            @ShellOption(help = "Base directory path on disk") String path) throws IOException {
+            @Option(longName = "name", required = true, description = "Pool name") String name,
+            @Option(longName = "path", required = true, description = "Base directory path on disk") String path) throws IOException {
         PoolEntity pool = poolService.create(name, path);
         return String.format("Created pool '%s'  id=%s  path=%s", pool.getName(), pool.getId(), pool.getBasePath());
     }
 
-    @ShellMethod(key = "pools", value = "List all storage pools  |  pools")
+    @Command(name = "pools", description = "List all storage pools  |  pools")
     public String pools() {
         List<PoolEntity> list = poolService.listAll();
         if (list.isEmpty()) return "No pools yet. Use 'mkpool --name NAME --path DIR' to create one.";
@@ -60,8 +60,8 @@ public class PoolCommands {
         return sb.toString().stripTrailing();
     }
 
-    @ShellMethod(key = "pool", value = "Show pool details and blob fill stats  |  pool --name NAME")
-    public String pool(@ShellOption(help = "Pool name") String name) throws IOException {
+    @Command(name = "pool", description = "Show pool details and blob fill stats  |  pool --name NAME")
+    public String pool(@Option(longName = "name", required = true, description = "Pool name") String name) throws IOException {
         PoolEntity p = poolService.getByName(name);
         List<BlobFileEntity> blobs = blobService.listByPool(p);
 
@@ -86,10 +86,10 @@ public class PoolCommands {
         return sb.toString().stripTrailing();
     }
 
-    @ShellMethod(key = "rmpool", value = "Delete a storage pool  |  rmpool --name NAME [--yes]")
+    @Command(name = "rmpool", description = "Delete a storage pool  |  rmpool --name NAME [--yes]")
     public String rmpool(
-            @ShellOption(help = "Pool name") String name,
-            @ShellOption(defaultValue = "false", help = "Skip confirmation prompt") boolean yes) {
+            @Option(longName = "name", required = true, description = "Pool name") String name,
+            @Option(longName = "yes", defaultValue = "false", description = "Skip confirmation prompt") boolean yes) {
         if (!yes) return "Add '--yes' to confirm deletion of pool '" + name + "'";
         poolService.delete(name);
         return "Deleted pool: " + name;

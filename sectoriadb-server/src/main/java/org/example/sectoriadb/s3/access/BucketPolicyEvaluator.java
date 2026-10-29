@@ -1,9 +1,9 @@
 package org.example.sectoriadb.s3.access;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -117,13 +117,11 @@ public final class BucketPolicyEvaluator {
      */
     private static boolean conditionHolds(JsonNode condition, Request req, boolean deny) {
         if (!condition.isObject() || condition.isEmpty()) return deny;
-        for (var operators = condition.fields(); operators.hasNext(); ) {
-            var op = operators.next();
+        for (var op : condition.properties()) {
             String operator = op.getKey();
             JsonNode keys = op.getValue();
             if (!keys.isObject() || keys.isEmpty()) return deny;
-            for (var entries = keys.fields(); entries.hasNext(); ) {
-                var e = entries.next();
+            for (var e : keys.properties()) {
                 String key = e.getKey().toLowerCase(Locale.ROOT);
                 boolean holds;
                 if ("Bool".equals(operator) && key.equals("aws:securetransport")) {

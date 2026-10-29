@@ -1,6 +1,5 @@
 package org.example.sectoriadb;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.security.CredentialService;
 import org.example.sectoriadb.security.JsonCredentialRepository;
@@ -8,6 +7,7 @@ import org.example.sectoriadb.shell.CredentialCommands;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tools.jackson.databind.ObjectMapper;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,7 +30,7 @@ class KeyPolicyCommandTest {
 
     @BeforeEach
     void setUp() {
-        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        ObjectMapper mapper = new ObjectMapper();
         StorageProperties props = new StorageProperties();
         props.setMetaDir(dir.toString());
         service = new CredentialService(new JsonCredentialRepository(mapper, props));

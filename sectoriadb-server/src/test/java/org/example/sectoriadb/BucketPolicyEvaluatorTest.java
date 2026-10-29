@@ -1,9 +1,9 @@
 package org.example.sectoriadb;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.s3.access.BucketPolicyEvaluator;
 import org.example.sectoriadb.s3.access.BucketPolicyEvaluator.Decision;
 import org.junit.jupiter.api.Test;
+import tools.jackson.databind.ObjectMapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 

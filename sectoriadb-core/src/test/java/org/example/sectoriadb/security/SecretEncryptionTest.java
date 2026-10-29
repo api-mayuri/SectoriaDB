@@ -1,9 +1,9 @@
 package org.example.sectoriadb.security;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.config.StorageProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tools.jackson.databind.ObjectMapper;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,7 +21,7 @@ class SecretEncryptionTest {
     @TempDir
     Path meta;
 
-    static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
+    static final ObjectMapper MAPPER = new ObjectMapper();
     static final String SECRET = "a-secret-that-must-not-be-on-disk-0123";
 
     static String newKey() {
@@ -78,10 +78,10 @@ class SecretEncryptionTest {
         s.register("ENCKEY0000000003", SECRET, "a");
         s.register("ENCKEY0000000004", "another-secret-of-the-second-0123", "b");
         // swap the stored ciphertexts: the access key id is the associated data of each
-        var root = (com.fasterxml.jackson.databind.node.ArrayNode) MAPPER.readTree(file());
+        var root = (tools.jackson.databind.node.ArrayNode) MAPPER.readTree(file());
         String c0 = root.get(0).get("secretKey").asText(), c1 = root.get(1).get("secretKey").asText();
-        ((com.fasterxml.jackson.databind.node.ObjectNode) root.get(0)).put("secretKey", c1);
-        ((com.fasterxml.jackson.databind.node.ObjectNode) root.get(1)).put("secretKey", c0);
+        ((tools.jackson.databind.node.ObjectNode) root.get(0)).put("secretKey", c1);
+        ((tools.jackson.databind.node.ObjectNode) root.get(1)).put("secretKey", c0);
         Files.writeString(meta.resolve("credentials.json"), MAPPER.writeValueAsString(root));
         assertThrows(IllegalStateException.class, () -> service(key).listAll());
     }

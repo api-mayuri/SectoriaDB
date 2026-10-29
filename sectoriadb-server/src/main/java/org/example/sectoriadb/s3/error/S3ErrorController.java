@@ -5,7 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.example.sectoriadb.observability.ObservabilityAttributes;
 import org.example.sectoriadb.observability.RequestIds;
 import org.example.sectoriadb.s3.xml.S3Error;
-import org.springframework.boot.web.servlet.error.ErrorController;
+import org.springframework.boot.webmvc.error.ErrorController;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
@@ -23,7 +23,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 @Controller
 public class S3ErrorController implements ErrorController {
 
-    @RequestMapping(value = "${server.error.path:/.s3-error}",
+    @RequestMapping(value = "${spring.web.error.path:/.s3-error}",
             produces = {MediaType.APPLICATION_XML_VALUE, MediaType.ALL_VALUE})
     public ResponseEntity<S3Error> error(HttpServletRequest request) {
         Object attr = request.getAttribute(RequestDispatcher.ERROR_STATUS_CODE);

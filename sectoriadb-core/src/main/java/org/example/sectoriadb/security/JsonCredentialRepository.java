@@ -1,13 +1,14 @@
 package org.example.sectoriadb.security;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.example.sectoriadb.config.StorageProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.node.ArrayNode;
+import tools.jackson.databind.node.ObjectNode;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -116,7 +117,7 @@ public class JsonCredentialRepository implements CredentialRepository {
             long n = 0;
             for (JsonNode e : root) if (!SecretCipher.isSealed(e.path("secretKey").asText(null))) n++;
             return n;
-        } catch (IOException e) {
+        } catch (JacksonException e) {
             return 0;
         }
     }
@@ -211,6 +212,9 @@ public class JsonCredentialRepository implements CredentialRepository {
         } catch (IOException e) {
             log.error("Failed to read credentials.json: {}", e.getMessage());
             throw new UncheckedIOException(e);
+        } catch (JacksonException e) {   // unchecked in Jackson 3: an unreadable file must still be reported
+            log.error("Failed to read credentials.json: {}", e.getMessage());
+            throw new IllegalStateException("credentials.json is not readable: " + e.getMessage(), e);
         }
     }
 

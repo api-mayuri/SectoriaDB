@@ -1,10 +1,10 @@
 package org.example.sectoriadb.security;
 
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.config.StorageProperties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.ObjectMapper;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class IamPolicyTest {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @TempDir
     Path dir;
@@ -128,7 +128,7 @@ class IamPolicyTest {
                         + "{\"accessKeyId\":\"NULLPOLICY000000001\",\"secretKey\":\"s3cr3t-s3cr3t-s3cr3t\",\"policy\":null}]");
         StorageProperties props = new StorageProperties();
         props.setMetaDir(dir.toString());
-        var repo = new JsonCredentialRepository(new ObjectMapper().findAndRegisterModules(), props);
+        var repo = new JsonCredentialRepository(new ObjectMapper(), props);
         assertNull(repo.findByAccessKeyId("LEGACYKEY0000000001").orElseThrow().getPolicy());
         assertNull(repo.findByAccessKeyId("NULLPOLICY000000001").orElseThrow().getPolicy());
     }

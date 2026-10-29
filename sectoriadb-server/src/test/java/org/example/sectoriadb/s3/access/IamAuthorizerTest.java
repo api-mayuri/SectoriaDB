@@ -1,6 +1,5 @@
 package org.example.sectoriadb.s3.access;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.security.CredentialService;
 import org.example.sectoriadb.security.JsonCredentialRepository;
@@ -8,6 +7,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.mock.web.MockHttpServletRequest;
+import tools.jackson.databind.ObjectMapper;
 
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -23,7 +23,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /** The combination of the identity policy of a key and the bucket policy, and the operation to action/resource mapping. */
 class IamAuthorizerTest {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     @TempDir
     Path dir;

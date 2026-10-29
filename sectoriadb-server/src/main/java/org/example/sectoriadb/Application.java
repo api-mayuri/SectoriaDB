@@ -1,8 +1,5 @@
 package org.example.sectoriadb;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.security.CredentialService;
 import org.example.sectoriadb.storage.ObjectWriter;
@@ -14,8 +11,9 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.ConfigurationPropertiesScan;
 import org.springframework.context.annotation.Bean;
 import org.springframework.scheduling.annotation.EnableScheduling;
-import org.springframework.shell.command.CommandExceptionResolver;
-import org.springframework.shell.command.CommandHandlingResult;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -245,16 +243,13 @@ public class Application {
         });
     }
 
-    /** Shows the reason when a shell/CLI command fails (otherwise the process just exits with 1). */
-    @Bean
-    public CommandExceptionResolver commandErrors() {
-        return ex -> CommandHandlingResult.of("Error: " + ex.getMessage() + "\n", 1);
-    }
 
     @Bean
     public ObjectMapper objectMapper() {
-        return new ObjectMapper()
-                .registerModule(new JavaTimeModule())
-                .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        // java.time as ISO-8601 strings is the Jackson 3 default; reading accepts what Jackson 2 accepted
+        return JsonMapper.builder()
+                .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+                .disable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
+                .build();
     }
 }

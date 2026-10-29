@@ -4,14 +4,14 @@ import org.example.sectoriadb.catalog.ManifestEntity;
 import org.example.sectoriadb.catalog.ManifestRepository;
 import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.storage.PoolService;
-import org.springframework.shell.standard.ShellComponent;
-import org.springframework.shell.standard.ShellMethod;
-import org.springframework.shell.standard.ShellOption;
+import org.springframework.shell.core.command.annotation.Command;
+import org.springframework.shell.core.command.annotation.Option;
+import org.springframework.stereotype.Component;
 
 import java.util.Set;
 
 /** Public/private sharing of buckets and objects (the same ACLs the S3 API manages). */
-@ShellComponent
+@Component
 public class AccessCommands {
 
     private static final Set<String> ACLS = Set.of("private", "public-read", "public-read-write");
@@ -24,11 +24,10 @@ public class AccessCommands {
         this.manifestRepo = manifestRepo;
     }
 
-    @ShellMethod(key = "bucket-acl",
-            value = "Show or set bucket access  |  bucket-acl --bucket B [--acl private|public-read|public-read-write]")
+    @Command(name = "bucket-acl", description = "Show or set bucket access  |  bucket-acl --bucket B [--acl private|public-read|public-read-write]")
     public String bucketAcl(
-            @ShellOption(help = "Bucket name") String bucket,
-            @ShellOption(defaultValue = ShellOption.NULL, help = "New ACL; omit to show the current one") String acl) {
+            @Option(longName = "bucket", required = true, description = "Bucket name") String bucket,
+            @Option(longName = "acl", description = "New ACL; omit to show the current one") String acl) {
         PoolEntity pool = poolService.getByName(bucket);
         if (acl == null) {
             return "bucket '" + bucket + "': " + effective(pool.getAcl());
@@ -37,12 +36,11 @@ public class AccessCommands {
         return "bucket '" + bucket + "' is now " + acl;
     }
 
-    @ShellMethod(key = "object-acl",
-            value = "Show or set object access  |  object-acl --bucket B --key K [--acl private|public-read]")
+    @Command(name = "object-acl", description = "Show or set object access  |  object-acl --bucket B --key K [--acl private|public-read]")
     public String objectAcl(
-            @ShellOption(help = "Bucket name") String bucket,
-            @ShellOption(help = "Object key") String key,
-            @ShellOption(defaultValue = ShellOption.NULL, help = "New ACL; omit to show the current one") String acl) {
+            @Option(longName = "bucket", required = true, description = "Bucket name") String bucket,
+            @Option(longName = "key", required = true, description = "Object key") String key,
+            @Option(longName = "acl", description = "New ACL; omit to show the current one") String acl) {
         if (acl == null) {
             ManifestEntity object = manifestRepo.findCurrent(bucket, key)
                     .orElseThrow(() -> new IllegalArgumentException("Object not found: " + bucket + "/" + key));
@@ -54,10 +52,9 @@ public class AccessCommands {
         return bucket + "/" + key + " is now " + acl;
     }
 
-    @ShellMethod(key = "public-list",
-            value = "List everything that is publicly readable, with URLs  |  public-list [--base-url http://host:8080]")
+    @Command(name = "public-list", description = "List everything that is publicly readable, with URLs  |  public-list [--base-url http://host:8080]")
     public String publicList(
-            @ShellOption(defaultValue = "http://localhost:8080", help = "Server URL used to print links") String baseUrl) {
+            @Option(longName = "base-url", defaultValue = "http://localhost:8080", description = "Server URL used to print links") String baseUrl) {
         StringBuilder sb = new StringBuilder();
         for (PoolEntity pool : poolService.listAll()) {
             boolean bucketPublic = isPublic(pool.getAcl());

@@ -10,9 +10,9 @@ import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.storage.BlobService;
 import org.example.sectoriadb.storage.HashTableCache;
 import org.example.sectoriadb.storage.PoolService;
-import org.springframework.shell.standard.ShellComponent;
-import org.springframework.shell.standard.ShellMethod;
-import org.springframework.shell.standard.ShellOption;
+import org.springframework.shell.core.command.annotation.Command;
+import org.springframework.shell.core.command.annotation.Option;
+import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
 import java.io.IOException;
@@ -24,7 +24,7 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 
-@ShellComponent
+@Component
 public class StatusCommands {
 
     private final PoolService poolService;
@@ -47,7 +47,7 @@ public class StatusCommands {
         this.opLogRepo   = opLogRepo;
     }
 
-    @ShellMethod(key = "status", value = "Show system status — all pools with fill ratios  |  status")
+    @Command(name = "status", description = "Show system status — all pools with fill ratios  |  status")
     public String status() throws IOException {
         List<PoolEntity> pools = poolService.listAll();
         if (pools.isEmpty()) return "No pools. Create one with 'mkpool --name NAME --path DIR'";
@@ -74,7 +74,7 @@ public class StatusCommands {
         return sb.toString().stripTrailing();
     }
 
-    @ShellMethod(key = "config", value = "Display current storage configuration  |  config")
+    @Command(name = "config", description = "Display current storage configuration  |  config")
     public String settingsShow() {
         StorageProperties.AutoResize ar = props.getAutoResize();
         return String.format(
@@ -114,9 +114,9 @@ public class StatusCommands {
                 props.getCache().getMaxOpenSmallBlobs());
     }
 
-    @ShellMethod(key = "logs", value = "Show the last N lines of the application log  |  logs [--n N]")
+    @Command(name = "logs", description = "Show the last N lines of the application log  |  logs [--n N]")
     public String logsTail(
-            @ShellOption(defaultValue = "50", help = "Number of lines to show") int n) throws IOException {
+            @Option(longName = "n", defaultValue = "50", description = "Number of lines to show") int n) throws IOException {
         int lines = n;
         Path logFile = Path.of(props.getMetaDir()).resolve("sectoriadb.log");   // same directory logback writes to
         if (!Files.exists(logFile)) {
@@ -127,15 +127,12 @@ public class StatusCommands {
         return tail.isEmpty() ? "Log file is empty." : String.join("\n", tail);
     }
 
-    @ShellMethod(key = "audit",
-            value = "Query the audit/recovery operation log  |  audit [--op TYPE] [--id ID] [--since TS] [--limit N]")
+    @Command(name = "audit", description = "Query the audit/recovery operation log  |  audit [--op TYPE] [--id ID] [--since TS] [--limit N]")
     public String logsQuery(
-            @ShellOption(defaultValue = ShellOption.NULL,
-                    help = "Operation: STORE | DELETE | RESTORE | RESTORE_RANGE | RESIZE | BLOB_CREATE | BLOB_DELETE | POOL_CREATE | POOL_DELETE")
-                    String op,
-            @ShellOption(defaultValue = ShellOption.NULL, help = "Entity ID (file / blob / pool id)") String id,
-            @ShellOption(defaultValue = ShellOption.NULL, help = "Only entries after this ISO-8601 timestamp") String since,
-            @ShellOption(defaultValue = "50", help = "Max rows to return") int limit) {
+            @Option(longName = "op", description = "Operation: STORE | DELETE | RESTORE | RESTORE_RANGE | RESIZE | BLOB_CREATE | BLOB_DELETE | POOL_CREATE | POOL_DELETE") String op,
+            @Option(longName = "id", description = "Entity ID (file / blob / pool id)") String id,
+            @Option(longName = "since", description = "Only entries after this ISO-8601 timestamp") String since,
+            @Option(longName = "limit", defaultValue = "50", description = "Max rows to return") int limit) {
         String operation = op;
         String entityId  = id;
 

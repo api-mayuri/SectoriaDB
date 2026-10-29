@@ -1,6 +1,5 @@
 package org.example.sectoriadb;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.security.CredentialEntity;
 import org.example.sectoriadb.security.CredentialService;
 import org.junit.jupiter.api.Test;
@@ -10,6 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
 import java.net.http.HttpRequest;
@@ -52,7 +52,7 @@ class S3PathParameterTest {
     @LocalServerPort int port;
     @Autowired CredentialService credentials;
 
-    private static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
+    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String EMPTY = SigV4TestClient.sha256(new byte[0]);
 
     private SigV4TestClient admin() { return new SigV4TestClient(port, AK, SK); }

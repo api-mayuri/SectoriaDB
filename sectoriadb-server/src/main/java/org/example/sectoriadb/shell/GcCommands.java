@@ -7,9 +7,9 @@ import org.example.sectoriadb.maintenance.gc.GcReports.Options;
 import org.example.sectoriadb.maintenance.gc.GcReports.RunReport;
 import org.example.sectoriadb.maintenance.gc.GcReports.SweepReport;
 import org.example.sectoriadb.storage.PoolService;
-import org.springframework.shell.standard.ShellComponent;
-import org.springframework.shell.standard.ShellMethod;
-import org.springframework.shell.standard.ShellOption;
+import org.springframework.shell.core.command.annotation.Command;
+import org.springframework.shell.core.command.annotation.Option;
+import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -17,7 +17,7 @@ import java.util.List;
 import java.util.Locale;
 
 /** Garbage collection from the shell: {@code gc status}, {@code gc run}, {@code gc sweep}, {@code gc compact}. */
-@ShellComponent
+@Component
 public class GcCommands {
 
     private final GarbageCollector gc;
@@ -28,7 +28,7 @@ public class GcCommands {
         this.poolService = poolService;
     }
 
-    @ShellMethod(key = "gc status", value = "Garbage collection: queue lengths and last results  |  gc status")
+    @Command(name = "gc status", description = "Garbage collection: queue lengths and last results  |  gc status")
     public String gcStatus() {
         GarbageCollector.Status s = gc.status();
         StringBuilder sb = new StringBuilder("Garbage collection\n");
@@ -49,11 +49,11 @@ public class GcCommands {
         return sb.toString().stripTrailing();
     }
 
-    @ShellMethod(key = "gc run", value = "One collector pass: free unreferenced chunks, orphans, tombstones  |  gc run [--pool NAME] [--grace 15m|0s] [--max N]")
+    @Command(name = "gc run", description = "One collector pass: free unreferenced chunks, orphans, tombstones  |  gc run [--pool NAME] [--grace 15m|0s] [--max N]")
     public String gcRun(
-            @ShellOption(defaultValue = ShellOption.NULL, help = "Only this pool") String pool,
-            @ShellOption(defaultValue = ShellOption.NULL, help = "Grace period for this pass (default: sectoriadb.gc.grace); 0s ignores it") String grace,
-            @ShellOption(defaultValue = ShellOption.NULL, help = "Most chunks to free in this pass") Integer max) {
+            @Option(longName = "pool", description = "Only this pool") String pool,
+            @Option(longName = "grace", description = "Grace period for this pass (default: sectoriadb.gc.grace); 0s ignores it") String grace,
+            @Option(longName = "max", description = "Most chunks to free in this pass") Integer max) {
         Options o = Options.defaults();
         if (pool != null) o = o.withPool(poolService.getByName(pool).getId());
         if (grace != null) o = o.withGrace(parseDuration(grace).toMillis());
@@ -64,8 +64,8 @@ public class GcCommands {
         return sb.toString();
     }
 
-    @ShellMethod(key = "gc sweep", value = "Walk the blobs of a pool for stray copies (crashed or aborted uploads) and free them  |  gc sweep --pool NAME")
-    public String gcSweep(@ShellOption(help = "Pool name") String pool) {
+    @Command(name = "gc sweep", description = "Walk the blobs of a pool for stray copies (crashed or aborted uploads) and free them  |  gc sweep --pool NAME")
+    public String gcSweep(@Option(longName = "pool", required = true, description = "Pool name") String pool) {
         PoolEntity p = poolService.getByName(pool);
         SweepReport r = gc.sweep(p);
         StringBuilder sb = new StringBuilder("Sweep of pool '" + pool + "': ").append(r);
@@ -74,10 +74,10 @@ public class GcCommands {
         return sb.toString();
     }
 
-    @ShellMethod(key = "gc compact", value = "Compact small-object blobs whose dead bytes exceed the threshold  |  gc compact --pool NAME [--force]")
+    @Command(name = "gc compact", description = "Compact small-object blobs whose dead bytes exceed the threshold  |  gc compact --pool NAME [--force]")
     public String gcCompact(
-            @ShellOption(help = "Pool name") String pool,
-            @ShellOption(defaultValue = "false", help = "Compact regardless of the dead-bytes threshold (never the append target)") boolean force) {
+            @Option(longName = "pool", required = true, description = "Pool name") String pool,
+            @Option(longName = "force", defaultValue = "false", description = "Compact regardless of the dead-bytes threshold (never the append target)") boolean force) {
         PoolEntity p = poolService.getByName(pool);
         List<CompactionReport> reports = gc.compact(p, force);
         if (reports.isEmpty()) return "Nothing to compact in pool '" + pool + "'.";

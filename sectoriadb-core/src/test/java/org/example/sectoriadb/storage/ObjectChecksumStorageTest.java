@@ -1,6 +1,5 @@
 package org.example.sectoriadb.storage;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.audit.JsonOperationLogRepository;
 import org.example.sectoriadb.audit.OperationLogService;
 import org.example.sectoriadb.catalog.BlobFileEntity;
@@ -28,6 +27,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -82,7 +82,7 @@ class ObjectChecksumStorageTest {
         props.setDefaultChunkSize(CHUNK);
         props.setDefaultNumBuckets(64);
         props.setFsync(false);
-        mapper = new ObjectMapper().findAndRegisterModules();
+        mapper = new ObjectMapper();
         Files.createDirectories(root.resolve("meta"));
         store = MetaStore.open(root.resolve("meta/sectoria.db"), MetaStoreOptions.defaults().fsync(false));
         MetaStoreProvider stores = MetaStoreProvider.of(store);

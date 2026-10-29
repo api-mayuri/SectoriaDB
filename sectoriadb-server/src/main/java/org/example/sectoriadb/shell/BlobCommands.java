@@ -11,14 +11,14 @@ import org.example.sectoriadb.maintenance.ResizeService;
 import org.example.sectoriadb.storage.BlobService;
 import org.example.sectoriadb.storage.HashTableCache;
 import org.example.sectoriadb.storage.PoolService;
-import org.springframework.shell.standard.ShellComponent;
-import org.springframework.shell.standard.ShellMethod;
-import org.springframework.shell.standard.ShellOption;
+import org.springframework.shell.core.command.annotation.Command;
+import org.springframework.shell.core.command.annotation.Option;
+import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.util.List;
 
-@ShellComponent
+@Component
 public class BlobCommands {
 
     private final BlobService blobService;
@@ -38,12 +38,12 @@ public class BlobCommands {
         this.props         = props;
     }
 
-    @ShellMethod(key = "mkblob", value = "Create a blob file in a pool  |  mkblob --pool NAME [--buckets N] [--chunk N] | mkblob --pool NAME --small")
+    @Command(name = "mkblob", description = "Create a blob file in a pool  |  mkblob --pool NAME [--buckets N] [--chunk N] | mkblob --pool NAME --small")
     public String mkblob(
-            @ShellOption(help = "Pool name") String pool,
-            @ShellOption(defaultValue = ShellOption.NULL, help = "Number of hash buckets (default from config)") Integer buckets,
-            @ShellOption(defaultValue = ShellOption.NULL, help = "Chunk size in bytes (default from config)") Integer chunk,
-            @ShellOption(defaultValue = "false", help = "Create a small-object blob (append-only log) instead of a cuckoo table") boolean small)
+            @Option(longName = "pool", required = true, description = "Pool name") String pool,
+            @Option(longName = "buckets", description = "Number of hash buckets (default from config)") Integer buckets,
+            @Option(longName = "chunk", description = "Chunk size in bytes (default from config)") Integer chunk,
+            @Option(longName = "small", defaultValue = "false", description = "Create a small-object blob (append-only log) instead of a cuckoo table") boolean small)
             throws IOException {
         PoolEntity poolEntity = poolService.getByName(pool);
         if (small) {
@@ -58,8 +58,8 @@ public class BlobCommands {
                 e.getId(), b, ShellTable.humanSize(cs), ShellTable.humanSize(e.getTotalBytes()));
     }
 
-    @ShellMethod(key = "blobs", value = "List blob files in a pool  |  blobs --pool NAME")
-    public String blobs(@ShellOption(help = "Pool name") String pool) throws IOException {
+    @Command(name = "blobs", description = "List blob files in a pool  |  blobs --pool NAME")
+    public String blobs(@Option(longName = "pool", required = true, description = "Pool name") String pool) throws IOException {
         PoolEntity poolEntity = poolService.getByName(pool);
         List<BlobFileEntity> list = blobService.listByPool(poolEntity);
         if (list.isEmpty()) return "Pool '" + pool + "' has no blobs. Use 'mkblob --pool " + pool + "' to create one.";
@@ -67,8 +67,8 @@ public class BlobCommands {
         return ShellTable.poolBlobTable(blobService, chunkRepo, list).stripTrailing();
     }
 
-    @ShellMethod(key = "blob", value = "Show detailed blob info and fill statistics  |  blob --id BLOB_ID")
-    public String blob(@ShellOption(help = "Blob file ID") String id) throws IOException {
+    @Command(name = "blob", description = "Show detailed blob info and fill statistics  |  blob --id BLOB_ID")
+    public String blob(@Option(longName = "id", required = true, description = "Blob file ID") String id) throws IOException {
         BlobFileEntity b = blobService.getById(id);
         if (b.getKind() == BlobKind.SMALL) {
             SmallObjectBlob.Stats s = blobService.getSmallStats(b);
@@ -118,11 +118,10 @@ public class BlobCommands {
                 ShellTable.humanSize((long) blobService.placementWeight(b)));
     }
 
-    @ShellMethod(key = "resize",
-            value = "Expand one blob in place via cuckoo migration (pools normally grow by adding blobs)  |  resize --id BLOB_ID --buckets N")
+    @Command(name = "resize", description = "Expand one blob in place via cuckoo migration (pools normally grow by adding blobs)  |  resize --id BLOB_ID --buckets N")
     public String resize(
-            @ShellOption(help = "Blob file ID") String id,
-            @ShellOption(help = "New number of buckets (must leave ≤70% fill after migration)") int buckets)
+            @Option(longName = "id", required = true, description = "Blob file ID") String id,
+            @Option(longName = "buckets", required = true, description = "New number of buckets (must leave ≤70% fill after migration)") int buckets)
             throws IOException {
         BlobFileEntity old = blobService.getById(id);
         if (old.getKind() == BlobKind.SMALL) {
@@ -138,9 +137,8 @@ public class BlobCommands {
                 newBlob.getId(), newStats.fillPercent(), newStats.activeSlots(), newStats.totalSlots());
     }
 
-    @ShellMethod(key = "scrub",
-            value = "Verify the CRC32C of every stored chunk in a blob  |  scrub --id BLOB_ID")
-    public String scrub(@ShellOption(help = "Blob file ID") String id) throws IOException {
+    @Command(name = "scrub", description = "Verify the CRC32C of every stored chunk in a blob  |  scrub --id BLOB_ID")
+    public String scrub(@Option(longName = "id", required = true, description = "Blob file ID") String id) throws IOException {
         BlobFileEntity b = blobService.getById(id);
         if (b.getKind() == BlobKind.SMALL) {
             SmallObjectBlob.ScrubReport r = blobService.scrubSmall(b);
@@ -163,10 +161,10 @@ public class BlobCommands {
         return sb.toString();
     }
 
-    @ShellMethod(key = "rmblob", value = "Delete a blob file (only if no files reference it)  |  rmblob --id BLOB_ID [--yes]")
+    @Command(name = "rmblob", description = "Delete a blob file (only if no files reference it)  |  rmblob --id BLOB_ID [--yes]")
     public String rmblob(
-            @ShellOption(help = "Blob file ID") String id,
-            @ShellOption(defaultValue = "false", help = "Skip confirmation prompt") boolean yes)
+            @Option(longName = "id", required = true, description = "Blob file ID") String id,
+            @Option(longName = "yes", defaultValue = "false", description = "Skip confirmation prompt") boolean yes)
             throws IOException {
         if (!yes) return "Add '--yes' to confirm deletion of blob '" + id + "'";
         BlobFileEntity b = blobService.getById(id);

@@ -1,12 +1,9 @@
 package org.example.sectoriadb.catalog.metastore;
 
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.SerializationFeature;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
-
-import java.io.IOException;
-import java.io.UncheckedIOException;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.DeserializationFeature;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 /**
  * The JSON part of metastore values. A private mapper, so the stored format does not depend on how the application
@@ -14,10 +11,15 @@ import java.io.UncheckedIOException;
  */
 final class JsonValues {
 
-    private static final ObjectMapper MAPPER = new ObjectMapper()
-            .registerModule(new JavaTimeModule())
-            .disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS)
-            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES);
+    /**
+     * Jackson 3 writes java.time values as ISO-8601 strings by default, as the stored records always had them. The
+     * reading side is pinned to the Jackson 2 behaviour the records were written under: unknown properties and a null
+     * for a primitive are accepted (older and newer versions of a record stay readable).
+     */
+    private static final ObjectMapper MAPPER = JsonMapper.builder()
+            .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+            .disable(DeserializationFeature.FAIL_ON_NULL_FOR_PRIMITIVES)
+            .build();
 
     private JsonValues() {
     }
@@ -25,15 +27,15 @@ final class JsonValues {
     static byte[] write(Object value) {
         try {
             return MAPPER.writeValueAsBytes(value);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
+        } catch (JacksonException e) {
+            throw new IllegalStateException("cannot encode " + value.getClass().getSimpleName() + ": " + e.getMessage(), e);
         }
     }
 
     static <T> T read(byte[] json, int off, int len, Class<T> type) {
         try {
             return MAPPER.readValue(json, off, len, type);
-        } catch (IOException e) {
+        } catch (JacksonException e) {
             throw new IllegalStateException("corrupt " + type.getSimpleName() + " record: " + e.getMessage(), e);
         }
     }

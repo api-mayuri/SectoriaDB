@@ -9,9 +9,9 @@ import org.example.sectoriadb.storage.ObjectReader;
 import org.example.sectoriadb.storage.ObjectVerificationService;
 import org.example.sectoriadb.storage.ObjectWriter;
 import org.example.sectoriadb.storage.PoolService;
-import org.springframework.shell.standard.ShellComponent;
-import org.springframework.shell.standard.ShellMethod;
-import org.springframework.shell.standard.ShellOption;
+import org.springframework.shell.core.command.annotation.Command;
+import org.springframework.shell.core.command.annotation.Option;
+import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -19,7 +19,7 @@ import java.util.List;
 import java.util.TreeSet;
 import java.util.function.Predicate;
 
-@ShellComponent
+@Component
 public class FileCommands {
 
     private final ObjectWriter writer;
@@ -41,10 +41,10 @@ public class FileCommands {
         this.verifier = verifier;
     }
 
-    @ShellMethod(key = "store", value = "Store a file into a pool  |  store --file PATH --pool NAME")
+    @Command(name = "store", description = "Store a file into a pool  |  store --file PATH --pool NAME")
     public String store(
-            @ShellOption(help = "Path to the source file") String file,
-            @ShellOption(help = "Target pool name") String pool) throws IOException {
+            @Option(longName = "file", required = true, description = "Path to the source file") String file,
+            @Option(longName = "pool", required = true, description = "Target pool name") String pool) throws IOException {
         PoolEntity poolEntity = poolService.getByName(pool);
         ManifestEntity m = writer.store(Path.of(file), poolEntity);
         return String.format("Stored  id=%-36s  file=%s  size=%s  chunks=%d",
@@ -52,9 +52,9 @@ public class FileCommands {
                 ShellTable.humanSize(m.getTotalBytes()), m.getTotalChunks());
     }
 
-    @ShellMethod(key = "ls", value = "List stored files  |  ls [--pool NAME]")
+    @Command(name = "ls", description = "List stored files  |  ls [--pool NAME]")
     public String ls(
-            @ShellOption(defaultValue = ShellOption.NULL, help = "Filter by pool name") String pool) {
+            @Option(longName = "pool", description = "Filter by pool name") String pool) {
         List<ManifestEntity> manifests;
         if (pool != null) {
             PoolEntity poolEntity = poolService.getByName(pool);
@@ -74,8 +74,8 @@ public class FileCommands {
         return sb.toString().stripTrailing();
     }
 
-    @ShellMethod(key = "info", value = "Show detailed info about a stored file  |  info --id FILE_ID")
-    public String info(@ShellOption(help = "File ID") String id) {
+    @Command(name = "info", description = "Show detailed info about a stored file  |  info --id FILE_ID")
+    public String info(@Option(longName = "id", required = true, description = "File ID") String id) {
         ManifestEntity m = catalog.getActiveManifest(id);
         var phys = m.getPhysicalBlob();
         String poolName = m.getPoolId() == null ? "?"
@@ -122,16 +122,13 @@ public class FileCommands {
                         : "-");
     }
 
-    @ShellMethod(key = "get",
-            value = "Restore a stored file to disk (full or byte-range)  |  " +
+    @Command(name = "get", description = "Restore a stored file to disk (full or byte-range)  |  " +
                     "get --id ID --out PATH [--from N --len N]")
     public String get(
-            @ShellOption(help = "File ID") String id,
-            @ShellOption(help = "Output path") String out,
-            @ShellOption(defaultValue = ShellOption.NULL,
-                    help = "Start byte offset for range restore (0-based, inclusive)") Long from,
-            @ShellOption(defaultValue = ShellOption.NULL,
-                    help = "Number of bytes to extract (required when --from is set)") Long len)
+            @Option(longName = "id", required = true, description = "File ID") String id,
+            @Option(longName = "out", required = true, description = "Output path") String out,
+            @Option(longName = "from", description = "Start byte offset for range restore (0-based, inclusive)") Long from,
+            @Option(longName = "len", description = "Number of bytes to extract (required when --from is set)") Long len)
             throws IOException {
 
         ManifestEntity m = catalog.getActiveManifest(id);
@@ -155,10 +152,9 @@ public class FileCommands {
         }
     }
 
-    @ShellMethod(key = "verify",
-            value = "Re-read an object and check chunk/record CRCs, the stored whole-object CRC32C, the client " +
+    @Command(name = "verify", description = "Re-read an object and check chunk/record CRCs, the stored whole-object CRC32C, the client " +
                     "checksum and (non-multipart) MD5/ETag  |  verify --id FILE_ID")
-    public String verify(@ShellOption(help = "File ID") String id) {
+    public String verify(@Option(longName = "id", required = true, description = "File ID") String id) {
         ManifestEntity m = catalog.getActiveManifest(id);
         ObjectVerificationService.Result r = verifier.verify(m);
         StringBuilder sb = new StringBuilder();
@@ -167,11 +163,10 @@ public class FileCommands {
         return sb.toString();
     }
 
-    @ShellMethod(key = "verify-all",
-            value = "Verify every live object (optionally only one pool) and print a summary  |  " +
+    @Command(name = "verify-all", description = "Verify every live object (optionally only one pool) and print a summary  |  " +
                     "verify-all [--pool NAME]")
     public String verifyAll(
-            @ShellOption(defaultValue = ShellOption.NULL, help = "Only objects of this pool / bucket") String pool) {
+            @Option(longName = "pool", description = "Only objects of this pool / bucket") String pool) {
         Predicate<ManifestEntity> filter = m -> true;
         if (pool != null) {
             PoolEntity poolEntity = poolService.getByName(pool);
@@ -193,10 +188,10 @@ public class FileCommands {
         return sb.toString();
     }
 
-    @ShellMethod(key = "rm", value = "Soft-delete a stored file  |  rm --id FILE_ID [--yes]")
+    @Command(name = "rm", description = "Soft-delete a stored file  |  rm --id FILE_ID [--yes]")
     public String rm(
-            @ShellOption(help = "File ID") String id,
-            @ShellOption(defaultValue = "false", help = "Skip confirmation prompt") boolean yes) {
+            @Option(longName = "id", required = true, description = "File ID") String id,
+            @Option(longName = "yes", defaultValue = "false", description = "Skip confirmation prompt") boolean yes) {
         if (!yes) return "Add '--yes' to confirm deletion of file '" + id + "'";
         ManifestEntity m = catalog.getActiveManifest(id);
         catalog.delete(id);

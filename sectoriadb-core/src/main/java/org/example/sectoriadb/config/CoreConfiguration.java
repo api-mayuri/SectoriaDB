@@ -1,6 +1,5 @@
 package org.example.sectoriadb.config;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.audit.JsonOperationLogRepository;
 import org.example.sectoriadb.audit.OperationLogRepository;
 import org.example.sectoriadb.audit.OperationLogService;
@@ -47,6 +46,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.unit.DataSize;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * The composition root of the core module: every core component is a plain Java class and is wired here, in one place.

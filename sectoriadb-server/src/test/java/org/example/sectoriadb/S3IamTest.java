@@ -1,6 +1,5 @@
 package org.example.sectoriadb;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.config.StorageProperties;
 import org.example.sectoriadb.security.CredentialEntity;
 import org.example.sectoriadb.security.CredentialService;
@@ -13,6 +12,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import tools.jackson.databind.ObjectMapper;
 
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
@@ -59,7 +59,7 @@ class S3IamTest {
     @Autowired CredentialService credentials;
     @Autowired PoolService poolService;
 
-    private static final ObjectMapper MAPPER = new ObjectMapper().findAndRegisterModules();
+    private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String EMPTY = SigV4TestClient.sha256(new byte[0]);
 
     private SigV4TestClient admin() { return new SigV4TestClient(port, AK, SK); }

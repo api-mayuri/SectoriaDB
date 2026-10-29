@@ -1,6 +1,5 @@
 package org.example.sectoriadb.storage;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.audit.JsonOperationLogRepository;
 import org.example.sectoriadb.audit.OperationLogService;
 import org.example.sectoriadb.catalog.BlobFileEntity;
@@ -26,6 +25,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -95,7 +95,7 @@ class SmallObjectStorageTest {
 
     /** (Re)builds the whole object graph, as after a process restart. */
     private void wire() {
-        mapper = new ObjectMapper().findAndRegisterModules();
+        mapper = new ObjectMapper();
         if (store != null) store.close();
         try {
             Files.createDirectories(root.resolve("meta"));

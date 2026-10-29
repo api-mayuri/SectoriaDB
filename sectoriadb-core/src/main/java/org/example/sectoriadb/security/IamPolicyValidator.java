@@ -1,6 +1,6 @@
 package org.example.sectoriadb.security;
 
-import com.fasterxml.jackson.databind.JsonNode;
+import tools.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -39,7 +39,7 @@ public final class IamPolicyValidator {
         if (policy.toString().length() > MAX_POLICY_CHARS) {
             errors.add("the policy is larger than " + MAX_POLICY_CHARS + " characters");
         }
-        policy.fieldNames().forEachRemaining(name -> {
+        policy.propertyNames().forEach(name -> {
             if (!TOP_LEVEL.contains(name)) warnings.add("unknown top-level key '" + name + "' is ignored");
         });
         JsonNode version = policy.get("Version");
@@ -70,7 +70,7 @@ public final class IamPolicyValidator {
         if (stmt.has("Principal") || stmt.has("NotPrincipal")) {
             errors.add(at + "Principal is not allowed in an identity policy (the principal is the access key itself)");
         }
-        stmt.fieldNames().forEachRemaining(name -> {
+        stmt.propertyNames().forEach(name -> {
             if (!STATEMENT_KEYS.contains(name) && !name.equals("Principal") && !name.equals("NotPrincipal")) {
                 errors.add(at + "unknown element '" + name + "'");
             }
@@ -148,8 +148,7 @@ public final class IamPolicyValidator {
             errors.add(at + "Condition must be a non-empty object");
             return;
         }
-        for (var ops = cond.fields(); ops.hasNext(); ) {
-            var op = ops.next();
+        for (var op : cond.properties()) {
             if (!CONDITION_OPERATORS.contains(op.getKey())) {
                 errors.add(at + "unsupported condition operator '" + op.getKey() + "' (supported: Bool, StringEquals, StringLike)");
                 continue;
@@ -159,8 +158,7 @@ public final class IamPolicyValidator {
                 errors.add(at + "Condition " + op.getKey() + " must be a non-empty object");
                 continue;
             }
-            for (var entries = keys.fields(); entries.hasNext(); ) {
-                var e = entries.next();
+            for (var e : keys.properties()) {
                 String key = e.getKey().toLowerCase(java.util.Locale.ROOT);
                 if (!CONDITION_KEYS.contains(key)) {
                     errors.add(at + "unsupported condition key '" + e.getKey() + "' (supported: aws:SecureTransport, s3:prefix, s3:delimiter)");

@@ -8,7 +8,7 @@ import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
-import org.springframework.shell.command.CommandCatalog;
+import org.springframework.shell.core.command.CommandRegistry;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
@@ -51,7 +51,7 @@ class GarbageCollectionS3Test {
     @LocalServerPort int port;
     @Autowired GcCommands commands;
     @Autowired GarbageCollector gc;
-    @Autowired CommandCatalog catalog;
+    @Autowired CommandRegistry catalog;
     private final HttpClient http = HttpClient.newHttpClient();
 
     private URI uri(String path) { return URI.create("http://localhost:" + port + path); }
@@ -73,7 +73,7 @@ class GarbageCollectionS3Test {
     @Test
     void shellCommandsAreRegisteredUnderTheirTwoWordNames() {
         for (String name : new String[]{"gc status", "gc run", "gc sweep", "gc compact"}) {
-            assertTrue(catalog.getRegistrations().containsKey(name), name + " in " + catalog.getRegistrations().keySet());
+            assertTrue(catalog.getCommandByName(name) != null, name + " is a registered command");
         }
     }
 

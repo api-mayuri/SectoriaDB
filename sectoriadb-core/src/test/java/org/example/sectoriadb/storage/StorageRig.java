@@ -1,6 +1,5 @@
 package org.example.sectoriadb.storage;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.example.sectoriadb.audit.JsonOperationLogRepository;
 import org.example.sectoriadb.audit.OperationLogService;
 import org.example.sectoriadb.catalog.BlobFileEntity;
@@ -30,6 +29,7 @@ import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.MetaStoreOptions;
 import org.example.sectoriadb.metrics.RecordingMetrics;
 import org.example.sectoriadb.storage.multipart.MultipartService;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
@@ -102,7 +102,7 @@ public final class StorageRig implements AutoCloseable {
         pools = new MetaStorePoolRepository(stores);
         blobs = new MetaStoreBlobFileRepository(stores);
         manifests = new MetaStoreManifestRepository(stores);
-        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        ObjectMapper mapper = new ObjectMapper();
         blobGate = new BlobGate();
         cache = new HashTableCache(props, metrics, blobGate);
         if (engineFactory != null) cache.setEngineFactory(engineFactory);
