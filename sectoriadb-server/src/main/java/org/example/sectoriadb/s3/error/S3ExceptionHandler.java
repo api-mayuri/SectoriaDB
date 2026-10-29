@@ -51,9 +51,9 @@ public class S3ExceptionHandler {
 
         ObservabilityAttributes.noteErrorCode(ex.getCode());
         S3Error error = new S3Error(ex.getCode(), ex.getMessage(), ex.getResource(), requestId);
-        return ResponseEntity.status(ex.getStatus())
-                .contentType(MediaType.APPLICATION_XML)
-                .body(error);
+        var resp = ResponseEntity.status(ex.getStatus()).contentType(MediaType.APPLICATION_XML);
+        ex.getHeaders().forEach(resp::header);
+        return resp.body(error);
     }
 
     /**

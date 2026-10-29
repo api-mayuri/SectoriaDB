@@ -571,7 +571,7 @@ class S3ApiRegressionTest {
     @Test
     void deleteWithUnclaimedSubresourceDoesNotDestroyTheBucketOrTheObject() throws Exception {
         mkBucket("del-sub");
-        for (String q : new String[]{"tagging", "lifecycle", "cors", "encryption", "website"}) {
+        for (String q : new String[]{"tagging", "cors", "encryption", "website"}) {   // lifecycle has its own DELETE now
             var r = send(HttpRequest.newBuilder(uri("/del-sub?" + q)).DELETE());
             assertEquals(501, r.statusCode(), q);
             assertEquals(200, send(HttpRequest.newBuilder(uri("/del-sub")).GET()).statusCode(), "bucket must survive DELETE ?" + q);

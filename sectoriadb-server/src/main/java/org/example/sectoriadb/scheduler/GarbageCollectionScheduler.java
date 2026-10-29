@@ -34,9 +34,20 @@ public class GarbageCollectionScheduler {
     private static final int MAX_BACK_TO_BACK = 20;
 
     private final GarbageCollector gc;
+    private final org.example.sectoriadb.maintenance.LifecycleService lifecycle;
 
-    public GarbageCollectionScheduler(GarbageCollector gc) {
+    public GarbageCollectionScheduler(GarbageCollector gc, org.example.sectoriadb.maintenance.LifecycleService lifecycle) {
         this.gc = gc;
+        this.lifecycle = lifecycle;
+    }
+
+    @Scheduled(fixedDelayString = "#{@gcSchedule.lifecycleIntervalMillis()}", initialDelayString = "#{@gcSchedule.lifecycleInitialDelayMillis()}")
+    public void applyLifecycle() {
+        try {
+            lifecycle.run(System.currentTimeMillis());
+        } catch (RuntimeException e) {
+            log.error("Scheduled lifecycle pass failed: {}", e.toString(), e);
+        }
     }
 
     @Scheduled(fixedDelayString = "#{@gcSchedule.intervalMillis()}", initialDelayString = "#{@gcSchedule.initialDelayMillis()}")
@@ -91,5 +102,7 @@ public class GarbageCollectionScheduler {
         public long sweepInitialDelayMillis() { return Math.min(sweepIntervalMillis(), 10 * 60_000L); }
         public long compactIntervalMillis() { return ms(gc.getCompactInterval(), 1_000); }
         public long compactInitialDelayMillis() { return Math.min(compactIntervalMillis(), 5 * 60_000L); }
+        public long lifecycleIntervalMillis() { return ms(gc.getLifecycleInterval(), 1_000); }
+        public long lifecycleInitialDelayMillis() { return Math.min(lifecycleIntervalMillis(), 2 * 60_000L); }
     }
 }

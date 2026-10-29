@@ -172,8 +172,7 @@ public class S3MultipartController {
         MultipartUpload upload = multipart.requireOpen(uploadId, bucket, S3Request.extractKey(request, bucket));
 
         CopySource source = CopySource.parse(copySource);
-        ManifestEntity srcManifest = manifestRepo.findCurrent(source.bucket(), source.key())
-                .orElseThrow(() -> S3Exception.noSuchKey(source.bucket(), source.key()));
+        ManifestEntity srcManifest = lookup.requireObject(source.bucket(), source.key(), source.versionId());
         ByteRange range = copyRange == null ? null : ByteRange.parseCopyRange(copyRange, srcManifest.getTotalBytes());
         bodies.requireAcceptableCopy(request, range == null ? srcManifest.getTotalBytes() : range.length());
 
@@ -229,8 +228,12 @@ public class S3MultipartController {
         String host = request.getHeader("Host");
         String location = request.getScheme() + "://" + (host != null ? host : request.getServerName())
                 + "/" + bucket + "/" + result.key();
-        return ResponseEntity.ok()
-                .body(MultipartXml.completeResult(location, bucket, result.key(), result.etag(), checksumResultXml(result)));
+        var ok = ResponseEntity.ok();
+        if (result.manifestId() != null) {
+            manifestRepo.findById(result.manifestId()).map(lookup::versionHeader)
+                    .ifPresent(v -> ok.header(S3Lookup.VERSION_ID_HEADER, v));
+        }
+        return ok.body(MultipartXml.completeResult(location, bucket, result.key(), result.etag(), checksumResultXml(result)));
     }
 
     private static String checksumResultXml(MultipartRepository.CompleteResult r) {

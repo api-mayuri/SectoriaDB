@@ -123,6 +123,8 @@ public class S3ObjectController {
 
             var ok = ResponseEntity.ok()
                     .header("ETag", entity.getEtag() != null ? entity.getEtag() : "\"\"");
+            String version = lookup.versionHeader(entity);
+            if (version != null) ok.header(S3Lookup.VERSION_ID_HEADER, version);
             S3Checksums.addClientHeaders(entity, ok::header);
             return ok.build();
         }
@@ -150,6 +152,7 @@ public class S3ObjectController {
             @RequestParam(value = "response-content-language", required = false) String respContentLanguage,
             @RequestParam(value = "response-expires", required = false) String respExpires,
             @RequestParam(value = "partNumber", required = false) Integer partNumber,
+            @RequestParam(value = "versionId", required = false) String versionId,
             HttpServletRequest request,
             HttpServletResponse response) throws IOException {
 
@@ -163,7 +166,9 @@ public class S3ObjectController {
                     "Request specific response headers cannot be used for anonymous GET requests.");
         }
         String objectKey = S3Request.extractKey(request, bucket);
-        ManifestEntity entity = lookup.requireObject(bucket, objectKey);
+        ManifestEntity entity = lookup.requireObject(bucket, objectKey, versionId);
+        String version = lookup.versionHeader(entity);
+        if (version != null) response.setHeader(S3Lookup.VERSION_ID_HEADER, version);
 
         String etag = entity.getEtag() != null ? entity.getEtag() : "\"\"";
         ManifestEntity.Extent partExtent = partExtent(entity, partNumber, rangeHeader);
@@ -286,10 +291,11 @@ public class S3ObjectController {
             @RequestHeader(value = "If-None-Match", required = false) String ifNoneMatch,
             @RequestHeader(value = "If-Match", required = false) String ifMatch,
             @RequestParam(value = "partNumber", required = false) Integer partNumber,
+            @RequestParam(value = "versionId", required = false) String versionId,
             HttpServletRequest request) {
 
         String objectKey = S3Request.extractKey(request, bucket);
-        ManifestEntity entity = lookup.requireObject(bucket, objectKey);
+        ManifestEntity entity = lookup.requireObject(bucket, objectKey, versionId);
 
         String etag = entity.getEtag() != null ? entity.getEtag() : "\"\"";
         ManifestEntity.Extent partExtent = partExtent(entity, partNumber, request.getHeader("Range"));
@@ -322,6 +328,8 @@ public class S3ObjectController {
         ObjectHeaders.of(entity).writeTo(resp::header);
         if (entity.getUserMetadata() != null) entity.getUserMetadata().forEach(resp::header);
         if (!partial && S3Checksums.modeEnabled(request)) S3Checksums.addObjectHeaders(entity, resp::header);
+        String version = lookup.versionHeader(entity);
+        if (version != null) resp.header(S3Lookup.VERSION_ID_HEADER, version);
 
         return resp.build();
     }
@@ -335,10 +343,15 @@ public class S3ObjectController {
 
         S3Request.requireOnlyQueryParams(request, "x-id", "versionId");
         String objectKey = S3Request.extractKey(request, bucket);
-        catalog.deleteObject(bucket, objectKey);   // idempotent: deleting a missing key is a 204 as in S3
-
-        return ResponseEntity.noContent()
-                .build();
+        String versionId = request.getParameter("versionId");
+        if (versionId != null && versionId.isEmpty()) throw S3Exception.invalidArgument("Version id cannot be the empty string");
+        lookup.requireBucket(bucket);
+        // idempotent: deleting a missing key (or a missing version) is a 204 as in S3
+        var outcome = catalog.delete(bucket, objectKey, versionId);
+        var resp = ResponseEntity.noContent();
+        if (outcome.versionId() != null) resp.header(S3Lookup.VERSION_ID_HEADER, outcome.versionId());
+        if (outcome.deleteMarker()) resp.header(S3Lookup.DELETE_MARKER_HEADER, "true");
+        return resp.build();
     }
 
     // ── CopyObject ────────────────────────────────────────────────────────────
@@ -367,14 +380,15 @@ public class S3ObjectController {
         String sourceBucket = source.bucket();
         String sourceKey = source.key();
 
-        // Validate: can't copy to self without REPLACE
-        if (sourceBucket.equals(bucket) && sourceKey.equals(destKey) && !"REPLACE".equalsIgnoreCase(metadataDirective)) {
+        // Validate: can't copy to self without REPLACE (copying an older version over the current one is a restore: allowed)
+        if (sourceBucket.equals(bucket) && sourceKey.equals(destKey) && source.versionId() == null
+                && !"REPLACE".equalsIgnoreCase(metadataDirective)) {
             throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidRequest",
                     "This copy request is illegal because it is trying to copy an object to itself without changing the object's metadata.");
         }
 
         // Get source object
-        ManifestEntity srcEntity = lookup.requireObject(sourceBucket, sourceKey);
+        ManifestEntity srcEntity = lookup.requireObject(sourceBucket, sourceKey, source.versionId());
 
         boolean replace = "REPLACE".equalsIgnoreCase(metadataDirective);
         String newContentType = replace
@@ -414,9 +428,12 @@ public class S3ObjectController {
                     + "<LastModified>" + HttpDates.isoDate(entity.getCreatedAt()) + "</LastModified>"
                     + "<ETag>" + XmlSupport.escape(entity.getEtag()) + "</ETag>"
                     + "</CopyObjectResult>";
-            return ResponseEntity.ok()
-                    .contentType(MediaType.APPLICATION_XML)
-                    .body(xml);
+            var ok = ResponseEntity.ok().contentType(MediaType.APPLICATION_XML);
+            String version = lookup.versionHeader(entity);
+            if (version != null) ok.header(S3Lookup.VERSION_ID_HEADER, version);
+            String sourceVersion = lookup.versionHeader(srcEntity);
+            if (sourceVersion != null) ok.header("x-amz-copy-source-version-id", sourceVersion);
+            return ok.body(xml);
         } finally {
             Files.deleteIfExists(tmp);
         }

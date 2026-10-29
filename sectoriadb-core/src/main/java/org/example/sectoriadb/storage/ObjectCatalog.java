@@ -56,6 +56,14 @@ public class ObjectCatalog {
         return removed.isPresent();
     }
 
+    /** S3 DeleteObject with the versioning rules of the bucket (a version id deletes that version for good). */
+    public ManifestRepository.DeleteOutcome delete(String bucket, String key, String versionId) {
+        long t0 = System.currentTimeMillis();
+        ManifestRepository.DeleteOutcome o = manifestRepo.delete(bucket, key, versionId);
+        o.removed().ifPresent(m -> afterDelete(m, t0));
+        return o;
+    }
+
     /** Shell {@code rm}: retires one manifest by id (and unlinks it if it is the current version of an object). */
     public void delete(String manifestId) {
         long t0 = System.currentTimeMillis();

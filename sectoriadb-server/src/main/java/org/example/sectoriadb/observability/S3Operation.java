@@ -13,7 +13,8 @@ public enum S3Operation {
     CreateMultipartUpload, UploadPart, UploadPartCopy, CompleteMultipartUpload, AbortMultipartUpload,
     ListParts, ListMultipartUploads,
     // buckets
-    CreateBucket, HeadBucket, DeleteBucket, GetBucketLocation, GetBucketVersioning,
+    CreateBucket, HeadBucket, DeleteBucket, GetBucketLocation, GetBucketVersioning, PutBucketVersioning,
+    PutBucketLifecycle, DeleteBucketLifecycle,
     // ACL / policy
     GetBucketAcl, PutBucketAcl, GetObjectAcl, PutObjectAcl,
     GetBucketPolicy, PutBucketPolicy, DeleteBucketPolicy,

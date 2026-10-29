@@ -243,6 +243,11 @@ public class CoreConfiguration {
     }
 
     @Bean
+    public org.example.sectoriadb.maintenance.LifecycleService lifecycleService(PoolRepository poolRepo, ManifestRepository manifestRepo) {
+        return new org.example.sectoriadb.maintenance.LifecycleService(poolRepo, manifestRepo);
+    }
+
+    @Bean
     public GarbageCollector garbageCollector(GcRepository gcRepo, ChunkRepository chunkRepo,
                                              ManifestRepository manifestRepo, BlobFileRepository blobRepo,
                                              PoolRepository poolRepo, BlobService blobs, HashTableCache cache,

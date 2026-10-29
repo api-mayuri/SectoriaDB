@@ -156,6 +156,7 @@ public class StorageProperties {
         private int batchSize = 16;
         private Duration sweepInterval = Duration.ofHours(6);
         private Duration compactInterval = Duration.ofMinutes(1);
+        private Duration lifecycleInterval = Duration.ofHours(1);
         private int smallCompactDeadPercent = 50;
         private long smallCompactMinDeadBytes = 1L << 20;
         private Duration sweepGateWait = Duration.ofSeconds(2);
@@ -194,6 +195,10 @@ public class StorageProperties {
         public void setSweepInterval(Duration v) { this.sweepInterval = v; }
 
         /** Pause between checks for small-object blobs worth compacting. */
+        /** Pause between lifecycle passes (noncurrent versions and delete markers of versioned buckets). */
+        public Duration getLifecycleInterval() { return lifecycleInterval; }
+        public void setLifecycleInterval(Duration v) { this.lifecycleInterval = v; }
+
         public Duration getCompactInterval() { return compactInterval; }
         public void setCompactInterval(Duration v) { this.compactInterval = v; }
 

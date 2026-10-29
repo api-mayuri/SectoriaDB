@@ -207,20 +207,6 @@ public class S3AclController {
                 .body(locationXml);
     }
 
-    // ── Bucket Versioning (stub) ──────────────────────────────────────────────
-
-    @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "versioning",
-                produces = MediaType.APPLICATION_XML_VALUE)
-    public ResponseEntity<String> getBucketVersioning(@PathVariable String bucket) {
-        lookup.requireBucket(bucket);
-
-        String versioningXml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" +
-                "<VersioningConfiguration xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\"/>";
-
-        return ResponseEntity.ok()
-                .body(versioningXml);
-    }
-
     // ── Bucket Tagging (stub) ─────────────────────────────────────────────────
 
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "tagging",
@@ -241,17 +227,6 @@ public class S3AclController {
 
         throw new S3Exception(HttpStatus.NOT_FOUND, "NoSuchCORSConfiguration",
                 "The CORS configuration does not exist.", "/" + bucket);
-    }
-
-    // ── Bucket Lifecycle (stub) ───────────────────────────────────────────────
-
-    @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "lifecycle",
-                produces = MediaType.APPLICATION_XML_VALUE)
-    public ResponseEntity<String> getBucketLifecycle(@PathVariable String bucket) {
-        lookup.requireBucket(bucket);
-
-        throw new S3Exception(HttpStatus.NOT_FOUND, "NoSuchLifecycleConfiguration",
-                "The lifecycle configuration does not exist.", "/" + bucket);
     }
 
     // ── Bucket Encryption (stub) ─────────────────────────────────────────────

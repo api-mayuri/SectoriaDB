@@ -52,6 +52,8 @@ public final class OperationClassifier {
             case "PUT":
                 if (q.containsKey("acl")) return S3Operation.PutBucketAcl;
                 if (q.containsKey("policy")) return S3Operation.PutBucketPolicy;
+                if (q.containsKey("versioning")) return S3Operation.PutBucketVersioning;
+                if (q.containsKey("lifecycle")) return S3Operation.PutBucketLifecycle;
                 if (hasSubresource(q)) return S3Operation.Other;   // e.g. PUT ?tagging: not implemented
                 return S3Operation.CreateBucket;
             case "GET":
@@ -70,6 +72,7 @@ public final class OperationClassifier {
                 return S3Operation.HeadBucket;
             case "DELETE":
                 if (q.containsKey("policy")) return S3Operation.DeleteBucketPolicy;
+                if (q.containsKey("lifecycle")) return S3Operation.DeleteBucketLifecycle;
                 if (hasSubresource(q)) return S3Operation.Other;
                 return S3Operation.DeleteBucket;
             case "POST":

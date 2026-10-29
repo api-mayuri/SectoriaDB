@@ -32,6 +32,44 @@ public class S3Lookup {
         return poolService.findByName(bucketName).orElseThrow(() -> S3Exception.noSuchBucket(bucketName));
     }
 
+    /** Response header of the version id of an object in a versioned bucket. */
+    public static final String VERSION_ID_HEADER = "x-amz-version-id";
+    public static final String DELETE_MARKER_HEADER = "x-amz-delete-marker";
+
+    /**
+     * The object a GET or HEAD reads: the version named by {@code versionId}, or the current version. A version id that
+     * names a delete marker is {@code 405 MethodNotAllowed}, an unknown one {@code 404 NoSuchVersion}; a key whose newest
+     * version is a delete marker is {@code 404 NoSuchKey} with {@code x-amz-delete-marker: true} (as in S3).
+     */
+    public ManifestEntity requireObject(String bucketName, String objectKey, String versionId) {
+        if (versionId == null) {
+            try {
+                return requireObject(bucketName, objectKey);
+            } catch (S3Exception e) {
+                if ("NoSuchKey".equals(e.getCode())) {
+                    manifestRepo.latestDeleteMarker(bucketName, objectKey).ifPresent(id ->
+                            e.withHeader(DELETE_MARKER_HEADER, "true").withHeader(VERSION_ID_HEADER, id));
+                }
+                throw e;
+            }
+        }
+        requireBucket(bucketName);
+        if (versionId.isEmpty()) throw S3Exception.invalidArgument("Version id cannot be the empty string");
+        ManifestRepository.VersionLookup v = manifestRepo.findVersion(bucketName, objectKey, versionId);
+        if (v.marker()) {
+            throw new S3Exception(HttpStatus.METHOD_NOT_ALLOWED, "MethodNotAllowed",
+                    "The specified method is not allowed against this resource.", "/" + bucketName + "/" + objectKey)
+                    .withHeader(DELETE_MARKER_HEADER, "true").withHeader(VERSION_ID_HEADER, versionId).withHeader("Allow", "DELETE");
+        }
+        return v.manifest().orElseThrow(() -> S3Exception.noSuchVersion(bucketName, objectKey, versionId));
+    }
+
+    /** The version id to answer for an object, or null when the bucket was never versioned (no header then). */
+    public String versionHeader(ManifestEntity m) {
+        if (m.getVersionId() != null) return m.getVersionId();
+        return poolService.findByName(m.getBucketName()).map(PoolEntity::getVersioning).isPresent() ? "null" : null;
+    }
+
     /**
      * Retrieves an object by bucket and key, throwing NoSuchBucket or NoSuchKey as appropriate.
      */

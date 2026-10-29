@@ -3,16 +3,24 @@ package org.example.sectoriadb.s3.http;
 import org.example.sectoriadb.s3.error.S3Exception;
 
 /** The {@code x-amz-copy-source} header: {@code /bucket/key} or {@code bucket/key}, the key percent-encoded, an optional {@code ?versionId=...} ignored. */
-public record CopySource(String bucket, String key) {
+/** @param versionId the {@code ?versionId=} of the header, or null for the current version */
+public record CopySource(String bucket, String key, String versionId) {
 
     public static CopySource parse(String header) {
         String spec = header.startsWith("/") ? header.substring(1) : header;
-        int versionIdx = spec.indexOf('?');   // strip ?versionId=... BEFORE decoding (a decoded %3F is part of the key)
-        if (versionIdx >= 0) spec = spec.substring(0, versionIdx);
+        int versionIdx = spec.indexOf('?');   // split ?versionId=... off BEFORE decoding (a decoded %3F is part of the key)
+        String versionId = null;
+        if (versionIdx >= 0) {
+            String q = spec.substring(versionIdx + 1);
+            spec = spec.substring(0, versionIdx);
+            if (q.startsWith("versionId=")) versionId = UrlCodec.percentDecode(q.substring("versionId=".length()));
+            else if (!q.isEmpty()) throw S3Exception.invalidArgument("x-amz-copy-source may only carry ?versionId=");
+            if (versionId != null && versionId.isEmpty()) throw S3Exception.invalidArgument("Version id cannot be the empty string");
+        }
         int slash = spec.indexOf('/');
         if (slash < 0) {
             throw S3Exception.invalidArgument("x-amz-copy-source must be in format /bucket/key");
         }
-        return new CopySource(spec.substring(0, slash), UrlCodec.percentDecode(spec.substring(slash + 1)));
+        return new CopySource(spec.substring(0, slash), UrlCodec.percentDecode(spec.substring(slash + 1)), versionId);
     }
 }

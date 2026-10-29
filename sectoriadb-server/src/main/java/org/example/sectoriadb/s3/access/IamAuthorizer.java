@@ -147,6 +147,8 @@ public class IamAuthorizer {
                     query != null && OperationClassifier.hasParam(query, "versions") ? "s3:ListBucketVersions" : "s3:ListBucket", bucket));
             case GetBucketLocation -> out.add(bucketLevel("s3:GetBucketLocation", bucket));
             case GetBucketVersioning -> out.add(bucketLevel("s3:GetBucketVersioning", bucket));
+            case PutBucketVersioning -> out.add(bucketLevel("s3:PutBucketVersioning", bucket));
+            case PutBucketLifecycle, DeleteBucketLifecycle -> out.add(bucketLevel("s3:PutLifecycleConfiguration", bucket));
             case GetBucketTagging -> out.add(bucketLevel("s3:GetBucketTagging", bucket));
             case GetBucketCors -> out.add(bucketLevel("s3:GetBucketCORS", bucket));
             case GetBucketLifecycle -> out.add(bucketLevel("s3:GetLifecycleConfiguration", bucket));
@@ -160,8 +162,9 @@ public class IamAuthorizer {
             case ListMultipartUploads -> out.add(bucketLevel("s3:ListBucketMultipartUploads", bucket));
             case PutObject, CreateMultipartUpload, UploadPart, CompleteMultipartUpload ->
                     out.add(new Requirement("s3:PutObject", bucket, key));
-            case GetObject, HeadObject -> out.add(new Requirement("s3:GetObject", bucket, key));
-            case DeleteObject -> out.add(new Requirement("s3:DeleteObject", bucket, key));
+            case GetObject, HeadObject -> out.add(new Requirement(
+                    versioned(query) ? "s3:GetObjectVersion" : "s3:GetObject", bucket, key));
+            case DeleteObject -> out.add(new Requirement(versioned(query) ? "s3:DeleteObjectVersion" : "s3:DeleteObject", bucket, key));
             case GetObjectAcl -> out.add(new Requirement("s3:GetObjectAcl", bucket, key));
             case PutObjectAcl -> out.add(new Requirement("s3:PutObjectAcl", bucket, key));
             case GetObjectTagging -> out.add(new Requirement("s3:GetObjectTagging", bucket, key));
@@ -173,7 +176,7 @@ public class IamAuthorizer {
                 out.add(new Requirement("s3:PutObject", bucket, key));
                 try {
                     CopySource source = CopySource.parse(copyHeader);
-                    out.add(new Requirement("s3:GetObject", source.bucket(), source.key()));
+                    out.add(new Requirement(source.versionId() != null ? "s3:GetObjectVersion" : "s3:GetObject", source.bucket(), source.key()));
                 } catch (RuntimeException malformed) {
                     return null;   // the controller answers 400; a restricted key must not get past this check
                 }
@@ -191,6 +194,11 @@ public class IamAuthorizer {
             }
         }
         return out;
+    }
+
+    /** A request for a specific version: the AWS actions are then s3:GetObjectVersion / s3:DeleteObjectVersion. */
+    private static boolean versioned(String query) {
+        return query != null && OperationClassifier.hasParam(query, "versionId");
     }
 
     /** A non-private canned ACL or any grant header: {@code x-amz-acl: private} changes nothing and needs no extra right. */

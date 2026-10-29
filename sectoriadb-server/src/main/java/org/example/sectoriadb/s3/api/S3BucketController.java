@@ -136,7 +136,7 @@ public class S3BucketController {
         lookup.requireBucket(bucket);
 
         DeleteRequest del = parseDeleteXml(RequestBodies.xmlBody(request));
-        List<String> keys = del.keys();
+        List<DeleteTarget> keys = del.keys();
         if (keys.size() > 1000) {
             throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedXML",
                     "The request must not contain more than 1000 keys");
@@ -146,16 +146,27 @@ public class S3BucketController {
                 "<DeleteResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">");
 
         String accessKey = (String) request.getAttribute(S3Request.ACCESS_KEY_ATTRIBUTE);
-        for (String key : keys) {
-            if (accessKey != null && !iamAuthorizer.isAllowed(request, accessKey, "s3:DeleteObject", bucket, key)) {
+        for (DeleteTarget t : keys) {
+            String key = t.key();
+            String action = t.versionId() != null ? "s3:DeleteObjectVersion" : "s3:DeleteObject";
+            if (accessKey != null && !iamAuthorizer.isAllowed(request, accessKey, action, bucket, key)) {
                 // like AWS: the call succeeds and names every refused key
-                result.append("<Error><Key>").append(XmlSupport.escape(key))
-                        .append("</Key><Code>AccessDenied</Code><Message>Access Denied</Message></Error>");
+                result.append("<Error><Key>").append(XmlSupport.escape(key)).append("</Key>")
+                        .append(t.versionId() != null ? "<VersionId>" + XmlSupport.escape(t.versionId()) + "</VersionId>" : "")
+                        .append("<Code>AccessDenied</Code><Message>Access Denied</Message></Error>");
                 continue;
             }
-            catalog.deleteObject(bucket, key);   // one transaction per key
+            var outcome = catalog.delete(bucket, key, t.versionId());   // one transaction per key
             if (!del.quiet()) {
-                result.append("<Deleted><Key>").append(XmlSupport.escape(key)).append("</Key></Deleted>");
+                result.append("<Deleted><Key>").append(XmlSupport.escape(key)).append("</Key>");
+                if (t.versionId() != null) result.append("<VersionId>").append(XmlSupport.escape(t.versionId())).append("</VersionId>");
+                if (outcome.deleteMarker()) {
+                    result.append("<DeleteMarker>true</DeleteMarker>");
+                    if (outcome.versionId() != null) {
+                        result.append("<DeleteMarkerVersionId>").append(XmlSupport.escape(outcome.versionId())).append("</DeleteMarkerVersionId>");
+                    }
+                }
+                result.append("</Deleted>");
             }
         }
         result.append("</DeleteResult>");
@@ -164,22 +175,26 @@ public class S3BucketController {
                 .body(result.toString());
     }
 
-    /** Keys of a multi-object delete and its {@code <Quiet>true</Quiet>} flag (successes are then not listed). */
-    private record DeleteRequest(List<String> keys, boolean quiet) {}
+    /** One {@code <Object>} of a multi-object delete: the key and, optionally, the version to delete for good. */
+    private record DeleteTarget(String key, String versionId) {}
+
+    /** Objects of a multi-object delete and its {@code <Quiet>true</Quiet>} flag (successes are then not listed). */
+    private record DeleteRequest(List<DeleteTarget> keys, boolean quiet) {}
 
     private DeleteRequest parseDeleteXml(InputStream body) throws IOException {
         try {
             DocumentBuilder db = XmlSupport.newSecureDocumentBuilder(true);
             Document doc = db.parse(body);
             NodeList objects = doc.getElementsByTagName("Object");
-            List<String> keys = new ArrayList<>();
+            List<DeleteTarget> keys = new ArrayList<>();
             for (int i = 0; i < objects.getLength(); i++) {
                 NodeList children = objects.item(i).getChildNodes();
+                String key = null, versionId = null;
                 for (int j = 0; j < children.getLength(); j++) {
-                    if ("Key".equals(children.item(j).getNodeName())) {
-                        keys.add(children.item(j).getTextContent());
-                    }
+                    if ("Key".equals(children.item(j).getNodeName())) key = children.item(j).getTextContent();
+                    if ("VersionId".equals(children.item(j).getNodeName())) versionId = children.item(j).getTextContent();
                 }
+                if (key != null) keys.add(new DeleteTarget(key, versionId == null || versionId.isEmpty() ? null : versionId));
             }
             NodeList quiet = doc.getElementsByTagName("Quiet");
             boolean isQuiet = quiet.getLength() > 0 && "true".equalsIgnoreCase(quiet.item(0).getTextContent().trim());
@@ -189,12 +204,12 @@ public class S3BucketController {
         }
     }
 
-    // ── ListObjectVersions (unversioned bucket) ───────────────────────────────
+    // ── ListObjectVersions ────────────────────────────────────────────────────
 
     /**
-     * GET /{bucket}?versions. SectoriaDB has no versioning, so, like S3 for a bucket that never had versioning
-     * enabled, every object is listed once as the latest version with VersionId "null". Clients (SDK "empty the
-     * bucket" helpers, ceph/s3-tests cleanup) rely on this listing to find the objects they must delete.
+     * GET /{bucket}?versions: the versions and delete markers of the bucket (docs/architecture/versioning.md). A bucket
+     * that never had versioning lists every object once, as the latest version with the id "null", as S3 does; clients
+     * (SDK "empty the bucket" helpers, ceph/s3-tests cleanup) rely on this listing to find what they must delete.
      */
     @GetMapping(value = {"/{bucket}", "/{bucket}/"}, params = "versions", produces = MediaType.APPLICATION_XML_VALUE)
     public ResponseEntity<String> listObjectVersions(
@@ -211,10 +226,12 @@ public class S3BucketController {
             throw new S3Exception(HttpStatus.BAD_REQUEST, "InvalidArgument", "Argument maxKeys must be an integer between 0 and 2147483647");
         }
         if (maxKeys > 1000) maxKeys = 1000;
+        if (!versionIdMarker.isEmpty() && keyMarker.isEmpty()) {
+            throw S3Exception.invalidArgument("A version-id marker cannot be specified without a key marker.");
+        }
 
-        ManifestRepository.ObjectListing page = maxKeys == 0
-                ? new ManifestRepository.ObjectListing(List.of(), List.of(), false, null)
-                : manifestRepo.listObjects(bucket, prefix, delimiter, keyMarker.isEmpty() ? null : keyMarker, maxKeys);
+        ManifestRepository.VersionListing page = manifestRepo.listVersions(bucket, prefix, delimiter,
+                keyMarker.isEmpty() ? null : keyMarker, versionIdMarker.isEmpty() ? null : versionIdMarker, maxKeys);
 
         StringBuilder xml = new StringBuilder("<?xml version=\"1.0\" encoding=\"UTF-8\"?>")
                 .append("<ListVersionsResult xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">")
@@ -222,22 +239,29 @@ public class S3BucketController {
                 .append("<Prefix>").append(XmlSupport.escape(prefix)).append("</Prefix>")
                 .append("<KeyMarker>").append(XmlSupport.escape(keyMarker)).append("</KeyMarker>")
                 .append("<VersionIdMarker>").append(XmlSupport.escape(versionIdMarker)).append("</VersionIdMarker>");
-        if (page.truncated() && page.nextMarker() != null) {
-            xml.append("<NextKeyMarker>").append(XmlSupport.escape(page.nextMarker())).append("</NextKeyMarker>")
-               .append("<NextVersionIdMarker>null</NextVersionIdMarker>");
+        if (page.truncated() && page.nextKeyMarker() != null) {
+            xml.append("<NextKeyMarker>").append(XmlSupport.escape(page.nextKeyMarker())).append("</NextKeyMarker>");
+            if (page.nextVersionIdMarker() != null) {
+                xml.append("<NextVersionIdMarker>").append(XmlSupport.escape(page.nextVersionIdMarker())).append("</NextVersionIdMarker>");
+            }
         }
         xml.append("<MaxKeys>").append(maxKeys).append("</MaxKeys>");
         if (delimiter != null && !delimiter.isEmpty()) {
             xml.append("<Delimiter>").append(XmlSupport.escape(delimiter)).append("</Delimiter>");
         }
         xml.append("<IsTruncated>").append(page.truncated()).append("</IsTruncated>");
-        for (ManifestRepository.ObjectSummary o : page.objects()) {
-            xml.append("<Version><Key>").append(XmlSupport.escape(o.key())).append("</Key>")
-               .append("<VersionId>null</VersionId><IsLatest>true</IsLatest>")
-               .append("<LastModified>").append(HttpDates.isoDate(o.lastModified())).append("</LastModified>")
-               .append("<ETag>").append(XmlSupport.escape(o.etag() != null ? o.etag() : "\"\"")).append("</ETag>")
-               .append("<Size>").append(o.size()).append("</Size>")
-               .append("<StorageClass>STANDARD</StorageClass></Version>");
+        for (ManifestRepository.VersionEntry v : page.versions()) {
+            String common = "<Key>" + XmlSupport.escape(v.key()) + "</Key><VersionId>" + XmlSupport.escape(v.versionId())
+                    + "</VersionId><IsLatest>" + v.latest() + "</IsLatest><LastModified>" + HttpDates.isoDate(v.lastModified())
+                    + "</LastModified>";
+            if (v.deleteMarker()) {
+                xml.append("<DeleteMarker>").append(common).append("</DeleteMarker>");
+            } else {
+                xml.append("<Version>").append(common)
+                   .append("<ETag>").append(XmlSupport.escape(v.etag() != null ? v.etag() : "\"\"")).append("</ETag>")
+                   .append("<Size>").append(v.size()).append("</Size>")
+                   .append("<StorageClass>STANDARD</StorageClass></Version>");
+            }
         }
         for (String cp : page.commonPrefixes()) {
             xml.append("<CommonPrefixes><Prefix>").append(XmlSupport.escape(cp)).append("</Prefix></CommonPrefixes>");
