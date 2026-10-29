@@ -1,7 +1,10 @@
 package org.example.sectoriadb.security;
 
 import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import org.example.sectoriadb.config.StorageProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,9 +33,11 @@ public class JsonCredentialRepository implements CredentialRepository {
 
     private final ObjectMapper mapper;
     private final Path dataFile;
+    private final SecretCipher cipher;
+    /** True when the last read found secrets in plain text although a master key is set (rewritten by {@link #sealPlaintext}). */
+    private volatile boolean plaintextOnDisk;
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
 
-    /** Immutable view of credentials.json as of file modification time and size; replaced as a whole, never mutated. */
     /**
      * The cached view and the identity of the file it was read from. Every write is an atomic replace, so a new version is
      * a new file: comparing the file key (inode) as well as the full-precision time and the size never misses a change,
@@ -57,6 +62,46 @@ public class JsonCredentialRepository implements CredentialRepository {
     public JsonCredentialRepository(ObjectMapper mapper, StorageProperties props) {
         this.mapper   = mapper;
         this.dataFile = Path.of(props.getMetaDir(), "credentials.json");
+        this.cipher   = SecretCipher.fromBase64(props.getSecrets().getKey());
+    }
+
+    /** Whether secrets are written encrypted (a master key is configured). */
+    @Override
+    public boolean encrypting() {
+        return cipher.enabled();
+    }
+
+    /**
+     * Rewrites the file with encrypted secrets if it still holds plain ones and a master key is set (the first start
+     * after the key was configured). Returns the number of secrets that were in plain text.
+     */
+    @Override
+    public int sealPlaintext() {
+        if (!cipher.enabled()) return 0;
+        lock.writeLock().lock();
+        try {
+            List<CredentialEntity> all = readAll();
+            if (!plaintextOnDisk) return 0;
+            int plain = (int) countPlainOnDisk();
+            writeAll(all);
+            publish(all);
+            plaintextOnDisk = false;
+            log.info("Encrypted {} secret key(s) in credentials.json with the master key", plain);
+            return plain;
+        } finally {
+            lock.writeLock().unlock();
+        }
+    }
+
+    private long countPlainOnDisk() {
+        try {
+            JsonNode root = mapper.readTree(dataFile.toFile());
+            long n = 0;
+            for (JsonNode e : root) if (!SecretCipher.isSealed(e.path("secretKey").asText(null))) n++;
+            return n;
+        } catch (IOException e) {
+            return 0;
+        }
     }
 
     @Override
@@ -132,7 +177,14 @@ public class JsonCredentialRepository implements CredentialRepository {
                 return s.entries();
             }
 
-            List<CredentialEntity> loaded = List.copyOf(mapper.readValue(dataFile.toFile(), LIST_TYPE));
+            List<CredentialEntity> raw = mapper.readValue(dataFile.toFile(), LIST_TYPE);
+            boolean plain = false;
+            for (CredentialEntity c : raw) {
+                if (!SecretCipher.isSealed(c.getSecretKey())) plain = true;
+                c.setSecretKey(cipher.open(c.getAccessKeyId(), c.getSecretKey()));   // the server needs the secret (HMAC key)
+            }
+            plaintextOnDisk = plain && cipher.enabled();
+            List<CredentialEntity> loaded = List.copyOf(raw);
             snapshot = Snapshot.of(loaded, attrs);
             return loaded;
         } catch (IOException e) {
@@ -163,7 +215,12 @@ public class JsonCredentialRepository implements CredentialRepository {
             Files.createDirectories(dir);
             Path tempFile = Files.createTempFile(dir, "credentials", ".tmp");
             try {
-                byte[] json = mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(entities);
+                ArrayNode stored = mapper.valueToTree(entities);   // a copy: the entities keep the plain secret for the server
+                for (JsonNode e : stored) {
+                    ObjectNode o = (ObjectNode) e;
+                    o.put("secretKey", cipher.seal(o.path("accessKeyId").asText(), o.path("secretKey").asText(null)));
+                }
+                byte[] json = mapper.writerWithDefaultPrettyPrinter().writeValueAsBytes(stored);
                 try (FileChannel ch = FileChannel.open(tempFile, StandardOpenOption.WRITE,
                         StandardOpenOption.TRUNCATE_EXISTING)) {
                     ByteBuffer buf = ByteBuffer.wrap(json);

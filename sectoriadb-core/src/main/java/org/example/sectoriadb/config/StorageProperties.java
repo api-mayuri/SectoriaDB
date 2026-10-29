@@ -21,6 +21,7 @@ public class StorageProperties {
     private AutoResize autoResize = new AutoResize();
     private Pool pool = new Pool();
     private S3 s3 = new S3();
+    private Secrets secrets = new Secrets();
     private SmallObject smallObject = new SmallObject();
     private Gc gc = new Gc();
     private Cache cache = new Cache();
@@ -74,6 +75,9 @@ public class StorageProperties {
 
     public boolean isReconcileOnStart() { return reconcileOnStart; }
     public void setReconcileOnStart(boolean v) { this.reconcileOnStart = v; }
+
+    public Secrets getSecrets() { return secrets; }
+    public void setSecrets(Secrets v) { this.secrets = v; }
 
     public S3 getS3() { return s3; }
     public void setS3(S3 v) { this.s3 = v; }
@@ -212,6 +216,18 @@ public class StorageProperties {
          */
         public Duration getUploadTicketTtl() { return uploadTicketTtl; }
         public void setUploadTicketTtl(Duration v) { this.uploadTicketTtl = v; }
+    }
+
+    /** Encryption of the secrets stored by the server. */
+    public static class Secrets {
+        private String key;
+
+        /**
+         * Master key for the secret keys in credentials.json: Base64 of 32 random bytes ({@code openssl rand -base64 32}),
+         * given as SECTORIADB_SECRETS_KEY. Unset: the secrets are stored in plain text.
+         */
+        public String getKey() { return key; }
+        public void setKey(String v) { this.key = v; }
     }
 
     public static class S3 {

@@ -38,6 +38,16 @@ public class CredentialService {
         return policy;
     }
 
+    /** Whether secret keys are stored encrypted with the master key ({@code sectoriadb.secrets.key}). */
+    public boolean encryptingSecrets() {
+        return credentialRepo.encrypting();
+    }
+
+    /** Encrypts secrets still stored in plain text (first start with a master key); returns how many. */
+    public int sealPlaintextSecrets() {
+        return credentialRepo.sealPlaintext();
+    }
+
     /** Access key ids without an identity policy: they are refused every request. */
     public List<String> keysWithoutPolicy() {
         return credentialRepo.findAll().stream().filter(c -> c.getPolicy() == null).map(CredentialEntity::getAccessKeyId).toList();

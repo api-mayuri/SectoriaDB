@@ -168,6 +168,12 @@ public class Application {
     public SmartInitializingSingleton bootstrapCredential(CredentialService credentialService, StorageProperties props) {
         return () -> {
             if (System.getProperty("sectoriadb.metastore.lazy") != null) return;   // CLI mode: no seeding
+            // reads the file once: an encrypted file without the right master key stops the start here, with the reason
+            credentialService.sealPlaintextSecrets();
+            if (!credentialService.encryptingSecrets()) {
+                log.warn("Secret keys are stored in plain text in credentials.json: set SECTORIADB_SECRETS_KEY "
+                        + "(openssl rand -base64 32) to store them encrypted");
+            }
             StorageProperties.S3 s3 = props.getS3();
             int index = 0;
             if (s3.getCredentials() != null) {
