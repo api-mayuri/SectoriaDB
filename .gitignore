@@ -63,3 +63,7 @@ deploy/certs/*
 
 # Python bytecode of the bench scripts
 __pycache__/
+
+# Jazzer: the working corpus and fresh crash files (crash inputs worth keeping go to src/test/resources/<package>/<Test>Inputs/<method>/)
+/sectoriadb-*/.cifuzz-corpus/
+/sectoriadb-*/crash-*

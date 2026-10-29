@@ -56,7 +56,7 @@ final class MetaPage {
      * but another format version is not "invalid": it was written by another version, and opening stops with
      * {@link UnsupportedFormatException} instead of reporting a corrupt file (or, worse, treating it as empty).
      */
-    private static Object[] parse(byte[] h) {
+    static Object[] parse(byte[] h) {
         ByteBuffer b = ByteBuffer.wrap(h);
         if (b.getLong(0) != MAGIC) return null;
         if (b.getInt(48) != Pager.crc(h, 0, 48)) return null;

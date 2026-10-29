@@ -251,31 +251,49 @@ final class Trees {
         tx.tree(DELETED_BY_POOL).put(deletedByPoolKey(m.getPoolId(), m.getId()), ByteBuffer.allocate(8).putLong(txId).array());
     }
 
-    /** Pool id of a queue row's value ("" if the row predates it). */
+    /** Pool id of a queue row's value ("" if the row predates it). A damaged row: {@link IllegalStateException}. */
     static String tombstonePool(byte[] value) {
         if (value == null || value.length <= 8) return "";
         if (value[8] == TOMBSTONE_WITH_REFS) {
             ByteBuffer b = ByteBuffer.wrap(value, 9, value.length - 9);
-            byte[] pool = new byte[b.getShort() & 0xFFFF];
-            b.get(pool);
-            return new String(pool, StandardCharsets.UTF_8);
+            return new String(field(b, value.length), StandardCharsets.UTF_8);
         }
         return new String(value, 8, value.length - 8, StandardCharsets.UTF_8);
     }
 
-    /** Small-object records of a queue row's value, or {@code null} for a row of the old format (read the manifest). */
+    /**
+     * Small-object records of a queue row's value, or {@code null} for a row of the old format (read the manifest). A
+     * damaged row (lengths that do not fit the value, found by fuzzing): {@link IllegalStateException}, never an
+     * underflow or a huge allocation.
+     */
     static List<GcRepository.SmallRef> tombstoneRefs(byte[] value) {
         if (value == null || value.length <= 8 || value[8] != TOMBSTONE_WITH_REFS) return null;
         ByteBuffer b = ByteBuffer.wrap(value, 9, value.length - 9);
-        b.position(b.position() + 2 + (b.getShort(b.position()) & 0xFFFF));   // skip the pool
+        field(b, value.length);   // skip the pool
+        if (b.remaining() < 4) throw corruptRow("no record count");
         int n = b.getInt();
+        if (n < 0 || n > b.remaining() / 10) throw corruptRow("record count " + n);   // a record is at least 2 + 8 bytes
         List<GcRepository.SmallRef> out = new ArrayList<>(n);
         for (int i = 0; i < n; i++) {
-            byte[] blob = new byte[b.getShort() & 0xFFFF];
-            b.get(blob);
+            byte[] blob = field(b, value.length);
+            if (b.remaining() < 8) throw corruptRow("record " + i + " without its offset");
             out.add(new GcRepository.SmallRef(new String(blob, StandardCharsets.UTF_8), b.getLong()));
         }
         return out;
+    }
+
+    /** A length-prefixed (u16) byte field of a tombstone row. */
+    private static byte[] field(ByteBuffer b, int rowLength) {
+        if (b.remaining() < 2) throw corruptRow("truncated field");
+        int len = b.getShort() & 0xFFFF;
+        if (len > b.remaining()) throw corruptRow("field of " + len + " bytes in a row of " + rowLength);
+        byte[] out = new byte[len];
+        b.get(out);
+        return out;
+    }
+
+    private static IllegalStateException corruptRow(String why) {
+        return new IllegalStateException("corrupt tombstone row: " + why);
     }
 
     /** The small-object records a version occupies: its own record, or the SMALL segments of a multipart object. */
@@ -304,7 +322,13 @@ final class Trees {
             Keys.Reader r = new Keys.Reader(queueKey);
             r.longUnsigned();
             String manifestId = r.string();
-            tx.tree(DELETED_BY_POOL).delete(deletedByPoolKey(tombstonePool(value), manifestId));
+            String pool;
+            try {
+                pool = tombstonePool(value);
+            } catch (IllegalStateException damaged) {
+                return;   // the pool is unreadable: only the queue row can go (a by-pool row may stay; DeleteBucket tolerates it)
+            }
+            tx.tree(DELETED_BY_POOL).delete(deletedByPoolKey(pool, manifestId));
         }
     }
 

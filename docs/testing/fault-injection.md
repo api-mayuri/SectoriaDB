@@ -115,3 +115,29 @@ root netem delay 100ms 20ms loss 1%` (убрать: `tc qdisc del dev eth0 root`
 `ParserFuzzTest` (заголовки `Range` и `x-amz-copy-source-range`, `x-amz-copy-source`, декодер `aws-chunked` с подписью и без), `HttpParserFuzzTest` (XML `DeleteObjects`, `CompleteMultipartUpload`, ACL, заголовки `x-amz-acl`/`x-amz-grant-*`, `Range`, copy-source через HTTP, враждебные формы XML: глубина 60 000, 50 000 элементов, 20 000 атрибутов, сущности, внешние сущности),
 `SigV4HeaderFuzzTest` (`Authorization`, `x-amz-date`, `x-amz-content-sha256`, параметры presigned-запроса при включённой авторизации). Проверяется только одно: ответ — успех или документ ошибки S3 (4xx; для SigV4 — только 4xx), без 5xx, зависаний и оборванных соединений; чистые парсеры — только документированные исключения (`S3Exception`, `IOException`).
 Найдено и исправлено: заголовок `Range: bytes=` (без диапазона) приводил к `ArrayIndexOutOfBoundsException` и ответу `500` — теперь игнорируется, как любой неверный `Range`; разбор неверного XML выводил в stderr процесса строку `[Fatal Error]` на каждый такой запрос в обход журнала — отключено.
+
+## Фаззинг с обратной связью по покрытию (Jazzer, этап 23)
+
+Форматы на диске и XML-тело `CompleteMultipartUpload` фаззятся [Jazzer](https://github.com/CodeIntelligenceTesting/jazzer) (`@FuzzTest`):
+
+| Тест | Цель | Допустимый исход |
+|---|---|---|
+| `PageFormatFuzzTest#treePageDecode` | страница B+-дерева `sectoria.db` | `CorruptedPageException` |
+| `PageFormatFuzzTest#metaPageParse` | мета-страница (половина входов — с верным `MAGIC` и CRC) | недействительна или `UnsupportedFormatException` |
+| `LayoutFuzzTest` (3 цели) | заголовки `blob_*.raw`, `small_*.sob`, заголовок записи малого объекта | `InvalidBlobHeaderException` / `null` |
+| `RecordFormatFuzzTest` (3 цели) | записи манифеста и чанка, строка очереди надгробий | `IllegalStateException` |
+| `CompleteXmlFuzzTest` | тело `CompleteMultipartUpload` (половина входов — правки корректного документа) | `S3Exception` |
+
+`mvn test` воспроизводит только сохранённые входы (`src/test/resources/<пакет>/<Тест>Inputs/<метод>/`) — секунды. Фаззинг одной цели:
+`JAZZER_FUZZ=1 mvn -pl sectoriadb-core test -Dtest='RecordFormatFuzzTest#tombstoneRow'` (длительность — `maxDuration` в аннотации; рабочий корпус
+`.cifuzz-corpus/` и новые `crash-*` в git не попадают — найденный вход, который стоит сохранить, переносится в каталог `…Inputs`).
+
+Прогон 2026-10-29, по 1–2 минуты на цель в песочнице:
+
+- **найдено и исправлено:** повреждённая строка очереди надгробий (длина поля больше значения) роняла разбор с `BufferUnderflowException`; сборщик
+  мусора падал бы на ней в каждом проходе, и очередь вставала навсегда. Теперь разбор проверяет длины и бросает `IllegalStateException`, а сборщик
+  отбрасывает такую строку с `ERROR` в журнале и собирает остальные (`DamagedQueueRowTest`; без исправления тест падает);
+- ложная находка в самом тесте (перекодирование страницы в буфер меньшего размера) — тест исправлен;
+- остальные цели — без находок.
+
+Минуты фаззинга — это проверка дыма, не исчерпывающий поиск; перед релизом стоит запускать цели на часы (ночной прогон).

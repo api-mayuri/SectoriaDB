@@ -12,6 +12,8 @@ import org.example.sectoriadb.metastore.Cursor;
 import org.example.sectoriadb.metastore.Keys;
 import org.example.sectoriadb.metastore.MetaStore;
 import org.example.sectoriadb.metastore.WriteTxn;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -30,6 +32,8 @@ import java.util.Set;
  * slot free it performs through the callback is a side effect that a savepoint could not undo).
  */
 public class MetaStoreGcRepository implements GcRepository {
+
+    private static final Logger log = LoggerFactory.getLogger(MetaStoreGcRepository.class);
 
 
     private final MetaStoreProvider stores;
@@ -266,7 +270,16 @@ public class MetaStoreGcRepository implements GcRepository {
                     // ends the due prefix, the rest of the (possibly very long) queue is not read
                     if (at > queuedBeforeMillis) break;
                     Keys.Reader r = new Keys.Reader(c.key());
-                    out.add(new Tombstone(r.longUnsigned(), r.string(), at, Trees.tombstonePool(c.value()), Trees.tombstoneRefs(c.value())));
+                    long txId = r.longUnsigned();
+                    String id = r.string();
+                    try {
+                        out.add(new Tombstone(txId, id, at, Trees.tombstonePool(c.value()), Trees.tombstoneRefs(c.value())));
+                    } catch (IllegalStateException damaged) {
+                        // one damaged row must not stop the collector for good (every pass would fail on it): it is
+                        // dropped with nothing to mark; its small records, if any, stay until a compaction finds them unreferenced
+                        log.error("Dropping a damaged GC queue row of manifest {}: {}", id, damaged.getMessage());
+                        out.add(new Tombstone(txId, id, at, "", List.of()));
+                    }
                 }
             }
             return out;

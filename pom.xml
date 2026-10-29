@@ -37,6 +37,7 @@
     <properties>
         <java.version>25</java.version>
         <spring-shell.version>4.0.3</spring-shell.version>
+        <jazzer.version>0.30.0</jazzer.version>
         <spotless.version>3.10.4</spotless.version>
         <checkstyle-plugin.version>3.6.0</checkstyle-plugin.version>
         <checkstyle.version>14.3.0</checkstyle.version>
@@ -45,6 +46,13 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- coverage-guided fuzzing of the on-disk formats and parsers (docs/testing/fault-injection.md, "Фаззинг") -->
+            <dependency>
+                <groupId>com.code-intelligence</groupId>
+                <artifactId>jazzer-junit</artifactId>
+                <version>${jazzer.version}</version>
+                <scope>test</scope>
+            </dependency>
             <dependency>
                 <groupId>org.example</groupId>
                 <artifactId>sectoriadb-metastore</artifactId>
