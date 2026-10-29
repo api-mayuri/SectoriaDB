@@ -151,7 +151,7 @@ public class StorageProperties {
         private int maxChunksPerRun = 10_000;
         private int batchSize = 16;
         private Duration sweepInterval = Duration.ofHours(6);
-        private Duration compactInterval = Duration.ofMinutes(10);
+        private Duration compactInterval = Duration.ofMinutes(1);
         private int smallCompactDeadPercent = 50;
         private long smallCompactMinDeadBytes = 1L << 20;
         private Duration sweepGateWait = Duration.ofSeconds(2);

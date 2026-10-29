@@ -184,6 +184,37 @@ class SmallCompactionTest {
     }
 
     @Test
+    void aMostlyDeadAppendTargetIsReplacedAndCompacted() throws Exception {
+        Map<String, byte[]> model = fill(15);                             // 15 of ~19 records: still the append target
+        String target = rig.blobService.smallAppendTarget(pool).orElseThrow().getId();
+        assertEquals(target, blobOf("o0"));
+        for (int i = 0; i < 12; i++) {
+            rig.catalog.deleteObject("bkt", "o" + i);
+            model.remove("o" + i);
+        }
+        gc0();                                                            // marks the 12 records DELETED: 80 % dead
+
+        List<CompactionReport> reports = rig.gc.compact(pool, false);
+        assertTrue(reports.stream().anyMatch(r -> r.blobId().equals(target) && r.compacted()), reports.toString());
+        assertNotEquals(target, rig.blobService.smallAppendTarget(pool).orElseThrow().getId(), "a new file takes the appends");
+        for (var e : model.entrySet()) assertArrayEquals(e.getValue(), get(e.getKey()), e.getKey());
+        put("after", bytes(SIZE, 99));                                    // writes go on
+        assertEquals(SIZE, get("after").length);
+    }
+
+    @Test
+    void aBarelyUsedAppendTargetIsNotRolled() throws Exception {
+        rig.props.getSmallObject().setMaxFileBytes(200_000);              // 2 records of 200 KB capacity: under a quarter
+        fill(2);
+        rig.catalog.deleteObject("bkt", "o0");
+        gc0();
+        String target = rig.blobService.smallAppendTarget(pool).orElseThrow().getId();
+        rig.gc.compact(pool, false);
+        assertEquals(target, rig.blobService.smallAppendTarget(pool).orElseThrow().getId());
+        assertEquals(1, smallBlobs().size(), "no new file for a mostly empty target");
+    }
+
+    @Test
     void blobsBelowTheThresholdAndTheAppendTargetAreLeftAlone() throws Exception {
         Map<String, byte[]> model = fill(50);
         rig.catalog.deleteObject("bkt", "o0");                           // one dead record: far below 50 %

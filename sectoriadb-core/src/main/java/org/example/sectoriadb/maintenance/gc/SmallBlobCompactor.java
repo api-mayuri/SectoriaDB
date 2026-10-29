@@ -33,6 +33,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -113,6 +114,7 @@ public class SmallBlobCompactor {
         List<CompactionReport> out = new ArrayList<>();
         for (PoolEntity pool : poolRepo.findAll()) {
             if (poolId != null && !pool.getId().equals(poolId)) continue;
+            if (!force) rotateDeadAppendTarget(pool);
             List<BlobFileEntity> smalls = blobRepo.findByPoolId(pool.getId()).stream()
                     .filter(b -> b.getKind() == BlobKind.SMALL).toList();
             for (BlobFileEntity b : smalls) {
@@ -121,6 +123,32 @@ public class SmallBlobCompactor {
             }
         }
         return out;
+    }
+
+    /**
+     * The append target is never compacted, and under steady overwrites it is where most dead records are: it grows to
+     * its maximum size (1 GiB by default, about 20 minutes in the stage-18 soak) while the versions it holds are already
+     * replaced. Once the target is itself eligible and at least a quarter full, a new small-object blob is created; being
+     * the newest blob with room it becomes the target, and the old one is compacted in the same pass. The quarter keeps a
+     * mostly idle pool from rolling many small files.
+     */
+    private void rotateDeadAppendTarget(PoolEntity pool) {
+        Optional<BlobFileEntity> target = blobs.smallAppendTarget(pool);
+        if (target.isEmpty() || !eligible(target.get())) return;
+        long tail;
+        try (ResidentHandle<SmallObjectBlob> h = smallCache.acquire(target.get())) {
+            tail = h.get().tail();
+        } catch (IOException e) {
+            return;
+        }
+        if (tail < props.getSmallObject().getMaxFileBytes() / 4) return;
+        try {
+            BlobFileEntity fresh = blobs.createSmall(pool);
+            log.info("Small-object blob {} of pool {} is mostly dead: new append target {}, the old one is compacted",
+                    target.get().getId(), pool.getName(), fresh.getId());
+        } catch (IOException e) {
+            log.warn("Could not roll the append target of pool {}: {}", pool.getName(), e.toString());
+        }
     }
 
     /** True if the blob has enough dead space to be worth compacting. */
