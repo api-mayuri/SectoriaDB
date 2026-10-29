@@ -34,12 +34,13 @@ ensure_venv() {
 }
 
 # fresh_data [extra docker args are given to start_server instead]
-fresh_data() { rm -rf "$WORK/data"; mkdir -p "$WORK/data/meta" "$WORK/data/storage"; }
+# the image runs as the unprivileged user sectoria: the bind-mounted directories must be writable for it
+fresh_data() { rm -rf "$WORK/data"; mkdir -p "$WORK/data/meta" "$WORK/data/storage"; chmod 0777 "$WORK/data/meta" "$WORK/data/storage"; }
 
 start_server() { # extra docker run args...
   docker rm -f "$NAME" >/dev/null 2>&1 || true
   docker run -d --name "$NAME" -p "127.0.0.1:$S3_PORT:8080" -p "127.0.0.1:$MGMT_PORT:9464" \
-    -e "SECTORIADB_S3_CREDENTIALS=$FAULT_ACCESS_KEY:$FAULT_SECRET_KEY:main,$FAULT_ALT_ACCESS_KEY:$FAULT_ALT_SECRET_KEY:alt" \
+    -e "SECTORIADB_S3_CREDENTIALS=$FAULT_ACCESS_KEY:$FAULT_SECRET_KEY|main,$FAULT_ALT_ACCESS_KEY:$FAULT_ALT_SECRET_KEY|alt" \
     -e "JAVA_OPTS=$JAVA_OPTS_FAULT" \
     -v "$WORK/data/meta:/data/meta" -v "$WORK/data/storage:/data/storage" "$@" "$IMAGE" >/dev/null
   wait_ready

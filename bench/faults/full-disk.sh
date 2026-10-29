@@ -17,11 +17,14 @@ IMG="$WORK/small-disk.img"; MNT="$WORK/data/$TARGET"
 cleanup() { remove_server; umount "$MNT" 2>/dev/null; rm -f "$IMG"; }
 trap cleanup EXIT
 dd if=/dev/zero of="$IMG" bs=1M count="$SIZE_MB" status=none && mkfs.ext4 -q -m 0 "$IMG" && mount -o loop "$IMG" "$MNT" || { echo "cannot create the loop device"; exit 2; }
+chmod 0777 "$MNT"   # the image runs as the unprivileged user sectoria
+# the free-space floors (1 GiB / 64 MiB by default) are larger than this whole device: scale them to it
+FLOOR="-e SECTORIADB_STORAGE_MIN_FREE_BYTES=4194304 -e SECTORIADB_S3_LIMITS_UPLOAD_FREE_SPACE_RESERVE_BYTES=1048576"
 # filler: leaves ~20 MiB for the server; removed later to "free space"
 dd if=/dev/zero of="$MNT/filler.bin" bs=1M count="${FILLER_MB:-$(( SIZE_MB - 24 ))}" status=none
 info "device $SIZE_MB MiB for $TARGET, free: $(df -m "$MNT" | awk 'NR==2 {print $4}') MiB"
 
-start_server || exit 2
+start_server $FLOOR || exit 2
 s3c mb diskb >/dev/null
 MAXP="${MAX_PUTS:-60}"
 r="$(s3c fill diskb "$MAXP" $(( OBJ_KIB * 1024 )) "$WORK/fill.sha")"
@@ -57,7 +60,7 @@ rm -f "$MNT/filler.bin"; sleep 1
 r3="$(s3c put diskb after-free "$WORK/obj.bin")"
 [ "$r3" = "PUT ok" ] && pass "PUT succeeds after space was freed (no restart)" || {
   [ "$TARGET" = meta ] && fail "the metadata store did not recover in place: $r3"
-  info "PUT after freeing: $r3; restarting the server"; start_server
+  info "PUT after freeing: $r3; restarting the server"; start_server $FLOOR
   [ "$(s3c put diskb after-free2 "$WORK/obj.bin")" = "PUT ok" ] && pass "PUT succeeds after space was freed and a restart" || fail "PUT still fails after freeing space and restart"; }
 [ "$(s3c get diskb after-free)" = "GET ok $OBJ_BYTES $WANT" ] || [ "$(s3c get diskb after-free2)" = "GET ok $OBJ_BYTES $WANT" ] \
   && pass "object written after recovery reads back intact" || fail "object written after recovery is not intact"

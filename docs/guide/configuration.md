@@ -104,7 +104,7 @@
 | `server.tomcat.threads.max` | `200` | рабочих потоков |
 | `server.tomcat.max-connections` | `2048` | предел соединений |
 | `server.tomcat.accept-count` | `200` | очередь ожидающих соединений |
-| `server.tomcat.max-swallow-size` | `1MB` | сколько тела дочитывается у отклонённого запроса |
+| `server.tomcat.max-swallow-size` | `32MB` | сколько тела дочитывается и отбрасывается у запроса, отклонённого до чтения тела (слишком большой XML, отказ в загрузке), чтобы клиент получил ошибку S3, а не обрыв соединения; Tomcat 11 при большем остатке сразу закрывает соединение (у Tomcat 10 хватало 1 МБ). Тело больше обрывается |
 | `server.shutdown`, `spring.lifecycle.timeout-per-shutdown-phase` | `graceful`, `30s` | дать закончиться текущим запросам при остановке |
 | `spring.task.scheduling.pool.size` | `4` | потоки планировщика (GC, рост пулов, очистка multipart не ждут друг друга) |
 | `spring.shell.interactive.enabled` | `true` (в образе `false`) | интерактивная консоль |

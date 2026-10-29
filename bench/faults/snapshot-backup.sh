@@ -21,7 +21,7 @@ trap cleanup EXIT
 
 run_server() { # name volume s3port mgmtport
   docker run -d --name "$1" -p "127.0.0.1:$3:8080" -p "127.0.0.1:$4:9464" \
-    -e "SECTORIADB_S3_CREDENTIALS=$FAULT_ACCESS_KEY:$FAULT_SECRET_KEY:main" -e "JAVA_OPTS=$JAVA_OPTS_FAULT" \
+    -e "SECTORIADB_S3_CREDENTIALS=$FAULT_ACCESS_KEY:$FAULT_SECRET_KEY|main" -e "JAVA_OPTS=$JAVA_OPTS_FAULT" \
     -v "$2:/data" "$IMAGE" >/dev/null || return 1
   for _ in $(seq 1 90); do
     curl -sf -m 2 "http://localhost:$4/actuator/health" >/dev/null 2>&1 && return 0; sleep 1

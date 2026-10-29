@@ -6,7 +6,7 @@ set -uo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 ensure_venv
 fresh_data
-start_server || exit 2
+start_server ${SECURITY_SERVER_ARGS:-} || exit 2
 export SECURITY_MGMT="http://localhost:$MGMT_PORT"
 "$PY" "$FAULTS_DIR/security.py" "$@" | tee "$WORK/security.out"
 rc=${PIPESTATUS[0]}
