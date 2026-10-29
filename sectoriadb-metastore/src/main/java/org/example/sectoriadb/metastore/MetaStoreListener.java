@@ -12,6 +12,9 @@ public interface MetaStoreListener {
     /** A page was read from the file: {@code nanos} of wall time for {@code bytes} bytes. */
     default void onPageRead(long nanos, long bytes) { }
 
+    /** A page was served from the page cache (no file read). */
+    default void onPageCacheHit() { }
+
     /** A page was written to the file. */
     default void onPageWrite(long nanos, long bytes) { }
 

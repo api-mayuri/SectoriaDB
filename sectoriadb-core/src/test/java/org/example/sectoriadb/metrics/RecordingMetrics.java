@@ -39,6 +39,7 @@ public class RecordingMetrics implements StorageMetrics {
     public final AtomicLong smallForcedRecords = new AtomicLong();
     public final AtomicLong metaWriterLockWaits = new AtomicLong();
     public final AtomicLong metaCommits = new AtomicLong();
+    public final AtomicLong metaPageCacheHits = new AtomicLong();
     public final AtomicLong groupBodies = new AtomicLong();
     public final AtomicLong groupBatches = new AtomicLong();
     public final AtomicLong groupQueueWaits = new AtomicLong();
@@ -81,6 +82,7 @@ public class RecordingMetrics implements StorageMetrics {
     @Override public void gcError() { gcErrors.incrementAndGet(); }
     @Override public void metaWriterLockWait(long nanos) { metaWriterLockWaits.incrementAndGet(); }
     @Override public void metaCommit(long nanos) { metaCommits.incrementAndGet(); }
+    @Override public void metaPageCacheHit() { metaPageCacheHits.incrementAndGet(); }
     @Override public void metaGroupBatch(int bodies, int pages) { groupBodies.addAndGet(bodies); groupBatches.incrementAndGet(); }
     @Override public void metaGroupQueueWait(long nanos) { groupQueueWaits.incrementAndGet(); }
     @Override public void metaGroupBodyRollback() { groupRollbacks.incrementAndGet(); }

@@ -62,7 +62,8 @@ public final class MetaStoreHolder implements MetaStoreProvider, AutoCloseable {
             MetaStore opened = MetaStore.open(file, MetaStoreOptions.defaults().fsync(props.isFsync())
                     .listener(new StorageMetricsMetaStoreListener(metrics))
                     .groupCommit(g.getMaxBatchSize(), g.getMaxBatchPages(), g.getMaxWaitMicros(), g.getQueueCapacity())
-                    .recoveryBackoff(props.getMetastore().getRecoveryBackoff().toMillis()));
+                    .recoveryBackoff(props.getMetastore().getRecoveryBackoff().toMillis())
+                    .pageCacheBytes(Math.max(0, props.getMetastore().getPageCacheMb()) << 20));
             log.info("Metadata store opened: {} (fsync={})", file.toAbsolutePath(), props.isFsync());
             return opened;
         } catch (RuntimeException e) {

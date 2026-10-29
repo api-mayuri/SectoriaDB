@@ -132,6 +132,9 @@ public interface StorageMetrics {
      */
     default void metaCommitDetail(String txn, long pages, long nanos) { }
 
+    /** A metadata page was served from the page cache instead of the file. */
+    default void metaPageCacheHit() { }
+
     /** A group commit batch of {@code bodies} write bodies (rolled back ones included) wrote {@code pages} pages. */
     default void metaGroupBatch(int bodies, int pages) { }
 

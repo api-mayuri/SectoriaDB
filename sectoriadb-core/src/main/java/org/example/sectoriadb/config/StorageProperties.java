@@ -252,6 +252,7 @@ public class StorageProperties {
     public static class Metastore {
         private boolean lazy = false;
         private Duration recoveryBackoff = Duration.ofSeconds(1);
+        private long pageCacheMb = 64;
         private Group group = new Group();
 
         /**
@@ -264,6 +265,10 @@ public class StorageProperties {
         /** Pause between recovery attempts after a failed commit. */
         public Duration getRecoveryBackoff() { return recoveryBackoff; }
         public void setRecoveryBackoff(Duration v) { this.recoveryBackoff = v; }
+
+        /** Heap for verified metadata pages, MiB (0: no cache, every page read goes to the file). */
+        public long getPageCacheMb() { return pageCacheMb; }
+        public void setPageCacheMb(long v) { this.pageCacheMb = v; }
 
         public Group getGroup() { return group; }
         public void setGroup(Group v) { this.group = v; }

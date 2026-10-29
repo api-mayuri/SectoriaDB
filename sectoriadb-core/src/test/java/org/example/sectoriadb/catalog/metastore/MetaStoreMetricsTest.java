@@ -31,7 +31,9 @@ class MetaStoreMetricsTest {
             assertTrue(m.get(m.fsyncs, Target.METASTORE) >= 2, "data barrier + meta barrier");
             assertTrue(m.get(m.writes, Target.METASTORE) >= 1);
             store.read(tx -> tx.tree("t").get(new byte[]{1}));
-            assertTrue(m.get(m.reads, Target.METASTORE) >= 1);
+            // the pages just written are in the page cache: the read is a cache hit, not a file read
+            assertTrue(m.metaPageCacheHits.get() >= 1, "page cache hits");
+            assertEquals(0, m.get(m.reads, Target.METASTORE));
         } finally {
             store.close();
         }

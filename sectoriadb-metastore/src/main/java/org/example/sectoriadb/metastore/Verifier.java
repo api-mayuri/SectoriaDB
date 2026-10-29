@@ -134,7 +134,7 @@ final class Verifier {
             if (id == 0) throw new CorruptedPageException(-1, "overflow chain too short");
             mark(id);
             overflowPages++;
-            byte[] p = store.pager.read(id);
+            byte[] p = store.pager.readUncached(id);
             if (p[4] != Pager.T_OVERFLOW) throw new CorruptedPageException(id, "not an overflow page");
             ByteBuffer b = ByteBuffer.wrap(p);
             int used = b.getShort(6) & 0xFFFF;

@@ -118,7 +118,7 @@ public final class MetaStore implements AutoCloseable {
                 // cannot hold a commit): write both meta slots in ONE write so that a crash leaves either nothing
                 // usable (re-initialised on the next open) or a complete file.
                 ch.truncate(0);
-                pager = new Pager(ch, opts.pageSize(), opts.fsync(), opts.listener());
+                pager = new Pager(ch, opts.pageSize(), opts.fsync(), opts.listener(), opts.pageCacheBytes());
                 snap = new Snapshot(0, 0, 0, 2);
                 byte[] both = new byte[2 * pager.pageSize];
                 System.arraycopy(MetaPage.encode(pager.pageSize, snap), 0, both, 0, pager.pageSize);
@@ -127,7 +127,7 @@ public final class MetaStore implements AutoCloseable {
                 if (opts.fsync()) syncParentDirectory(file);
             } else {
                 Object[] r = MetaPage.choose(ch, size);
-                pager = new Pager(ch, (Integer) r[0], opts.fsync(), opts.listener());
+                pager = new Pager(ch, (Integer) r[0], opts.fsync(), opts.listener(), opts.pageCacheBytes());
                 snap = (Snapshot) r[1];
             }
             MetaStore s = new MetaStore(ch, lock, pager, snap, opts);

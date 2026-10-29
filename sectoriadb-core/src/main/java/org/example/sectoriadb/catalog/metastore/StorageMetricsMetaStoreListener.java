@@ -18,6 +18,11 @@ public final class StorageMetricsMetaStoreListener implements MetaStoreListener 
     }
 
     @Override
+    public void onPageCacheHit() {
+        metrics.metaPageCacheHit();
+    }
+
+    @Override
     public void onPageWrite(long nanos, long bytes) {
         metrics.diskWrite(StorageMetrics.Target.METASTORE, nanos, bytes);
     }

@@ -42,6 +42,7 @@ public class MicrometerStorageMetrics implements StorageMetrics {
     private final DistributionSummary groupBatchPages;
     private final Timer groupQueueWait;
     private final Counter groupRollbacks;
+    private final Counter pageCacheHits;
     private final Timer resizeOk;
     private final Timer resizeFailed;
     private final Counter autoResizeRuns;
@@ -110,6 +111,8 @@ public class MicrometerStorageMetrics implements StorageMetrics {
                 .description("Pages written by one group commit")
                 .serviceLevelObjectives(Buckets.GROUP_BATCH_PAGES).register(r);
         groupQueueWait = timer(r, "sectoriadb.metastore.group.queue.wait", "Time a write body waited in the group commit queue before it started to run", Buckets.LOCK_WAIT);
+        pageCacheHits = Counter.builder("sectoriadb.metastore.page.cache.hits")
+                .description("Metadata pages served from the page cache (misses are the metastore disk reads)").register(registry);
         groupRollbacks = Counter.builder("sectoriadb.metastore.group.body.rollbacks")
                 .description("Grouped write bodies that threw and were rolled back without affecting their batch").register(r);
         barrierWait = timer(r, "sectoriadb.cuckoo.barrier.wait", "Time an upload spent in the durability barrier of a cuckoo table before its commit (fsync it led or waited for)", Buckets.FSYNC);
@@ -212,6 +215,8 @@ public class MicrometerStorageMetrics implements StorageMetrics {
 
     @Override public void metaGroupQueueWait(long nanos) { groupQueueWait.record(nanos, TimeUnit.NANOSECONDS); }
     @Override public void metaGroupBodyRollback() { groupRollbacks.increment(); }
+
+    @Override public void metaPageCacheHit() { pageCacheHits.increment(); }
     @Override public void cuckooBarrier(long nanos, boolean led, long coveredInserts) {
         barrierWait.record(nanos, TimeUnit.NANOSECONDS);
         if (led) barrierCovered.record(coveredInserts);

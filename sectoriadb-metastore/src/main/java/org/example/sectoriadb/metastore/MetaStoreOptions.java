@@ -12,6 +12,8 @@ public final class MetaStoreOptions {
     public static final long DEFAULT_RECOVERY_BACKOFF_MILLIS = 1000;
     /** 8192 pages = 32 MiB at the default page size: far above any single object operation. */
     public static final int DEFAULT_LARGE_COMMIT_PAGES = 8192;
+    /** 64 MiB: the branch pages and the hot leaves of a metadata file of a few hundred MiB. */
+    public static final long DEFAULT_PAGE_CACHE_BYTES = 64L << 20;
 
     private final int pageSize;
     private final boolean fsync;
@@ -22,10 +24,12 @@ public final class MetaStoreOptions {
     private final int queueCapacity;
     private final long recoveryBackoffMillis;
     private final int largeCommitPages;
+    private final long pageCacheBytes;
 
     private MetaStoreOptions(int pageSize, boolean fsync, MetaStoreListener listener,
                              int maxBatchSize, int maxBatchPages, long maxBatchWaitMicros, int queueCapacity,
-                             long recoveryBackoffMillis, int largeCommitPages) {
+                             long recoveryBackoffMillis, int largeCommitPages, long pageCacheBytes) {
+        this.pageCacheBytes = Math.max(0, pageCacheBytes);
         this.recoveryBackoffMillis = Math.max(0, recoveryBackoffMillis);
         this.largeCommitPages = Math.max(0, largeCommitPages);
         if (maxBatchSize < 1 || maxBatchPages < 1 || maxBatchWaitMicros < 0 || queueCapacity < 1) {
@@ -47,22 +51,22 @@ public final class MetaStoreOptions {
     public static MetaStoreOptions defaults() {
         return new MetaStoreOptions(DEFAULT_PAGE_SIZE, true, MetaStoreListener.NOOP,
                 DEFAULT_MAX_BATCH_SIZE, DEFAULT_MAX_BATCH_PAGES, 0, DEFAULT_QUEUE_CAPACITY, DEFAULT_RECOVERY_BACKOFF_MILLIS,
-                DEFAULT_LARGE_COMMIT_PAGES);
+                DEFAULT_LARGE_COMMIT_PAGES, DEFAULT_PAGE_CACHE_BYTES);
     }
 
     /** Page size used when the file is created. For an existing file the size stored in its header wins. */
     public MetaStoreOptions pageSize(int pageSize) {
-        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis, largeCommitPages);
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis, largeCommitPages, pageCacheBytes);
     }
 
     /** If false, commits do not call force(); durability is then up to the OS (tests, bulk loads). */
     public MetaStoreOptions fsync(boolean fsync) {
-        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis, largeCommitPages);
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis, largeCommitPages, pageCacheBytes);
     }
 
     /** Receiver of lock-wait, commit, fsync and checksum-failure events (default: none). */
     public MetaStoreOptions listener(MetaStoreListener listener) {
-        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis, largeCommitPages);
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, recoveryBackoffMillis, largeCommitPages, pageCacheBytes);
     }
 
     /**
@@ -73,7 +77,7 @@ public final class MetaStoreOptions {
      * block when it is full.
      */
     public MetaStoreOptions groupCommit(int maxBatchSize, int maxBatchPages, long maxWaitMicros, int queueCapacity) {
-        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxWaitMicros, queueCapacity, recoveryBackoffMillis, largeCommitPages);
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxWaitMicros, queueCapacity, recoveryBackoffMillis, largeCommitPages, pageCacheBytes);
     }
 
     /**
@@ -81,7 +85,7 @@ public final class MetaStoreOptions {
      * the recovery fails, or the commit failed less than this long ago, writes fail fast without touching the disk.
      */
     public MetaStoreOptions recoveryBackoff(long millis) {
-        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, millis, largeCommitPages);
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity, millis, largeCommitPages, pageCacheBytes);
     }
 
     /**
@@ -91,7 +95,20 @@ public final class MetaStoreOptions {
      */
     public MetaStoreOptions largeCommitPages(int pages) {
         return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity,
-                recoveryBackoffMillis, pages);
+                recoveryBackoffMillis, pages, pageCacheBytes);
+    }
+
+    /**
+     * Memory for verified pages kept in the heap (0 disables the cache). A hit skips the read system call, the page
+     * allocation and the CRC32C check; the checksum is verified once, when the page is loaded from the file.
+     */
+    public MetaStoreOptions pageCacheBytes(long bytes) {
+        return new MetaStoreOptions(pageSize, fsync, listener, maxBatchSize, maxBatchPages, maxBatchWaitMicros, queueCapacity,
+                recoveryBackoffMillis, largeCommitPages, bytes);
+    }
+
+    public long pageCacheBytes() {
+        return pageCacheBytes;
     }
 
     public int largeCommitPages() {
