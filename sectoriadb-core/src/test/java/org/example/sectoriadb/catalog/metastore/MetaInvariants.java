@@ -122,7 +122,24 @@ public final class MetaInvariants {
                     assertTrue(pointedAt.add(id), "one objects entry per manifest");
                 }
             }
-            assertEquals(liveS3, pointedAt, "every live S3 manifest is the current version of its key");
+            // a live S3 manifest is the current version of its key, or a noncurrent version kept in the version history
+            Set<String> inHistory = new HashSet<>();
+            try (Cursor c = tx.tree(Versions.VERSIONS).scan()) {
+                while (c.next()) {
+                    Versions.Row row = Versions.decodeRow(c);
+                    if (!row.marker()) {
+                        assertNotNull(Trees.manifest(tx, row.manifestId()).orElse(null), "version " + row.versionId() + " of " + row.key() + " has its manifest");
+                        inHistory.add(row.manifestId());
+                    }
+                    assertTrue(Versions.byId(tx, row.bucket(), row.key(), row.versionId()).isPresent(), "version index entry of " + row.versionId());
+                }
+            }
+            assertEquals(tx.tree(Versions.VERSIONS).size(), tx.tree(Versions.VERSION_IDS).size(), "one index entry per version row");
+            Set<String> expected = new HashSet<>(liveS3);
+            expected.removeAll(inHistory);
+            Set<String> current = new HashSet<>(pointedAt);
+            current.removeAll(inHistory);
+            assertEquals(expected, current, "every live S3 manifest is the current version of its key or a kept version");
 
             checkMultipart(tx, hiddenParts);
         }

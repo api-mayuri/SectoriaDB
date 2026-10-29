@@ -98,6 +98,10 @@ public class MetaStorePoolRepository implements PoolRepository {
                 .orElseThrow(() -> new IllegalArgumentException("Pool not found: " + poolId));
         long objects = store().read(tx -> countObjects(tx, pool.getName()));
         if (objects > 0) throw bucketNotEmpty(pool.getName(), objects);
+        if (store().read(tx -> Versions.any(tx, pool.getName()))) {
+            // S3: a versioned bucket is empty only when it has no versions and no delete markers left
+            throw new IllegalStateException("BucketNotEmpty: bucket '" + pool.getName() + "' still has object versions or delete markers.");
+        }
         // uploads still in progress are discarded with their parts (their data lives in this pool), one per transaction
         for (int round = 0; round < 3; round++) {
             discardOpenUploads(pool.getName());
@@ -142,6 +146,9 @@ public class MetaStorePoolRepository implements PoolRepository {
                     .orElseThrow(() -> new IllegalArgumentException("Pool not found: " + poolId));
             long objects = countObjects(tx, pool.getName());
             if (objects > 0) throw bucketNotEmpty(pool.getName(), objects);
+            if (Versions.any(tx, pool.getName())) {
+                throw new IllegalStateException("BucketNotEmpty: bucket '" + pool.getName() + "' still has object versions or delete markers.");
+            }
             if (!MultipartTrees.openUploadsOfBucket(tx, pool.getName(), 1).isEmpty()) return Optional.empty();
             List<String> blobIds = Trees.blobIdsOfPool(tx, poolId);
             List<BlobFileEntity> removed = new ArrayList<>();

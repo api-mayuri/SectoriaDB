@@ -11,6 +11,9 @@ public class PoolEntity {
     private Instant createdAt;
     private String acl = "private";  // Canned ACL: private, public-read, public-read-write, authenticated-read
     private String policy;            // Bucket policy as JSON string, or null
+    /** null: versioning never enabled; "Enabled" or "Suspended" (it cannot be switched off again, as in S3). */
+    private String versioning;
+    private java.util.List<LifecycleRule> lifecycle;
 
     public PoolEntity() {}
 
@@ -39,4 +42,10 @@ public class PoolEntity {
 
     public String getPolicy() { return policy; }
     public void setPolicy(String policy) { this.policy = policy; }
+
+    public String getVersioning() { return versioning; }
+    public void setVersioning(String versioning) { this.versioning = versioning; }
+
+    public java.util.List<LifecycleRule> getLifecycle() { return lifecycle; }
+    public void setLifecycle(java.util.List<LifecycleRule> lifecycle) { this.lifecycle = lifecycle; }
 }

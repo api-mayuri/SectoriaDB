@@ -127,6 +127,18 @@ public class PoolService {
         update(bucket, p -> p.setPolicy(null));
     }
 
+    /** PutBucketVersioning: {@code Enabled} or {@code Suspended}; once set, a bucket cannot go back to unversioned. */
+    public void setVersioning(String bucket, String status) {
+        if (!"Enabled".equals(status) && !"Suspended".equals(status)) {
+            throw new IllegalArgumentException("versioning status must be Enabled or Suspended: " + status);
+        }
+        update(bucket, p -> p.setVersioning(status));
+    }
+
+    public void setLifecycle(String bucket, java.util.List<org.example.sectoriadb.catalog.LifecycleRule> rules) {
+        update(bucket, p -> p.setLifecycle(rules == null || rules.isEmpty() ? null : java.util.List.copyOf(rules)));
+    }
+
     private void update(String bucket, Consumer<PoolEntity> change) {
         poolRepo.updateByName(bucket, change)
                 .orElseThrow(() -> new IllegalArgumentException("Pool not found: " + bucket));

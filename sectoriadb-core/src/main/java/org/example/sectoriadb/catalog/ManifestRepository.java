@@ -107,6 +107,55 @@ public interface ManifestRepository {
     Optional<ManifestEntity> deleteObject(String bucketName, String objectKey);
 
     /**
+     * DeleteObject with the versioning rules of the bucket (docs/architecture/versioning.md): without a version id in a
+     * versioned bucket a delete marker becomes the newest version; with one, that version or marker is removed for good
+     * and the next one becomes current.
+     *
+     * @param versionId null for the plain DeleteObject
+     */
+    DeleteOutcome delete(String bucketName, String objectKey, String versionId);
+
+    /** A version of a key by its id ({@code "null"} for the null version). */
+    VersionLookup findVersion(String bucketName, String objectKey, String versionId);
+
+    /** The newest version of a key when it is a delete marker (the key then looks deleted), else empty. */
+    Optional<String> latestDeleteMarker(String bucketName, String objectKey);
+
+    /** ListObjectVersions: versions and delete markers in key order, the versions of a key newest first. */
+    VersionListing listVersions(String bucketName, String prefix, String delimiter, String keyMarker, String versionIdMarker,
+                                int maxKeys);
+
+    /** True if the bucket keeps any version or delete marker (it is then not empty for DeleteBucket). */
+    boolean hasVersions(String bucketName);
+
+    /**
+     * Applies the lifecycle rules of a bucket: noncurrent versions past their NoncurrentDays and delete markers without
+     * versions are removed for good, at most {@code limit} per call. Returns how many were removed.
+     */
+    int applyLifecycle(String bucketName, List<LifecycleRule> rules, long nowMillis, int limit);
+
+    /**
+     * @param removed   the version removed for good (its data goes to the collector), empty if none (a marker was added,
+     *                  or a marker was removed)
+     * @param versionId the version id of the removed version or marker, or of the marker added; null in an unversioned bucket
+     */
+    record DeleteOutcome(Optional<ManifestEntity> removed, String versionId, boolean deleteMarker) {
+    }
+
+    /** @param marker the version id names a delete marker; {@code manifest} is then empty */
+    record VersionLookup(Optional<ManifestEntity> manifest, boolean marker, boolean exists) {
+        public static final VersionLookup NONE = new VersionLookup(Optional.empty(), false, false);
+    }
+
+    record VersionEntry(String key, String versionId, boolean latest, boolean deleteMarker, String etag, long size,
+                        Instant lastModified) {
+    }
+
+    record VersionListing(List<VersionEntry> versions, List<String> commonPrefixes, boolean truncated, String nextKeyMarker,
+                          String nextVersionIdMarker) {
+    }
+
+    /**
      * Retires one manifest by id (shell {@code rm}); if it is the current version of an object it is unlinked from
      * the {@code objects} index in the same transaction. Empty if the manifest does not exist or is already retired.
      */

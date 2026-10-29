@@ -43,10 +43,12 @@ public final class StoreFormat {
      * <ol>
      *   <li>the layout of all stores written before versioning;</li>
      *   <li>the data directory the store was written with is recorded ({@value #DATA_DIR_KEY}), so a store opened from
-     *       another directory (a restored backup, a volume mounted elsewhere) can repoint its file paths.</li>
+     *       another directory (a restored backup, a volume mounted elsewhere) can repoint its file paths;</li>
+     *   <li>bucket versioning (trees {@code versions}, {@code version_ids}): no record changes, but a build that does not
+     *       know the version history must not open the store (it would let the collector take noncurrent versions).</li>
      * </ol>
      */
-    public static final int CURRENT = 2;
+    public static final int CURRENT = 3;
     static final String TREE = "format";
     private static final byte[] KEY = "version".getBytes(StandardCharsets.US_ASCII);
     static final String DATA_DIR_KEY = "data-dir";
@@ -77,6 +79,21 @@ public final class StoreFormat {
         @Override
         public void apply(WriteTxn tx, Path dataDir) {
             putDataDir(tx, inferDataDir(tx).orElse(dataDir));
+        }
+    }, new Migration() {
+        @Override
+        public int from() {
+            return 2;
+        }
+
+        @Override
+        public String description() {
+            return "bucket versioning (new trees are created when first used)";
+        }
+
+        @Override
+        public void apply(WriteTxn tx, Path dataDir) {
+            // nothing to rewrite: the version number keeps builds without versioning away from this store
         }
     });
 

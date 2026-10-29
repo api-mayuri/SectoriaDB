@@ -120,6 +120,8 @@ public class ManifestEntity {
      */
     @JsonInclude(JsonInclude.Include.NON_NULL)
     private String multipartUploadId;
+    /** S3 version id of this version in a versioned bucket; null for the {@code null} version. */
+    private String versionId;
     private int partNumber;
 
     public ManifestEntity() {}
@@ -189,6 +191,9 @@ public class ManifestEntity {
         for (PartSegment s : segments) if (s.kind() == StorageKind.SMALL) ids.add(s.smallBlobId());
         return ids;
     }
+
+    public String getVersionId() { return versionId; }
+    public void setVersionId(String versionId) { this.versionId = versionId; }
 
     public String getMultipartUploadId() { return multipartUploadId; }
     public void setMultipartUploadId(String id) { this.multipartUploadId = id; }
