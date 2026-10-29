@@ -76,7 +76,7 @@ class JsonCredentialRepositoryTest {
     void aSameSizeChangeByAnotherProcessIsSeenEvenWithinOneTimestampTick() throws Exception {
         StorageProperties props = new StorageProperties();
         props.setMetaDir(dir.toString());
-        JsonCredentialRepository server = new JsonCredentialRepository(new ObjectMapper(), props);
+        JsonCredentialRepository server = new JsonCredentialRepository(new ObjectMapper(), props, 0);
         JsonCredentialRepository cli = new JsonCredentialRepository(new ObjectMapper(), props);
         CredentialEntity c = cred("a");
         c.setDescription("aaaa");
@@ -95,5 +95,22 @@ class JsonCredentialRepositoryTest {
 
         assertEquals("bbbb", server.findByAccessKeyId("a").orElseThrow().getDescription(),
                 "the server must see the other process's change (a missed disable or policy keeps old rights)");
+    }
+
+    @Test
+    void anotherProcessesChangeIsSeenWithinTheRecheckIntervalAndTheFileIsNotCheckedOnEveryRead() throws Exception {
+        StorageProperties props = new StorageProperties();
+        props.setMetaDir(dir.toString());
+        JsonCredentialRepository server = new JsonCredentialRepository(new ObjectMapper(), props, 200_000_000L);   // 200 ms
+        JsonCredentialRepository cli = new JsonCredentialRepository(new ObjectMapper(), props, 0);
+        CredentialEntity c = cred("r");
+        c.setDescription("old");
+        server.save(c);
+        CredentialEntity changed = cli.findByAccessKeyId("r").orElseThrow();
+        changed.setDescription("new");
+        cli.save(changed);
+        assertEquals("old", server.findByAccessKeyId("r").orElseThrow().getDescription(), "within the interval: the snapshot");
+        Thread.sleep(250);
+        assertEquals("new", server.findByAccessKeyId("r").orElseThrow().getDescription(), "after it: the file");
     }
 }

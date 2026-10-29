@@ -44,7 +44,7 @@ curl -s localhost:9464/actuator/prometheus | grep ^sectoriadb_s3_requests_second
 |---|---|---|
 | `sectoriadb_s3_requests_seconds` (Г) | `operation`, `status_class` | задержка запроса от входа до последнего байта ответа; `_count` — rate, `status_class=~"4xx\|5xx"` — ошибки |
 | `sectoriadb_s3_errors_total` | `operation`, `code` | ответы с ошибкой по коду S3 |
-| `sectoriadb_s3_auth_failures_total` | `reason` | отказы аутентификации: `signature_mismatch`, `clock_skew`, `expired_presign`, `unknown_key`, `disabled_key`, `malformed_header`, `payload_hash_mismatch`, `chunk_signature_mismatch`, `open_setup_denied`, `anonymous_denied`, `unsigned_payload_denied`, `policy_denied` |
+| `sectoriadb_s3_auth_failures_total` | `reason` | отказы аутентификации: `signature_mismatch`, `clock_skew`, `expired_presign`, `unknown_key`, `disabled_key`, `malformed_header`, `payload_hash_mismatch`, `chunk_signature_mismatch`, `open_setup_denied`, `anonymous_denied`, `unsigned_payload_denied`, `policy_denied`, `locked_out` (адрес заблокирован после серии неудачных подписей) |
 | `sectoriadb_s3_requests_inflight` | `operation` | запросов в обработке |
 | `sectoriadb_s3_request_bytes_total`, `sectoriadb_s3_response_bytes_total` | `operation` | байты тел (запрос — с обрамлением `aws-chunked`) |
 | `sectoriadb_s3_get_ttfb_seconds` (Г) | — | время до первой записи тела `GetObject` |

@@ -263,6 +263,23 @@ class S3ApiRegressionTest {
         assertEquals(404, send(HttpRequest.newBuilder(uri("/badpol-test?policy")).GET()).statusCode());
     }
 
+    @Test
+    void aBucketPolicyWithAConditionTheServerCannotEvaluateIsRejected() throws Exception {
+        mkBucket("cond-test");
+        String unsupported = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Allow\",\"Principal\":\"*\","
+                + "\"Action\":\"s3:GetObject\",\"Resource\":\"arn:aws:s3:::cond-test/*\","
+                + "\"Condition\":{\"IpAddress\":{\"aws:SourceIp\":\"10.0.0.0/8\"}}}]}";
+        var r = send(HttpRequest.newBuilder(uri("/cond-test?policy")).PUT(BodyPublishers.ofString(unsupported)));
+        assertEquals(400, r.statusCode());
+        assertTrue(new String(r.body()).contains("MalformedPolicy") && new String(r.body()).contains("IpAddress"), new String(r.body()));
+        assertEquals(404, send(HttpRequest.newBuilder(uri("/cond-test?policy")).GET()).statusCode(), "nothing stored");
+
+        String supported = "{\"Version\":\"2012-10-17\",\"Statement\":[{\"Effect\":\"Deny\",\"Principal\":\"*\","
+                + "\"Action\":\"s3:*\",\"Resource\":\"arn:aws:s3:::cond-test/*\","
+                + "\"Condition\":{\"Bool\":{\"aws:SecureTransport\":\"false\"}}}]}";
+        assertEquals(204, send(HttpRequest.newBuilder(uri("/cond-test?policy")).PUT(BodyPublishers.ofString(supported))).statusCode());
+    }
+
     /** S3 puts all elements in one namespace: a namespace-less child under a namespaced root breaks strict clients. */
     @Test
     void xmlResponsesDeclareOneDefaultNamespace() throws Exception {

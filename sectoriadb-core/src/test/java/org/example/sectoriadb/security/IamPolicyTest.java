@@ -101,7 +101,7 @@ class IamPolicyTest {
         assertFalse(Files.readString(dir.resolve("credentials.json")).contains("policy"), "a key without a policy writes no field");
 
         service.setPolicy(key.getAccessKeyId(), json(VALID));
-        var other = new CredentialService(new JsonCredentialRepository(MAPPER, props));   // a second process reading the file
+        var other = new CredentialService(new JsonCredentialRepository(MAPPER, props, 0));   // a second process reading the file
         assertEquals(json(VALID), other.findByAccessKeyId(key.getAccessKeyId()).orElseThrow().getPolicy());
 
         service.setPolicy(key.getAccessKeyId(), null);

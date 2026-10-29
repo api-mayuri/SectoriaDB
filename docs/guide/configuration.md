@@ -58,6 +58,9 @@
 | `sectoriadb.s3.credentials` | не задан | ключи через запятую `ACCESS:SECRET[|описание]`. Секрет не должен содержать `:`, `,` и `|`; прежняя форма `ACCESS:SECRET:описание` не принимается (запись отклоняется с сообщением, секрет не усекается и не удлиняется молча). Для перечисленных ключей окружение — источник истины (сменили секрет — применится при старте). Пара `access-key`/`secret-key` проверяется теми же правилами (ключ — 16–128 букв и цифр, секрет — от 16 символов). Описание на уровне INFO не пишется |
 | `sectoriadb.s3.auth.enabled` | `true` | проверка SigV4; `false` — только для разработки |
 | `sectoriadb.s3.auth.allow-open-setup` | `false` | при включённой авторизации и отсутствии ключей пропускать все запросы (иначе `403`) |
+| `sectoriadb.s3.auth.lockout.max-failures` | `20` | неудачных подписей (неверный секрет, неизвестный или выключенный ключ) с одного адреса за `window`, после которых адрес блокируется: подписанные запросы получают `503 SlowDown` с `Retry-After`, не проверяясь (`0` — выключено). Адрес — клиент за доверенным прокси: без `server.tomcat.remoteip.internal-proxies` все клиенты видны адресом nginx и блокируются вместе |
+| `sectoriadb.s3.auth.lockout.window` | `1m` | окно подсчёта неудачных подписей |
+| `sectoriadb.s3.auth.lockout.duration` | `5m` | сколько длится блокировка адреса |
 | `sectoriadb.s3.auth.allow-unsigned-payload` | `true` | принимать `UNSIGNED-PAYLOAD` и `STREAMING-UNSIGNED-PAYLOAD-TRAILER`; `false` — требовать подписанное тело |
 | `sectoriadb.s3.auth.enforce-region` | `true` | регион в `Credential` должен совпадать с `sectoriadb.s3.region` |
 | `sectoriadb.s3.auth.require-signed-headers` | `true` | `host` и все `x-amz-*` обязаны входить в `SignedHeaders` |

@@ -28,7 +28,9 @@ public enum AuthFailure {
     /** UNSIGNED-PAYLOAD sent while sectoriadb.s3.auth.allow-unsigned-payload=false. */
     UNSIGNED_PAYLOAD_DENIED("unsigned_payload_denied"),
     /** The signature is valid but the IAM identity policy / bucket policy does not permit the operation. */
-    POLICY_DENIED("policy_denied");
+    POLICY_DENIED("policy_denied"),
+    /** The client address is locked after a series of failed signatures (sectoriadb.s3.auth.lockout.*). */
+    LOCKED_OUT("locked_out");
 
     private final String label;
 

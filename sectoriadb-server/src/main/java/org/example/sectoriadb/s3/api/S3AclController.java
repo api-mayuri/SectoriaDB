@@ -8,6 +8,7 @@ import org.example.sectoriadb.catalog.PoolEntity;
 import org.example.sectoriadb.s3.access.AccessControlService;
 import org.example.sectoriadb.s3.error.S3Exception;
 import org.example.sectoriadb.s3.http.S3Request;
+import org.example.sectoriadb.security.IamPolicyValidator;
 import org.example.sectoriadb.storage.PoolService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 /**
  * S3 ACL and configuration endpoints:
@@ -154,6 +156,11 @@ public class S3AclController {
             if (!tree.isObject() || !tree.path("Statement").isArray()) {
                 throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedPolicy",
                         "Policy must be a JSON object with a Statement array");
+            }
+            // a condition the server cannot evaluate would be applied fail-closed: refuse it instead of storing it
+            List<String> unsupported = IamPolicyValidator.unsupportedConditions(tree);
+            if (!unsupported.isEmpty()) {
+                throw new S3Exception(HttpStatus.BAD_REQUEST, "MalformedPolicy", String.join("; ", unsupported));
             }
         } catch (S3Exception e) {
             throw e;

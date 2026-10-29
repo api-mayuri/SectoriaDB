@@ -339,12 +339,15 @@ class S3IamTest {
         props.setMetaDir(tempRoot.resolve("meta").toString());
         CredentialService cli = new CredentialService(new JsonCredentialRepository(MAPPER, props));
         cli.setPolicy(key.accessKey, MAPPER.readTree(onlyBucket("live-other")));
+        Thread.sleep(1100);   // the server re-reads credentials.json at most once a second
         assertDenied(send(key, "GET", "/live-a/k", null, null), "after key-policy --file");
 
         cli.setPolicy(key.accessKey, MAPPER.readTree(onlyBucket("live-a")));
+        Thread.sleep(1100);
         assertEquals(200, send(key, "GET", "/live-a/k", null, null).statusCode());
 
         cli.setPolicy(key.accessKey, null);
+        Thread.sleep(1100);
         assertDenied(send(key, "GET", "/live-a/k", null, null), "removed: no policy, no access");
         assertTrue(Files.readString(tempRoot.resolve("meta").resolve("credentials.json"), StandardCharsets.UTF_8).contains(key.accessKey));
     }

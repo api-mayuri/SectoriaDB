@@ -124,6 +124,25 @@ public final class IamPolicyValidator {
         }
     }
 
+    /**
+     * The Condition blocks of a policy (identity or bucket) that the evaluator cannot evaluate. Such a condition is
+     * evaluated fail-closed (an Allow with it never applies, a Deny with it always does); refusing it when the policy is
+     * stored makes that visible instead of a policy that silently does less (or denies more) than it says.
+     */
+    public static List<String> unsupportedConditions(JsonNode policy) {
+        List<String> errors = new ArrayList<>();
+        JsonNode st = policy == null ? null : policy.get("Statement");
+        if (st == null) return errors;
+        List<JsonNode> list = new ArrayList<>();
+        if (st.isArray()) st.forEach(list::add);
+        else list.add(st);
+        for (int i = 0; i < list.size(); i++) {
+            JsonNode s = list.get(i);
+            if (s.isObject() && s.has("Condition")) condition(s.get("Condition"), "Statement " + (i + 1) + ": ", errors);
+        }
+        return errors;
+    }
+
     private static void condition(JsonNode cond, String at, List<String> errors) {
         if (!cond.isObject() || cond.isEmpty()) {
             errors.add(at + "Condition must be a non-empty object");

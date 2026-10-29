@@ -21,6 +21,7 @@ import org.example.sectoriadb.security.CredentialService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -147,6 +148,15 @@ public class SigV4Filter extends OncePerRequestFilter {
         String authHeader   = request.getHeader("Authorization");
         String xAmzDate     = request.getHeader("x-amz-date");
 
+        // an address that failed too many signatures waits: its requests are not even verified
+        long locked = lockout == null ? 0 : lockout.lockedForSeconds(request.getRemoteAddr(), System.currentTimeMillis());
+        if (locked > 0 && (authHeader != null || request.getQueryString() != null && request.getQueryString().contains("X-Amz-Signature"))) {
+            request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, AuthFailure.LOCKED_OUT);
+            response.setHeader("Retry-After", Long.toString(locked));
+            sendError(request, response, 503, "SlowDown", "Too many failed signatures from this address. Please retry later.");
+            return;
+        }
+
         // ── Presigned URL (query-parameter auth): detected by the parameter NAME, not by a substring ──
         boolean presigned;
         try {
@@ -185,6 +195,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             verified = verifyHeaderAuth(request, authHeader, xAmzDate);
         } catch (AuthException e) {
             failedAuthLog.warn("SigV4 auth failed: {}", sanitize(e.getMessage()));
+            countGuess(request, e.reason);
             request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, e.reason);
             sendError(request, response, e.httpStatus, e.errorCode, e.getMessage());
             return;
@@ -355,6 +366,22 @@ public class SigV4Filter extends OncePerRequestFilter {
         return request;
     }
 
+    private AuthLockout lockout;
+
+    /** Optional (tests build the filter by hand): without it there is no lockout. */
+    @Autowired(required = false)
+    void setLockout(AuthLockout lockout) {
+        this.lockout = lockout;
+    }
+
+    /** Failures that look like guessing a key or a secret count towards the lockout of the address. */
+    private void countGuess(HttpServletRequest request, AuthFailure reason) {
+        if (lockout == null) return;
+        if (reason == AuthFailure.SIGNATURE_MISMATCH || reason == AuthFailure.UNKNOWN_KEY || reason == AuthFailure.DISABLED_KEY) {
+            lockout.failure(request.getRemoteAddr(), System.currentTimeMillis());
+        }
+    }
+
     // ── Presigned URL auth ────────────────────────────────────────────────────
 
     /** Returns the access key id of the verified request, or null after an error response was written. */
@@ -364,6 +391,7 @@ public class SigV4Filter extends OncePerRequestFilter {
             return verifyPresignedInternal(request);
         } catch (AuthException e) {
             failedAuthLog.warn("Presigned URL auth failed: {}", sanitize(e.getMessage()));
+            countGuess(request, e.reason);
             request.setAttribute(ObservabilityAttributes.AUTH_FAILURE, e.reason);
             sendError(request, response, e.httpStatus, e.errorCode, e.getMessage());
             return null;

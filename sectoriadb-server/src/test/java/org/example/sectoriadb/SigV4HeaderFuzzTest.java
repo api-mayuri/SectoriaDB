@@ -41,6 +41,7 @@ class SigV4HeaderFuzzTest {
         r.add("sectoriadb.meta-dir",            () -> tempRoot.resolve("meta").toString());
         r.add("sectoriadb.data-dir",            () -> tempRoot.resolve("data").toString());
         r.add("sectoriadb.auto-resize.enabled", () -> "false");
+        r.add("sectoriadb.s3.auth.lockout.max-failures", () -> "0");   // thousands of bad signatures on purpose
         r.add("sectoriadb.default-num-buckets", () -> "256");
         r.add("sectoriadb.default-chunk-size",  () -> "4096");
         r.add("sectoriadb.s3.auth.enabled",     () -> "true");

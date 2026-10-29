@@ -58,11 +58,28 @@ public class JsonCredentialRepository implements CredentialRepository {
     private static final Snapshot ABSENT = new Snapshot(List.of(), null, null, -1);
 
     private volatile Snapshot snapshot = null;
+    /**
+     * When the file was last compared with the snapshot. Every authenticated request reads the credentials; a stat per
+     * request was a system call on the hot path. Changes of this process are published at once; changes of another
+     * process (the admin CLI) are seen within {@link #RECHECK_NANOS}.
+     */
+    private volatile long checkedAtNanos;
+    static final long RECHECK_NANOS = 1_000_000_000L;
+    private final long recheckNanos;
 
     public JsonCredentialRepository(ObjectMapper mapper, StorageProperties props) {
         this.mapper   = mapper;
         this.dataFile = Path.of(props.getMetaDir(), "credentials.json");
         this.cipher   = SecretCipher.fromBase64(props.getSecrets().getKey());
+        this.recheckNanos = RECHECK_NANOS;
+    }
+
+    /** As the main constructor, with another interval between file checks (tests: 0 checks on every read). */
+    JsonCredentialRepository(ObjectMapper mapper, StorageProperties props, long recheckNanos) {
+        this.mapper   = mapper;
+        this.dataFile = Path.of(props.getMetaDir(), "credentials.json");
+        this.cipher   = SecretCipher.fromBase64(props.getSecrets().getKey());
+        this.recheckNanos = recheckNanos;
     }
 
     /** Whether secrets are written encrypted (a master key is configured). */
@@ -165,6 +182,10 @@ public class JsonCredentialRepository implements CredentialRepository {
 
     /** The current credentials as an immutable list; reloads the file when its time or size changed (the admin CLI edits it too). */
     private List<CredentialEntity> readAll() {
+        Snapshot cached = snapshot;
+        long now = System.nanoTime();
+        if (cached != null && now - checkedAtNanos < recheckNanos) return cached.entries();
+        checkedAtNanos = now;
         if (!Files.exists(dataFile)) {
             snapshot = ABSENT;
             return ABSENT.entries();
