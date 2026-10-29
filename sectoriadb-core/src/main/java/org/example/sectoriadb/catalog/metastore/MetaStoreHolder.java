@@ -65,6 +65,12 @@ public final class MetaStoreHolder implements MetaStoreProvider, AutoCloseable {
                     .recoveryBackoff(props.getMetastore().getRecoveryBackoff().toMillis())
                     .pageCacheBytes(Math.max(0, props.getMetastore().getPageCacheMb()) << 20));
             log.info("Metadata store opened: {} (fsync={})", file.toAbsolutePath(), props.isFsync());
+            try {
+                StoreFormat.open(opened, Path.of(props.getDataDir()));
+            } catch (RuntimeException e) {
+                opened.close();   // never leave a store of the wrong version open (and its file locked)
+                throw e;
+            }
             return opened;
         } catch (RuntimeException e) {
             if (e.getCause() != null && String.valueOf(e.getCause().getMessage()).contains("already open")) {

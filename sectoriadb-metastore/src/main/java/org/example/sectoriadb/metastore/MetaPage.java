@@ -51,11 +51,16 @@ final class MetaPage {
         return p;
     }
 
-    /** Parses a meta page header; null if magic/version/crc/pageSize do not check out. */
+    /**
+     * Parses a meta page header; null if magic/crc/pageSize do not check out. A page with our magic and a valid checksum
+     * but another format version is not "invalid": it was written by another version, and opening stops with
+     * {@link UnsupportedFormatException} instead of reporting a corrupt file (or, worse, treating it as empty).
+     */
     private static Object[] parse(byte[] h) {
         ByteBuffer b = ByteBuffer.wrap(h);
-        if (b.getLong(0) != MAGIC || b.getInt(8) != FORMAT_VERSION) return null;
+        if (b.getLong(0) != MAGIC) return null;
         if (b.getInt(48) != Pager.crc(h, 0, 48)) return null;
+        if (b.getInt(8) != FORMAT_VERSION) throw new UnsupportedFormatException(b.getInt(8), FORMAT_VERSION);
         int ps = b.getInt(12);
         if (ps < MetaStoreOptions.MIN_PAGE_SIZE || ps > MetaStoreOptions.MAX_PAGE_SIZE || Integer.bitCount(ps) != 1) {
             return null;
