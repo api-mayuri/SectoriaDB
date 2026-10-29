@@ -25,7 +25,7 @@ docker compose logs -f sectoriadb
 Первый запуск: пока нет ни одного ключа, все S3-запросы получают `403` (если не включён `allow-open-setup`). Создайте ключ
 `docker compose exec sectoriadb java -jar /app/sectoriadb.jar mk-key --admin --desc "my key"` (без `--admin` ключ получает `403`, пока ему не подключена политика) или задайте переменные окружения — такие ключи получают полный доступ при старте.
 
-Запуск без Docker: `mvn package -DskipTests`, затем `java -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar` (нужен JDK 21).
+Запуск без Docker: `mvn package -DskipTests`, затем `java -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar` (нужен JDK 25).
 Свойства: [configuration.md](configuration.md).
 
 ## TLS через nginx

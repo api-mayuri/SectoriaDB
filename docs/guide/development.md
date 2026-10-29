@@ -1,19 +1,24 @@
 # Разработка: сборка, тесты, стиль кода
 
-Нужны JDK 21 и Maven. Проект — четыре модуля (`sectoriadb-metastore`, `sectoriadb-engine`, `sectoriadb-core`, `sectoriadb-server`), Spring Boot 3.3,
-Spring Shell 3.3. Устройство — [overview.md](../architecture/overview.md).
+Нужны JDK 25 и Maven. Проект — четыре модуля (`sectoriadb-metastore`, `sectoriadb-engine`, `sectoriadb-core`, `sectoriadb-server`), Spring Boot 4.1,
+Spring Shell 4.0, Jackson 3. Устройство — [overview.md](../architecture/overview.md).
 
 ## Команды
 
 ```bash
-mvn -B verify                         # то, что должен пройти CI: checkstyle (validate), тесты, spotless (verify)
+mvn -B verify                         # перед каждым коммитом (CI нет): checkstyle (validate), тесты, spotless (verify)
 mvn test                              # все модули
 mvn -pl sectoriadb-engine test        # один модуль (metastore, engine, core, server)
 mvn -pl sectoriadb-core -am test      # модуль вместе с тем, от чего он зависит
 mvn -DskipTests package               # исполняемый jar: sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar
 mvn spotless:apply                    # расставить импорты и убрать неиспользуемые
 mvn checkstyle:check                  # правила Checkstyle
+mvn org.owasp:dependency-check-maven:13.0.0:aggregate -DnvdApiKey=КЛЮЧ   # известные уязвимости зависимостей, перед релизом
 ```
+
+Проверка уязвимостей (OWASP Dependency-Check) при первом запуске скачивает базу NVD (несколько сотен мегабайт, с ключом
+API NVD — минуты, без него — часы); отчёт — `target/dependency-check-report.html`. В песочнице разработки NVD недоступен,
+команда там не запускалась.
 
 Плагины скачиваются из Maven Central при первом запуске; офлайн (`-o`) нужен заполненный `~/.m2`.
 

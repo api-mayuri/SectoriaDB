@@ -51,7 +51,7 @@ public class ShellCommandRunner implements ApplicationRunner, ExitCodeGenerator 
             if (shell != null && !(shell instanceof org.springframework.shell.core.NonInteractiveShellRunner)) shell.run(raw);
             return;
         }
-        PrintWriter out = new PrintWriter(System.out, true);
+        PrintWriter out = new PrintWriter(System.out, true);   // UTF-8: Application.main sets it
         exitCode = execute(command, out);
     }
 

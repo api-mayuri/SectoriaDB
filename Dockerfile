@@ -1,6 +1,6 @@
 # ── Stage 1: Build ────────────────────────────────────────────────────────────
 # Base images are pinned by digest (the tag stays for people; bump both together, e.g. with Renovate/Dependabot)
-FROM maven:3.9-eclipse-temurin-21@sha256:99e61abcff91a9b1333463bd8451fb18495d6eba9250ac66a338b518f8278320 AS builder
+FROM maven:3.9-eclipse-temurin-25@sha256:93b8a14ea2f412782e4e842651273b4d903e35cc496284f178fbbe2d67d00976 AS builder
 
 WORKDIR /build
 
@@ -20,7 +20,7 @@ COPY sectoriadb-server/src/ sectoriadb-server/src/
 RUN mvn -B package -DskipTests -q
 
 # ── Stage 2: Runtime ──────────────────────────────────────────────────────────
-FROM eclipse-temurin:21-jre-alpine@sha256:51ab5e3302e7141ce665ca3ea85e8b5cd648eafbc3c0c90dd79d6537684e4555
+FROM eclipse-temurin:25-jre-alpine@sha256:b7528962e65d43064d8a8b67ba175367896bc948363ea2d3fcd7f10d34e1f048
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 # Unprivileged user; /data is what the volume below mounts over (a fresh named volume inherits this ownership).
@@ -42,6 +42,8 @@ VOLUME ["/data"]
 # ── Configuration via environment variables ───────────────────────────────────
 # Spring's relaxed binding maps SECTORIADB_* / SERVER_PORT / SPRING_* to the properties of application.properties, so
 # `docker compose exec ... java -jar` (which bypasses ENTRYPOINT) sees the same configuration.
+# UTF-8 locale: the JVM decodes command-line arguments and file names with it (POSIX would turn non-ASCII into ?)
+ENV LANG="C.UTF-8"
 ENV SECTORIADB_META_DIR="/data/meta"
 ENV SECTORIADB_DATA_DIR="/data/storage"
 ENV SECTORIADB_S3_AUTH_ENABLED="true"

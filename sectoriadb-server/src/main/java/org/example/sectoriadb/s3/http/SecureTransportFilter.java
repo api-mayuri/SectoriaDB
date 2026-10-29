@@ -10,6 +10,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.web.server.context.WebServerInitializedEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
@@ -49,7 +51,16 @@ public class SecureTransportFilter extends OncePerRequestFilter {
     public SecureTransportFilter(@Value("${sectoriadb.s3.require-secure-transport:false}") boolean required,
                                  @Value("${server.ssl.enabled:false}") boolean tlsInProcess) {
         this.required = required;
-        if (!required && !tlsInProcess) {
+        this.plainHttp = !required && !tlsInProcess;
+    }
+
+    private final boolean plainHttp;
+
+    /** Said once the web server listens (not in the admin CLI, which starts no web server). */
+    @EventListener
+    void warnAboutPlainHttp(WebServerInitializedEvent event) {
+        // the management port (9464) is a second web server with its own namespace: say it once, for the S3 port
+        if (plainHttp && event.getApplicationContext().getServerNamespace() == null) {
             log.warn("S3 requests are accepted over plain HTTP: put the TLS proxy in front (docker-compose.yml with nginx) "
                     + "and set sectoriadb.s3.require-secure-transport=true; without it keys, signatures and data travel unencrypted");
         }
