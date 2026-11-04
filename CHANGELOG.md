@@ -6,6 +6,16 @@
 **Общее правило миграции.** Проект экспериментальный: совместимость формата данных на диске между этапами не гарантировалась, миграторов нет. Где формат менялся, об этом сказано ниже; после такого этапа
 старое хранилище нужно создавать заново и перезаливать данные. Текущий формат — финальный (блоб `SDBBLOB1` v1, журнал малых объектов `SDBSMOB1` v1, метахранилище `SECTMETA` v1, кодек манифеста v2).
 
+## 24-versioning — версионирование бакетов и lifecycle (2026-10-29)
+
+- **ADR** [docs/architecture/versioning.md](docs/architecture/versioning.md): `objects` по-прежнему — текущая живая версия; история ключей версионированных бакетов — деревья `versions` и `version_ids`; прежние версии сохраняют манифесты и ссылки на чанки, сборщик получает версию только при окончательном удалении.
+- **S3 API:** `Get/PutBucketVersioning` (`Enabled`, `Suspended`; MFA Delete — `501`), `ListObjectVersions` с маркерами удаления и общими префиксами, `GET`/`HEAD`/`DELETE ?versionId`, `x-amz-version-id` у `PUT`, `GET`, `HEAD`, `CopyObject` и `CompleteMultipartUpload`, `x-amz-delete-marker`, маркер как версия — `405`, `DeleteObjects` с `VersionId`, копирование версии. При `Suspended` запись и удаление заменяют версию `null`.
+- **Lifecycle:** `Get/Put/DeleteBucketLifecycleConfiguration` с `Filter/Prefix`, `NoncurrentVersionExpiration/NoncurrentDays`, `Expiration/ExpiredObjectDeleteMarker`; прочие элементы — `501` (не сохраняются молча). Проход раз в `sectoriadb.gc.lifecycle-interval` (1 ч).
+- **IAM:** `s3:PutBucketVersioning`, `s3:Get/PutLifecycleConfiguration`, `s3:GetObjectVersion`, `s3:DeleteObjectVersion`.
+- **Формат хранилища 3** (пустая миграция 2 → 3): сборка без версионирования не откроет хранилище с историей версий.
+- Бакет с версиями или маркерами не пуст для `DeleteBucket` (`409 BucketNotEmpty`).
+- Найдено ceph/s3-tests и исправлено до коммита этапа: удаление новейшей версии делало версию `null` текущей, но оставляло её строкой истории — повторное удаление оставляло «висячую» строку, и бакет навсегда оставался непустым (`VersioningTest`, проверка инварианта).
+
 ## 23-hardware-validation — проверки в песочнице и программа для железа (2026-10-29)
 
 - **Сценарии отказов на Java 25 — 7 из 7.** Скрипты `bench/faults` отстали от образа и исправлены: каталоги для непривилегированного пользователя образа, ключи в форме `ACCESS:SECRET|описание`, пороги свободного места под тестовый диск 64 МиБ (порог 1 ГиБ отказывал в любой записи).

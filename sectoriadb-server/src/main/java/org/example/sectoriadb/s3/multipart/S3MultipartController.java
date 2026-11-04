@@ -230,7 +230,7 @@ public class S3MultipartController {
                 + "/" + bucket + "/" + result.key();
         var ok = ResponseEntity.ok();
         if (result.manifestId() != null) {
-            manifestRepo.findById(result.manifestId()).map(lookup::versionHeader)
+            manifestRepo.findById(result.manifestId()).map(m -> m.getVersionId())
                     .ifPresent(v -> ok.header(S3Lookup.VERSION_ID_HEADER, v));
         }
         return ok.body(MultipartXml.completeResult(location, bucket, result.key(), result.etag(), checksumResultXml(result)));

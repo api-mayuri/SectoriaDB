@@ -123,8 +123,8 @@ public class S3ObjectController {
 
             var ok = ResponseEntity.ok()
                     .header("ETag", entity.getEtag() != null ? entity.getEtag() : "\"\"");
-            String version = lookup.versionHeader(entity);
-            if (version != null) ok.header(S3Lookup.VERSION_ID_HEADER, version);
+            // as S3: a write answers its version id only when it created a real version (Enabled), not the null version
+            if (entity.getVersionId() != null) ok.header(S3Lookup.VERSION_ID_HEADER, entity.getVersionId());
             S3Checksums.addClientHeaders(entity, ok::header);
             return ok.build();
         }
@@ -429,8 +429,7 @@ public class S3ObjectController {
                     + "<ETag>" + XmlSupport.escape(entity.getEtag()) + "</ETag>"
                     + "</CopyObjectResult>";
             var ok = ResponseEntity.ok().contentType(MediaType.APPLICATION_XML);
-            String version = lookup.versionHeader(entity);
-            if (version != null) ok.header(S3Lookup.VERSION_ID_HEADER, version);
+            if (entity.getVersionId() != null) ok.header(S3Lookup.VERSION_ID_HEADER, entity.getVersionId());
             String sourceVersion = lookup.versionHeader(srcEntity);
             if (sourceVersion != null) ok.header("x-amz-copy-source-version-id", sourceVersion);
             return ok.body(xml);
