@@ -29,7 +29,7 @@ docker compose start sectoriadb
 docker attach sectoriadb          # отсоединиться без остановки: Ctrl+P, Ctrl+Q (Ctrl+C остановит сервер)
 
 # без Docker
-java -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar            # сервер + интерактивная консоль, help
+java -jar sectoriadb-server/target/SectoriaDB-*.jar            # сервер + интерактивная консоль, help
 java -Dspring.shell.interactive.enabled=false -jar ...                    # сервер без консоли
 java -jar ... verify-all --sectoriadb.meta-dir=/data/meta                 # разовая команда (OFFLINE-ONLY)
 ```

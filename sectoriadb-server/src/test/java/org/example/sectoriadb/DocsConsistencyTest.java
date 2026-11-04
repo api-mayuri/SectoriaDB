@@ -44,6 +44,7 @@ class DocsConsistencyTest {
         List<Path> files = new ArrayList<>();
         files.add(ROOT.resolve("README.md"));
         files.add(ROOT.resolve("CHANGELOG.md"));
+        files.add(ROOT.resolve("SECURITY.md"));
         files.add(ROOT.resolve("bench/README.md"));
         files.add(ROOT.resolve("bench/results/README.md"));
         try (Stream<Path> s = Files.walk(ROOT.resolve("docs"))) {

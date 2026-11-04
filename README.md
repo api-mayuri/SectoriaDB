@@ -4,18 +4,19 @@ S3-совместимое хранилище объектов на Java 25 и Sp
 Данные лежат в собственных блоб-файлах: крупные объекты — чанками в кукушкиных хэш-таблицах с дедупликацией, мелкие (меньше 16 КиБ) — в append-only журналах;
 метаданные — во встроенном транзакционном хранилище (copy-on-write B+-дерево в одном файле `sectoria.db`), без внешней базы данных.
 
-> Проект учебный и экспериментальный. Перед использованием для важных данных прочитайте [известные ограничения](docs/README.md#известные-ограничения-и-планы).
+> **Версия 1.0.0-rc.1** — кандидат в релиз одноузловой версии. Окончательный `v1.0.0` выйдет после проверки на целевом железе (объём 1 ТБ, заполнение диска, soak 8 и 24 ч — [hardware-validation](docs/testing/hardware-validation.md)).
+> Один узел, репликации нет: перед использованием для важных данных прочитайте [известные ограничения](docs/README.md#известные-ограничения-и-планы).
 >
-> Текущее состояние, ветки и что осталось сделать — [docs/status.md](docs/status.md).
+> Текущее состояние и что осталось сделать — [docs/status.md](docs/status.md), план — [docs/roadmap.md](docs/roadmap.md), поддерживаемые версии и сообщение об уязвимостях — [SECURITY.md](SECURITY.md).
 
 > **Перед боевым использованием прочитайте [рекомендации](docs/guide/recommendations.md):** когда SectoriaDB подходит, TLS (nginx), резервные копии, память, мониторинг.
 
 ## Возможности
 
 - **S3 API:** бакеты, `PutObject`/`GetObject` (`Range`, условные заголовки)/`HeadObject`/`DeleteObject`/`DeleteObjects`/`CopyObject`, `ListObjects` v1 и v2, ACL, политики бакета, presigned-ссылки,
-  полный multipart (`Complete` без копирования данных, идемпотентный, `GET ?partNumber`). Что поддержано и чем отличается от AWS — [guide/s3-usage.md](docs/guide/s3-usage.md).
+  полный multipart (`Complete` без копирования данных, идемпотентный, `GET ?partNumber`), версионирование бакета (`versionId`, маркеры удаления, `ListObjectVersions`) и lifecycle для нетекущих версий. Что поддержано и чем отличается от AWS — [guide/s3-usage.md](docs/guide/s3-usage.md).
 - **Целостность от клиента до диска:** SigV4 и подписи `aws-chunked`, `x-amz-checksum-*` (CRC32, CRC32C, CRC64NVME, SHA-1, SHA-256) и `Content-MD5`, CRC32C каждого чанка и всего объекта на каждом чтении, `verify-all` — [architecture/integrity.md](docs/architecture/integrity.md).
-- **Надёжность:** атомарные коммиты метаданных, переживает `kill -9` и потерю питания; при сбое записи метахранилища чтение продолжается, запись восстанавливается сама.
+- **Надёжность:** атомарные коммиты метаданных, переживает `kill -9` и потерю питания; при сбое записи метахранилища чтение продолжается, запись восстанавливается сама. Формат на диске версионирован: новая версия мигрирует данные при старте.
 - **Место:** дедупликация по бакету, сборщик мусора возвращает место удалённых объектов, рост бакета добавлением блобов, расширение блоба без остановки записи.
 - **Эксплуатация:** Docker и compose, несколько ключей доступа с включением/выключением без перезапуска, консоль администратора, метрики Prometheus, стенд Grafana, готовые алерты.
 
@@ -49,8 +50,8 @@ TLS терминирует nginx из compose; порт самого серве�
 
 ```bash
 mvn -B package -DskipTests
-java -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar                       # сервер + интерактивная консоль (help)
-java -Dspring.shell.interactive.enabled=false -jar sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar
+java -jar sectoriadb-server/target/SectoriaDB-*.jar                       # сервер + интерактивная консоль (help)
+java -Dspring.shell.interactive.enabled=false -jar sectoriadb-server/target/SectoriaDB-*.jar
 # разработка без авторизации:  -Dsectoriadb.s3.auth.enabled=false
 ```
 
@@ -97,15 +98,16 @@ aws s3 --endpoint-url https://localhost presign s3://my-bucket/photo.jpg --expir
 | Руководства | [S3 API](docs/guide/s3-usage.md) · [консоль](docs/guide/admin-shell.md) · [эксплуатация](docs/guide/operations.md) · [конфигурация](docs/guide/configuration.md) · [мониторинг](docs/guide/monitoring.md) · [разработка](docs/guide/development.md) |
 | Архитектура | [обзор](docs/architecture/overview.md) · [движок](docs/architecture/storage-engine.md) · [метахранилище](docs/architecture/metastore.md) · [модель метаданных](docs/architecture/metadata-model.md) · [сборка мусора](docs/architecture/garbage-collection.md) · [целостность](docs/architecture/integrity.md) · [безопасность](docs/architecture/security.md) |
 | Тестирование | [нагрузка](docs/testing/benchmarking.md) · [совместимость](docs/testing/compatibility.md) · [отказы](docs/testing/fault-injection.md) · [результаты](docs/reports/sandbox-results.md) |
-| История | [CHANGELOG](CHANGELOG.md) · [документы этапов](docs/history/ROADMAP.md) |
+| Проект | [состояние](docs/status.md) · [план](docs/roadmap.md) · [SECURITY](SECURITY.md) · [CHANGELOG](CHANGELOG.md) · [документы этапов](docs/history/ROADMAP.md) |
 
 ## Безопасность в двух словах
 
 - Не публикуйте `.env` (там реальные ключи), `deploy/certs/` и порты `9464` (метрики без подписи), `8080` (без TLS) и `8081` (s3manager с полными правами) наружу.
 - Не отключайте авторизацию (`sectoriadb.s3.auth.enabled=false`) и не включайте `allow-open-setup` на сервере, доступном из сети. Сервер не терминирует TLS: в compose это делает nginx, `sectoriadb.s3.require-secure-transport=true` отвергает запросы не по HTTPS ([guide/operations.md](docs/guide/operations.md#tls-через-nginx)).
 - Права ключа задаёт **IAM-политика** (стандартный документ AWS, `key-policy`, примеры в [deploy/iam](deploy/iam/)); пользователей, ролей и STS нет. **Запрет по умолчанию**: ключ без политики получает `403` на всё; ключи из `SECTORIADB_S3_CREDENTIALS` при старте получают политику полного доступа, `mk-key --admin` и `key-policy --admin` дают её явно. Приложениям и арендаторам выдавайте отдельные ключи с минимальными политиками. `public-read` на бакете открывает только листинг; чтение объекта открывают ACL объекта или политика. Подробности — [architecture/security.md](docs/architecture/security.md).
-- Перед важными операциями делайте согласованную копию обоих томов ([резервное копирование](docs/guide/operations.md#резервное-копирование)).
+- Задайте `SECTORIADB_SECRETS_KEY` (`openssl rand -base64 32`, хранить вне тома): секреты ключей в `credentials.json` шифруются им.
+- Перед обновлением и важными операциями делайте согласованную копию тома ([резервное копирование](docs/guide/operations.md#резервное-копирование)).
 
 ## Лицензия
 
-См. [LICENSE](LICENSE).
+Apache License 2.0 — [LICENSE](LICENSE), [NOTICE](NOTICE).

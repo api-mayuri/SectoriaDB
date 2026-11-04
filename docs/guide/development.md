@@ -10,7 +10,7 @@ mvn -B verify                         # перед каждым коммитом
 mvn test                              # все модули
 mvn -pl sectoriadb-engine test        # один модуль (metastore, engine, core, server)
 mvn -pl sectoriadb-core -am test      # модуль вместе с тем, от чего он зависит
-mvn -DskipTests package               # исполняемый jar: sectoriadb-server/target/SectoriaDB-1.0-SNAPSHOT.jar
+mvn -DskipTests package               # исполняемый jar: sectoriadb-server/target/SectoriaDB-*.jar
 mvn spotless:apply                    # расставить импорты и убрать неиспользуемые
 mvn checkstyle:check                  # правила Checkstyle
 mvn org.owasp:dependency-check-maven:13.0.0:aggregate -DnvdApiKey=КЛЮЧ   # известные уязвимости зависимостей, перед релизом

@@ -98,7 +98,7 @@ checksum-режимы AWS, SigV2. Из 886 собранных тестов за�
 | Расхождение | Свидетельство |
 |---|---|
 | Нет модели владельца и IAM: `ListBuckets` и доступ видят все ключи; канонические ACL (`authenticated-read`, `bucket-owner-*`) сводятся к `private`; гранты — только `AllUsers` | 41 тест ACL s3-tests |
-| Нет версионирования, блокировок объектов, CORS, public access block, ownership controls, `GetObjectAttributes`, POST-формы; условные записи только `If-None-Match: *` и одиночный `If-Match` | 37 + 38 + 12 + 16 + 7 + 3 + 25 тестов |
+| Нет блокировок объектов, CORS, public access block, ownership controls, `GetObjectAttributes`, POST-формы; условные записи только `If-None-Match: *` и одиночный `If-Match`. Версионирование есть с этапа 24, но без `Owner` у версий, ACL отдельной версии и object lock | 38 + 12 + 16 + 7 + 3 + 25 тестов; остаток версионирования — [ниже](#версионирование-этап-24-2026-10-29) |
 | `Initiator` / `Owner` отсутствуют в `ListMultipartUploads` и `ListParts`; метаданные больше 2 КБ принимаются | `test_list_multipart_upload_owner` |
 | `x-amz-storage-class` и `Expires` не сохраняются и не возвращаются | mint: `awscli`, `mc` |
 | `GET ?partNumber` за пределами объекта — `416 InvalidPartNumber` (как AWS), Ceph ждёт `400 InvalidPart` | 3 теста `*_get_part` |
@@ -158,3 +158,11 @@ checksum-режимы AWS, SigV2. Из 886 собранных тестов за�
 | mint, 10 наборов без minio-js | 88 / 25 / 34 (PASS / FAIL / NA) | 88 / 25 / 34, по каждому набору одинаково |
 
 minio-js не запускался (в прежних прогонах — таймаут 7 минут). Тома, записанные `f3916cb`, новая версия открывает без миграции ([CHANGELOG](../../CHANGELOG.md)).
+
+## Версионирование (этап 24, 2026-10-29)
+
+Тот же набор из 422 тестов: 210 до этапа → **237** на `1.0.0-rc.1` (сверено по `junit.xml`: 27 тестов стали проходить, ни один не перестал).
+Два из них — `test_versioning_bucket_atomic_upload_return_version_id` и `test_versioning_bucket_multipart_upload_return_version_id` — прошли после того, как `x-amz-version-id` стал отправляться только для настоящих версий (не при `Suspended` и не в бакете без версионирования).
+Прогон нашёл и ошибку: «висячая» строка версии `null` после удаления новейшей версии делала бакет навсегда непустым (116 ответов `503` на `DeleteBucket`); исправлено до коммита этапа ([CHANGELOG](../../CHANGELOG.md)).
+
+Остальные падающие тесты версионирования требуют того, чего нет: `Owner` у версий в `ListObjectVersions`, ACL отдельной версии, object lock, `GetObjectAttributes`.
